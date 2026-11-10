@@ -34,9 +34,11 @@ from lv24_seo.cli import emit, run_envelope, tool_version
 from lv24_seo.cli.auth import auth_app
 from lv24_seo.core.config import SeoConfig, load_config, redacted_dump, resolve_config_path
 from lv24_seo.core.envelope import fail, ok
-from lv24_seo.core.errors import CONFIG_INVALID, INTERNAL, INVALID_INPUT, SeoError
+from lv24_seo.core.errors import CONFIG_INVALID, INTERNAL, INVALID_INPUT, WRITE_DISABLED, SeoError
 from lv24_seo.core.secrets import SecretStore
+from lv24_seo.core.write_gate import WRITE_SECRET_ENV, WriteGate, WritePlan
 from lv24_seo.mcp.registry import tools_as_json
+from lv24_seo.providers.bing import indexnow_submit
 from lv24_seo.report.models import Report, ReportSection
 from lv24_seo.report.render import render_html, render_text
 from lv24_seo.services import SeoService
@@ -51,6 +53,12 @@ app = typer.Typer(
 config_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Inspect configuration.")
 gsc_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Google Search Console.")
 yandex_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Yandex Webmaster.")
+sitemap_app = typer.Typer(
+    add_completion=False, no_args_is_help=True, help="Sitemap submission (write, gated)."
+)
+indexnow_app = typer.Typer(
+    add_completion=False, no_args_is_help=True, help="IndexNow submission (write, gated)."
+)
 report_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Build reports.")
 schedule_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Host scheduler jobs.")
 export_app = typer.Typer(
@@ -61,6 +69,8 @@ app.add_typer(auth_app, name="auth", help="Manage provider tokens.")
 app.add_typer(config_app, name="config", help="Inspect configuration.")
 app.add_typer(gsc_app, name="gsc", help="Google Search Console.")
 app.add_typer(yandex_app, name="yandex", help="Yandex Webmaster.")
+app.add_typer(sitemap_app, name="sitemap", help="Sitemap submission (write, gated).")
+app.add_typer(indexnow_app, name="indexnow", help="IndexNow submission (write, gated).")
 app.add_typer(report_app, name="report", help="Build reports.")
 app.add_typer(schedule_app, name="schedule", help="Host scheduler jobs.")
 app.add_typer(export_app, name="export", help="Export machine contracts.")
@@ -431,6 +441,317 @@ def yandex_indexing(
     """Indexing history, search events, problems and counters for the host."""
     payload = _run(config_path, lambda service, config: service.yandex_indexing())
     emit(payload, as_json=as_json, lines=_yandex_indexing_lines(payload))
+
+
+# -- writes (ADR-0003: plan -> confirm token -> apply) ---------------------------------------
+
+
+@sitemap_app.command("submit")
+def sitemap_submit(
+    property_id: Annotated[
+        str,
+        typer.Option("--property", help="GSC property id, for example sc-domain:example.com."),
+    ],
+    url: Annotated[str, typer.Option("--url", help="Absolute sitemap URL.")],
+    allow_write: Annotated[
+        bool,
+        typer.Option("--allow-write", help="Opt in to the write; without it the command refuses."),
+    ] = False,
+    confirm: Annotated[
+        str | None,
+        typer.Option("--confirm", help="confirm_token returned by the dry run."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Accepted for uniformity; the plan needs no config."),
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Submit a sitemap to Google Search Console (dry run without --allow-write)."""
+    del config_path
+
+    def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
+        site = _required_text(property_id, name="--property", example="sc-domain:example.com")
+        sitemap_url = _absolute_url(url, name="--url")
+        plan = WritePlan(
+            action="sitemap_submit",
+            target=site,
+            summary=f"submit sitemap {sitemap_url} to {site}",
+            payload={"property": site, "url": sitemap_url, "action": "submit"},
+        )
+        return plan, _sitemap_execute
+
+    payload = _write_command(prepare, allow_write=allow_write, confirm=confirm)
+    emit(payload, as_json=as_json, lines=_write_lines(payload))
+
+
+@yandex_app.command("recrawl")
+def yandex_recrawl(
+    url: Annotated[list[str], typer.Option("--url", help="URL to queue; repeat the flag.")],
+    allow_write: Annotated[
+        bool,
+        typer.Option("--allow-write", help="Opt in to the write; without it the command refuses."),
+    ] = False,
+    confirm: Annotated[
+        str | None,
+        typer.Option("--confirm", help="confirm_token returned by the dry run."),
+    ] = None,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Queue URLs for Yandex recrawl (dry run without --allow-write)."""
+
+    def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
+        config = load_config(config_path)
+        webmaster = config.providers.yandex_webmaster
+        host_id = webmaster.host_id.strip() if webmaster is not None else ""
+        if not host_id:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="Yandex Webmaster host_id is not configured",
+                next_action="set providers.yandex_webmaster.host_id in seo.toml",
+            )
+        target_urls = _absolute_urls(url, name="--url")
+        plan = WritePlan(
+            action="recrawl",
+            target=host_id,
+            summary=f"queue {len(target_urls)} URL(s) for recrawl on {host_id}",
+            payload={"host_id": host_id, "urls": target_urls},
+        )
+        return plan, _recrawl_execute
+
+    payload = _write_command(prepare, allow_write=allow_write, confirm=confirm)
+    emit(payload, as_json=as_json, lines=_write_lines(payload))
+
+
+@indexnow_app.command("submit")
+def indexnow_submit_command(
+    host: Annotated[str, typer.Option("--host", help="Bare hostname, for example example.com.")],
+    key: Annotated[
+        str,
+        typer.Option("--key", help="IndexNow key published at https://<host>/<key>.txt."),
+    ],
+    url: Annotated[list[str], typer.Option("--url", help="URL to submit; repeat the flag.")],
+    allow_write: Annotated[
+        bool,
+        typer.Option("--allow-write", help="Opt in to the write; without it the command refuses."),
+    ] = False,
+    confirm: Annotated[
+        str | None,
+        typer.Option("--confirm", help="confirm_token returned by the dry run."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Accepted for uniformity; the plan needs no config."),
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Submit URLs to IndexNow (dry run without --allow-write)."""
+    del config_path
+
+    def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
+        host_value = _bare_host(host)
+        key_value = _indexnow_key(key)
+        target_urls = _absolute_urls(url, name="--url")
+        plan = WritePlan(
+            action="indexnow",
+            target=host_value,
+            summary=f"submit {len(target_urls)} URL(s) to IndexNow for {host_value}",
+            payload={"host": host_value, "key": key_value, "urls": target_urls},
+        )
+
+        def execute(_plan: WritePlan) -> Any:
+            return indexnow_submit(host=host_value, key=key_value, urls=target_urls)
+
+        return plan, execute
+
+    payload = _write_command(prepare, allow_write=allow_write, confirm=confirm)
+    emit(payload, as_json=as_json, lines=_write_lines(payload))
+
+
+def _write_command(
+    prepare: Callable[[], tuple[WritePlan, Callable[[WritePlan], Any] | None]],
+    *,
+    allow_write: bool,
+    confirm: str | None,
+) -> dict[str, Any]:
+    """Run one gated write: plan/validate, dry run without ``--confirm``, apply with it."""
+
+    def action() -> dict[str, Any]:
+        plan, execute = prepare()
+        gate = WriteGate(
+            allow_write=allow_write,
+            secret=os.environ.get(WRITE_SECRET_ENV, ""),
+        )
+        if confirm is None:
+            result = gate.plan(plan)
+            return ok(
+                {
+                    "plan": plan.to_dict(),
+                    "plan_hash": result.detail.get("plan_hash", ""),
+                    "confirm_token": result.confirm_token,
+                    "status": result.status,
+                },
+                meta={"dry_run": True, "action": plan.action, "target": plan.target},
+            )
+
+        result = gate.apply(plan, confirm, execute=execute)
+        data: dict[str, Any] = {"plan": plan.to_dict(), "status": result.status}
+        if result.status == "skipped":
+            data["reason"] = result.reason or "duplicate"
+        if "result" in result.detail:
+            data["result"] = _json_result(result.detail["result"])
+        return ok(data, meta={"dry_run": False, "action": plan.action, "target": plan.target})
+
+    return run_envelope(action)
+
+
+def _json_result(value: Any) -> Any:
+    """Render an adapter result without assuming it is already JSON-safe.
+
+    ``indexnow_submit`` returns a :class:`~lv24_seo.providers.base.ProviderResult`, not a dict,
+    so the envelope must go through its ``to_dict`` before ``json.dumps`` sees it.
+    """
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        rendered: Any = to_dict()
+        return rendered
+    if isinstance(value, Mapping):
+        return dict(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _sitemap_execute(_plan: WritePlan) -> Any:
+    """The GSC adapter has no sitemap write yet; never pretend it was submitted."""
+    raise SeoError(
+        code=WRITE_DISABLED,
+        message="gsc sitemap submit is not wired yet",
+        next_action=(
+            "submit the sitemap in Search Console until the GSC write adapter lands; "
+            "the CLI never pretends a write happened"
+        ),
+        retryable=False,
+    )
+
+
+def _recrawl_execute(_plan: WritePlan) -> Any:
+    """The Yandex adapter has no recrawl queue yet; never pretend it was queued."""
+    raise SeoError(
+        code=WRITE_DISABLED,
+        message="yandex recrawl is not wired yet",
+        next_action=(
+            "queue recrawls in Yandex Webmaster until the adapter exposes recrawl_queue; "
+            "the CLI never pretends a write happened"
+        ),
+        retryable=False,
+    )
+
+
+def _required_text(value: str, *, name: str, example: str) -> str:
+    text = value.strip()
+    if not text:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} is required",
+            next_action=f"pass {name} {example}",
+        )
+    return text
+
+
+def _absolute_url(value: str, *, name: str) -> str:
+    url = value.strip()
+    if not url:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must not be empty",
+            next_action=f"pass an absolute http(s) URL to {name}",
+        )
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must be an absolute http(s) URL",
+            next_action=f"pass a URL such as https://example.com/page to {name}",
+            detail={"value": url},
+        )
+    return url
+
+
+def _absolute_urls(values: Sequence[str], *, name: str) -> list[str]:
+    cleaned: list[str] = []
+    for value in values:
+        url = _absolute_url(value, name=name)
+        if url not in cleaned:
+            cleaned.append(url)
+    if not cleaned:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="at least one URL is required",
+            next_action=f"pass {name} at least once",
+        )
+    return cleaned
+
+
+def _bare_host(value: str) -> str:
+    host = value.strip()
+    if not host or "://" in host or "/" in host:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="IndexNow host must be a bare hostname",
+            next_action="drop the scheme and path, for example example.com",
+            detail={"host": value},
+        )
+    return host
+
+
+def _indexnow_key(value: str) -> str:
+    key = value.strip()
+    if not key or "://" in key or "/" in key:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="IndexNow key must be a non-empty bare token",
+            next_action="publish the key at https://<host>/<key>.txt and pass the same key",
+        )
+    return key
+
+
+def _write_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    raw_plan = data.get("plan")
+    visible_plan: Mapping[str, Any] = raw_plan if isinstance(raw_plan, Mapping) else {}
+    lines = [
+        f"action: {visible_plan.get('action') or '-'}",
+        f"target: {visible_plan.get('target') or '-'}",
+        f"plan: {visible_plan.get('summary') or '-'}",
+        f"status: {data.get('status') or '-'}",
+    ]
+    token = data.get("confirm_token")
+    if token:
+        lines.extend(
+            [
+                "",
+                f"confirm token: {token}",
+                "apply: rerun with --allow-write --confirm <token> within 5 minutes",
+            ]
+        )
+    reason = data.get("reason")
+    if reason:
+        lines.append(f"reason: {reason}")
+    return lines
 
 
 @app.command()
@@ -858,6 +1179,16 @@ def _client_document(client: str) -> dict[str, Any]:
                 }
             }
         }
+    if client == "vscode":
+        return {
+            "servers": {
+                "lv24-seo": {
+                    "type": "stdio",
+                    "command": "uvx",
+                    "args": list(_MCP_ARGS),
+                }
+            }
+        }
     return {
         "mcpServers": {
             "lv24-seo": {
@@ -873,7 +1204,7 @@ def _merge_document(
     existing: Mapping[str, Any],
     fragment: Mapping[str, Any],
 ) -> dict[str, Any]:
-    key = "mcp" if client == "opencode" else "mcpServers"
+    key = {"opencode": "mcp", "vscode": "servers"}.get(client, "mcpServers")
     merged = dict(existing)
     current = merged.get(key)
     if current is not None and not isinstance(current, Mapping):
@@ -1300,6 +1631,30 @@ def _yes_no(value: Any) -> str:
 
 def _count(value: Any) -> int:
     return len(value) if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else 0
+
+
+mcp_app = typer.Typer(help="Model Context Protocol server.")
+app.add_typer(mcp_app, name="mcp")
+
+
+@mcp_app.command("serve")
+def mcp_serve(
+    transport: Annotated[
+        str, typer.Option("--transport", help="stdio (default) or http.")
+    ] = "stdio",
+    port: Annotated[int, typer.Option("--port", help="Port for the HTTP transport.")] = 8765,
+) -> None:
+    """Run the MCP server over stdio or streamable HTTP."""
+    import asyncio
+    import json as json_module
+
+    from lv24_seo.mcp import serve
+
+    try:
+        asyncio.run(serve(transport=transport, port=port))
+    except SeoError as exc:
+        typer.echo(json_module.dumps(fail(exc), ensure_ascii=False))
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":  # pragma: no cover

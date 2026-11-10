@@ -73,7 +73,7 @@ def exit_code_for(error: SeoError) -> int:
         return EXIT_AUTH
     if error.code in _QUOTA_CODES:
         return EXIT_QUOTA
-    if error.code in {INVALID_INPUT, CONFIG_INVALID}:
+    if error.code in {INVALID_INPUT, CONFIG_INVALID, CONFIRM_REQUIRED}:
         return EXIT_USAGE
     if error.code == WRITE_DISABLED:
         return EXIT_USAGE

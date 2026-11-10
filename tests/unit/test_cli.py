@@ -1,7 +1,7 @@
 """Tests for the full CLI surface (WP6.1-WP6.4).
 
 Everything here is offline: provider access goes through a fake ``SeoService`` and secrets
-through a fake ``SecretStore``. The tests assert the public contract only — envelope shape,
+through a fake ``SecretStore``. The tests assert the public contract only вЂ” envelope shape,
 exit codes, redaction, host-config JSON and the files written by ``init``/``export``/``report``.
 """
 
@@ -415,7 +415,7 @@ def test_failed_service_result_exits_non_zero(
     assert payload["error"]["code"] == "AUTH_REQUIRED"
 
 
-@pytest.mark.parametrize("client", ["claude", "cursor", "vscode"])
+@pytest.mark.parametrize("client", ["claude", "cursor"])
 def test_install_print_for_claude_style_clients(client: str) -> None:
     result = _invoke("install", "--client", client, "--print")
 
@@ -579,3 +579,13 @@ def test_unknown_command_exits_two() -> None:
     result = _invoke("does-not-exist")
 
     assert result.exit_code == 2
+
+
+def test_install_print_for_vscode_uses_servers_key() -> None:
+    result = _invoke("install", "--client", "vscode", "--print")
+
+    assert result.exit_code == 0
+    document = json.loads(_stdout(result))
+    server = document["servers"]["lv24-seo"]
+    assert server["type"] == "stdio"
+    assert server["command"] == "uvx"

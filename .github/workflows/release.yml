@@ -1,0 +1,150 @@
+name: release
+
+# Build and publish lv24-seo when a v* tag is pushed.
+#
+# Triggers:
+#   * push of a v* tag  -> build + publish to PyPI;
+#   * workflow_dispatch -> build-only dry run unless the selected ref is a v* tag.
+# There is deliberately no pull_request trigger, so releases never run for PRs.
+#
+# Zero-spend policy (same as ci.yml):
+#   * public repository + standard ubuntu-latest runners only = $0;
+#   * no matrix, no larger runners, no paid services;
+#   * two short jobs, artifacts kept for 7 days;
+#   * PyPI uses OIDC Trusted Publishing, so no long-lived API token secret exists.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel a run that may be halfway through a PyPI upload.
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Check tag, pyproject, __version__ and server.json agree
+        # A release must never publish a tag that disagrees with the package metadata.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - "${GITHUB_REF_NAME#v}" <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+          import tomllib
+
+          tag = sys.argv[1]
+          pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          server = json.loads(pathlib.Path("server.json").read_text(encoding="utf-8"))
+          init_source = pathlib.Path("src/lv24_seo/__init__.py").read_text(encoding="utf-8")
+          init_version = re.search(r'^__version__\s*=\s*"([^"]+)"', init_source, re.MULTILINE)
+          versions = {
+              "tag": tag,
+              "pyproject.toml": pyproject["project"]["version"],
+              "src/lv24_seo/__init__.py": init_version.group(1) if init_version else "missing",
+              "server.json": server["version"],
+              "server.json packages[0]": server["packages"][0]["version"],
+          }
+          if len(set(versions.values())) != 1:
+              print("::error::version mismatch: " + ", ".join(f"{key}={value}" for key, value in versions.items()))
+              raise SystemExit(1)
+          print(f"versions aligned at {tag}")
+          PY
+
+      - name: Build sdist and wheel
+        # hatchling is the build backend declared in pyproject.toml.
+        # uv.lock must be committed: CI and the local release checks use it for
+        # reproducible installs, so the tagged commit has a tested dependency set.
+        run: uv build
+
+      - name: List distributions
+        run: ls -lh dist/
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish-pypi:
+    name: publish to PyPI
+    needs: build
+    # A manual dispatch is a build-only dry run unless it targets a v* tag.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/lv24-seo
+    permissions:
+      # Job-level permissions replace the workflow-level block.
+      # OIDC only: no PyPI password or API token is stored in this repository.
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish distributions to PyPI
+        # One-time setup on PyPI: project lv24-seo -> Publishing -> add a trusted
+        # publisher with owner LevapVeeskela, repository lv24-seo-optimizer,
+        # workflow release.yml and environment pypi. Without it this step fails.
+        # PyPI files are immutable: a version can never be uploaded twice.
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+  # ---------------------------------------------------------------------------
+  # Optional and disabled: GHCR image for Docker/VPS users (WP10.3).
+  # Public container packages are free to store and pull, but building and
+  # pushing still consumes Actions minutes, and this repository has no
+  # Dockerfile yet. Enable only after the first PyPI release is green, then
+  # change `needs` to publish-pypi if the image must follow a successful upload.
+  #
+  # publish-ghcr:
+  #   name: publish container to GHCR
+  #   needs: build
+  #   if: startsWith(github.ref, 'refs/tags/v')
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 20
+  #   permissions:
+  #     contents: read
+  #     packages: write
+  #   steps:
+  #     - uses: actions/checkout@v7
+  #       with:
+  #         persist-credentials: false
+  #     - uses: docker/login-action@v3
+  #       with:
+  #         registry: ghcr.io
+  #         username: ${{ github.actor }}
+  #         password: ${{ secrets.GITHUB_TOKEN }}
+  #     - uses: docker/build-push-action@v6
+  #       with:
+  #         context: .
+  #         push: true
+  #         tags: ghcr.io/levapveeskela/lv24-seo:${{ github.ref_name }}

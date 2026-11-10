@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.LevapVeeskela/lv24-seo",
+  "description": "MCP server for free-first SEO: GSC, Yandex, Metrika, Bing, CrUX, PSI, crawl.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/LevapVeeskela/lv24-seo-optimizer",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "lv24-seo",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeHint": "uvx",
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        },
+        {
+          "type": "positional",
+          "value": "serve"
+        }
+      ]
+    }
+  ],
+  "websiteUrl": "https://github.com/LevapVeeskela/lv24-seo-optimizer"
+}
