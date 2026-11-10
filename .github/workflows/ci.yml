@@ -75,4 +75,22 @@ jobs:
       - name: Fail on drift
         run: diff -u schemas/tools.json /tmp/tools.json
 
+  npm:
+    # The npm package is a thin launcher; this job only proves it is syntactically valid and
+    # packages the intended files. Publishing happens in release.yml on a v* tag.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: packages/npm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "22"
+      - name: Syntax check
+        run: node --check bin/lv24-seo.js
+      - name: Package contents
+        run: npm pack --dry-run
+
 

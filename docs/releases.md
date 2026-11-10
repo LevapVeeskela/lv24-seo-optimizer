@@ -4,14 +4,14 @@ This page is the release runbook for `lv24-seo`. It covers the versioning contra
 PyPI workflow, the manual MCP Registry step, rollback and cost.
 
 The pipeline is **release plumbing only**: it builds the sdist/wheel and publishes them to PyPI with
-OIDC Trusted Publishing. Nothing in this repository publishes automatically to the MCP Registry, GHCR
-or any paid service. The first public release is `0.1.0`. The package metadata still carries `0.0.1`
-while `server.json` is already prepared for `0.1.0`; the release workflow rejects a tag until all
-version fields are bumped together (see the checklist below).
+OIDC Trusted Publishing, and publishes the thin `@lv24/seo` npm launcher when `NPM_TOKEN` is present.
+Nothing in this repository publishes automatically to the MCP Registry, GHCR or any paid service. The
+first public release is `0.1.0`.
 
 | Artifact | Built by | Published by | Cost |
 |---|---|---|---|
 | PyPI sdist + wheel (`lv24-seo`) | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | `publish-pypi` job, OIDC | $0 (public repo, standard runner) |
+| npm launcher (`@lv24/seo`) | `packages/npm` | `publish-npm` job, `NPM_TOKEN` | $0 (public npm package) |
 | `server.json` (MCP Registry) | this repository | `mcp-publisher`, manually | $0 |
 | GHCR image (optional) | disabled job in `release.yml` | not enabled | public package storage/egress free; build minutes still count |
 
@@ -23,16 +23,15 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/) with the usual 
   additive, non-breaking changes. The first public release is `0.1.0`.
 * **`1.0.0` and later.** Standard SemVer: breaking changes only in `MAJOR`.
 
-The version must agree in four places, and the release workflow refuses a tag that disagrees with the
+The version must agree in six places, and the release workflow refuses a tag that disagrees with the
 package metadata:
 
 1. `pyproject.toml` → `[project] version`
 2. `src/lv24_seo/__init__.py` → `__version__`
 3. `server.json` → root `version`
 4. `server.json` → `packages[0].version`
-
-The Git tag is `vX.Y.Z` (annotated). Tags are immutable once the release is published; see
-[Rollback](#rollback).
+5. `packages/npm/package.json` → `version`
+6. The Git tag `vX.Y.Z`
 
 ### What counts as breaking
 
@@ -119,6 +118,36 @@ GitHub login grants the `io.github.LevapVeeskela/*` namespace. The server name i
 keep exactly one slash and match that namespace. The PyPI package entry passes `mcp serve` through
 `packageArguments`, so clients launch `uvx lv24-seo mcp serve` rather than the bare CLI help.
 
+### 4. npm (optional, `@lv24/seo`)
+
+The npm package is a **thin launcher** (`packages/npm`): it forwards every argument to
+`uvx --from lv24-seo lv24-seo …`. It contains no SEO logic, so publishing it never requires a Python
+release to be repeated.
+
+One-time setup:
+
+1. Create the org **`lv24`** on <https://www.npmjs.com/org/create> (free) so the scope `@lv24` exists.
+2. Enable 2FA on the npm account (required for publishing).
+3. Create a **Granular Access Token**: npmjs → Access Tokens → Generate New Token → *Granular*,
+   read/write on the `@lv24` scope, with 2FA bypass if the account enforces it (the CI runner cannot
+   answer a TOTP prompt).
+4. Add it as the repository secret **`NPM_TOKEN`** (Settings → Secrets and variables → Actions).
+
+Without `NPM_TOKEN` the `publish-npm` job prints a notice and skips — PyPI still publishes. With the
+secret set, the same tag pushes `@lv24/seo` with provenance (`--provenance`, OIDC `id-token: write`).
+
+First publish can also be done locally, which is useful if the org is not created yet:
+
+```bash
+cd packages/npm
+npm login
+npm publish --access public
+```
+
+npm versions are immutable: publish `0.1.1` if `0.1.0` already exists. The tag and PyPI version do not
+have to change for an npm-only fix; bump `packages/npm/package.json` and run
+`npm publish` manually (the workflow only publishes on a new tag and checks that the versions match).
+
 ## Release checklist
 
 ### 0. Preconditions
@@ -136,8 +165,8 @@ exact commit whose CI run is green.
 
 ### 1. Bump the version and changelog
 
-Update all four version fields listed in [Versioning policy](#versioning-policy). Then turn the
-changelog into a release entry, keeping a fresh empty section on top:
+Update every version field listed in [Versioning policy](#versioning-policy). Then turn the changelog
+into a release entry, keeping a fresh empty section on top:
 
 ```markdown
 ## [Unreleased]
@@ -148,8 +177,8 @@ changelog into a release entry, keeping a fresh empty section on top:
 ...
 ```
 
-Also update `README.md` status/install text if it still says a release is "planned". Do not run
-`yarn`, `npm` or any JavaScript tooling: this repository is Python-only.
+Also update `README.md` status/install text if it still says a release is "planned". The npm launcher
+(`packages/npm`) is a wrapper only — see the npm section above for its separate publish path.
 
 ### 2. Regenerate the MCP schemas
 

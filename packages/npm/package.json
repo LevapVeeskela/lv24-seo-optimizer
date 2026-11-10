@@ -1,0 +1,42 @@
+{
+  "name": "@lv24/seo",
+  "version": "0.1.0",
+  "description": "Free-first SEO control plane for humans and AI agents — npx launcher for the Python package lv24-seo (GSC, Yandex Webmaster/Metrika, Bing, CrUX, PSI, crawl, reports, MCP).",
+  "keywords": [
+    "seo",
+    "mcp",
+    "model-context-protocol",
+    "google-search-console",
+    "yandex-webmaster",
+    "yandex-metrika",
+    "bing-webmaster",
+    "indexnow",
+    "core-web-vitals",
+    "ai-agents",
+    "cli"
+  ],
+  "homepage": "https://github.com/LevapVeeskela/lv24-seo-optimizer",
+  "bugs": {
+    "url": "https://github.com/LevapVeeskela/lv24-seo-optimizer/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LevapVeeskela/lv24-seo-optimizer.git",
+    "directory": "packages/npm"
+  },
+  "license": "Apache-2.0",
+  "author": "LV24 <paulalexeev10@gmail.com>",
+  "bin": {
+    "lv24-seo": "bin/lv24-seo.js"
+  },
+  "files": [
+    "bin/lv24-seo.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

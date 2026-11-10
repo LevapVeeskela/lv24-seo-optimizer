@@ -56,6 +56,7 @@ jobs:
           tag = sys.argv[1]
           pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
           server = json.loads(pathlib.Path("server.json").read_text(encoding="utf-8"))
+          npm = json.loads(pathlib.Path("packages/npm/package.json").read_text(encoding="utf-8"))
           init_source = pathlib.Path("src/lv24_seo/__init__.py").read_text(encoding="utf-8")
           init_version = re.search(r'^__version__\s*=\s*"([^"]+)"', init_source, re.MULTILINE)
           versions = {
@@ -64,6 +65,7 @@ jobs:
               "src/lv24_seo/__init__.py": init_version.group(1) if init_version else "missing",
               "server.json": server["version"],
               "server.json packages[0]": server["packages"][0]["version"],
+              "packages/npm/package.json": npm["version"],
           }
           if len(set(versions.values())) != 1:
               print("::error::version mismatch: " + ", ".join(f"{key}={value}" for key, value in versions.items()))
@@ -117,6 +119,66 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  publish-npm:
+    name: publish @lv24/seo to npm
+    needs: build
+    # A manual dispatch is a build-only dry run unless it targets a v* tag.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # npm provenance attests the tarball to this workflow run via OIDC.
+      id-token: write
+    defaults:
+      run:
+        working-directory: packages/npm
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Detect the npm token
+        # `secrets` cannot be used in `if:` expressions, so the gate is a step output.
+        # Without NPM_TOKEN the job skips instead of failing the whole release.
+        id: gate
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN is not set — skipping the npm publish."
+          fi
+
+      - name: Install Node
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      - name: Check the npm version matches the tag
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            if (pkg.version !== tag) {
+              console.error(`npm version ${pkg.version} != tag ${tag}`);
+              process.exit(1);
+            }
+            console.log(`npm version aligned at ${tag}`);
+          '
+
+      - name: Publish with provenance
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
 
   # ---------------------------------------------------------------------------
   # Optional and disabled: GHCR image for Docker/VPS users (WP10.3).

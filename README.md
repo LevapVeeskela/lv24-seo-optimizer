@@ -46,25 +46,33 @@ indexing triage, multi-engine fusion, nginx log stats), report builders + HTML/t
 SMTP/Telegram delivery with idempotency, the full CLI, the MCP server (10 tools, 3 resources,
 3 prompts) and scheduler generators.
 
-Still missing before `v0.1.0`: PyPI publishing, GSC service-account auth (OAuth token only today),
-write operations (sitemap submit / recrawl / IndexNow are implemented in adapters but not gated in the
-CLI yet), and an end-to-end run against a live property. See
+Still missing before `v0.1.0` is declared stable: GSC service-account auth (OAuth token only today),
+write operations for sitemap/recrawl (IndexNow is wired; the others return an honest
+`WRITE_DISABLED`), and an end-to-end run against a live property. See
 [`docs/plans/2026-11-10-implementation-plan.md`](docs/plans/2026-11-10-implementation-plan.md) for the
 wave status.
 
-## Install (planned, v0.1)
+## Install
 
 ```bash
-uvx --from lv24-seo lv24-seo doctor        # checks tokens, DNS, TLS, sitemap
-uvx --from lv24-seo lv24-seo init          # writes seo.toml + data/ layout
-uvx --from lv24-seo lv24-seo auth login    # OAuth device/loopback flow
-uvx --from lv24-seo lv24-seo mcp serve     # stdio MCP server for Claude/OpenCode/Cursor
+# Python (recommended)
+uvx --from lv24-seo lv24-seo doctor
+pipx install lv24-seo                 # or: uv tool install lv24-seo
+
+# Node users: thin launcher over the same CLI
+npx @lv24/seo doctor --json
 ```
 
 ```bash
-# register with an agent host
+lv24-seo init --property https://example.com   # writes seo.toml + data/
+lv24-seo auth set --provider gsc --stdin       # token in the OS keychain
+lv24-seo report weekly --json --out reports/
+lv24-seo mcp serve                             # stdio MCP server
 lv24-seo install --client claude|opencode|vscode|cursor
 ```
+
+> `npx @lv24/seo` requires [uv](https://docs.astral.sh/uv/) (or an installed `lv24-seo` binary): the
+> npm package is a launcher, not a second implementation.
 
 ## What it will do
 

@@ -42,3 +42,7 @@ logs/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Node (npm launcher package)
+node_modules/
+packages/npm/package-lock.json
