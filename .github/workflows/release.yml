@@ -111,7 +111,21 @@ jobs:
           name: dist
           path: dist/
 
+      - name: Check whether this version is already on PyPI
+        # Re-running a release must be safe: PyPI rejects duplicate uploads.
+        id: exists
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/lv24-seo/${version}/json")
+          if [ "$code" = "200" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::lv24-seo ${version} is already on PyPI — skipping the upload."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish distributions to PyPI
+        if: steps.exists.outputs.skip != 'true'
         # One-time setup on PyPI: project lv24-seo -> Publishing -> add a trusted
         # publisher with owner LevapVeeskela, repository lv24-seo-optimizer,
         # workflow release.yml and environment pypi. Without it this step fails.
@@ -140,29 +154,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Detect the npm token
-        # `secrets` cannot be used in `if:` expressions, so the gate is a step output.
-        # Without NPM_TOKEN the job skips instead of failing the whole release.
-        id: gate
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -n "$NPM_TOKEN" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::NPM_TOKEN is not set — skipping the npm publish."
-          fi
-
-      - name: Install Node
-        if: steps.gate.outputs.enabled == 'true'
+      - name: Install Node with npm >= 11.5.1
+        # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14; Node 24 ships npm 11.
+        # No registry-url on purpose: setup-node would write a placeholder NODE_AUTH_TOKEN
+        # and npm would send it instead of the OIDC token.
         uses: actions/setup-node@v7.1.0
         with:
-          node-version: "22"
-          registry-url: https://registry.npmjs.org
+          node-version: "24"
 
       - name: Check the npm version matches the tag
-        if: steps.gate.outputs.enabled == 'true'
         run: |
           node -e '
             const pkg = require("./package.json");
@@ -174,10 +174,25 @@ jobs:
             console.log(`npm version aligned at ${tag}`);
           '
 
-      - name: Publish with provenance
-        if: steps.gate.outputs.enabled == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Skip when the version is already published
+        id: exists
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if npm view "@lv24/seo@${version}" version >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::@lv24/seo ${version} is already on npm — skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish with trusted publishing (OIDC)
+        # One-time setup on npm: package @lv24/seo -> Settings -> Trusted Publisher ->
+        # GitHub Actions: owner LevapVeeskela, repository lv24-seo-optimizer, workflow
+        # release.yml, allow `npm publish`. Configured with:
+        #   npm trust github @lv24/seo --file release.yml \
+        #     --repository LevapVeeskela/lv24-seo-optimizer --allow-publish
+        # A new trust relationship must complete its first publish within 2 days.
+        if: steps.exists.outputs.skip != 'true'
         run: npm publish --access public --provenance
 
   # ---------------------------------------------------------------------------

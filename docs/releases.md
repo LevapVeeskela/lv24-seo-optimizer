@@ -124,19 +124,30 @@ The npm package is a **thin launcher** (`packages/npm`): it forwards every argum
 `uvx --from lv24-seo lv24-seo …`. It contains no SEO logic, so publishing it never requires a Python
 release to be repeated.
 
-One-time setup:
+The `@lv24` organisation already exists (it hosts the `lv24-brain` packages). Authentication uses
+**npm Trusted Publishing (OIDC)** — no long-lived token is stored in this repository.
 
-1. Create the org **`lv24`** on <https://www.npmjs.com/org/create> (free) so the scope `@lv24` exists.
-2. Enable 2FA on the npm account (required for publishing).
-3. Create a **Granular Access Token**: npmjs → Access Tokens → Generate New Token → *Granular*,
-   read/write on the `@lv24` scope, with 2FA bypass if the account enforces it (the CI runner cannot
-   answer a TOTP prompt).
-4. Add it as the repository secret **`NPM_TOKEN`** (Settings → Secrets and variables → Actions).
+One-time setup (interactive, needs npm 2FA):
 
-Without `NPM_TOKEN` the `publish-npm` job prints a notice and skips — PyPI still publishes. With the
-secret set, the same tag pushes `@lv24/seo` with provenance (`--provenance`, OIDC `id-token: write`).
+```bash
+npm login --auth-type=web
+npm trust github @lv24/seo \
+  --file release.yml \
+  --repository LevapVeeskela/lv24-seo-optimizer \
+  --allow-publish
+```
 
-First publish can also be done locally, which is useful if the org is not created yet:
+Notes:
+
+* npm requires CLI **≥ 11.5.1** and Node **≥ 22.14**; the release job pins Node 24 for that reason.
+* A freshly created trust relationship must complete its **first publish within 2 days**, otherwise it
+  expires and must be recreated.
+* `package.json` → `repository.url` must match the GitHub repository exactly (it does).
+* Provenance is generated automatically by trusted publishing on a public repo.
+
+Fallback if `npm trust` cannot target a package that does not exist yet: create a **Granular Access
+Token** (read/write on `@lv24`, 2FA bypass) and store it as the repository secret `NPM_TOKEN`, then
+publish the first version locally:
 
 ```bash
 cd packages/npm
@@ -144,9 +155,10 @@ npm login
 npm publish --access public
 ```
 
-npm versions are immutable: publish `0.1.1` if `0.1.0` already exists. The tag and PyPI version do not
-have to change for an npm-only fix; bump `packages/npm/package.json` and run
-`npm publish` manually (the workflow only publishes on a new tag and checks that the versions match).
+After the first publish, configure the trusted publisher for future releases and revoke the token.
+
+npm versions are immutable: publish a new patch version if `0.1.0` already exists. An npm-only fix does
+not require a new PyPI release or a new tag — bump `packages/npm/package.json` and publish manually.
 
 ## Release checklist
 
