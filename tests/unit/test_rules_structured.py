@@ -12,11 +12,11 @@ from lv24_seo.crawl.rules import (
     rule_hreflang_target,
     rule_hreflang_x_default,
     rule_html_lang,
+    rule_html_lang_mismatch,
     rule_jsonld_event,
     rule_jsonld_organization,
     rule_jsonld_required,
     rule_mixed_content,
-    rule_html_lang_mismatch,
 )
 
 _RULES = (
