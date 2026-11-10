@@ -5,6 +5,15 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-10
+
+### Changed
+
+- Sharper package descriptions and npm keywords for `lv24-seo` / `@lv24/seo`; README now leads with
+  the problem, a Start/Use/Operate nav and a real `doctor` / `report weekly` transcript.
+- `pyproject.toml` summary and the npm launcher description now say what the tool actually does
+  (audits + weekly diff reports from GSC, Yandex, Bing, CrUX, PSI) instead of internal positioning.
+
 ## [0.1.1] - 2026-11-10
 
 ### Fixed

@@ -10,6 +10,14 @@
 
 **Free-first SEO control plane for humans and AI agents.**
 
+> **Your site's SEO, without a dashboard.** Pull Search Console, Yandex Webmaster and Metrika, Bing,
+> CrUX and your own crawl into one history — then get a weekly diff by email, an MCP server and a CLI
+> that agents can actually use. No paid platform, no SERP scraping, no vendor account.
+
+| 🚀 Start | 🧠 Use | 🛠 Operate |
+| --- | --- | --- |
+| [Install](#install) · [See it work](#see-it-work) · [Docs](#documents) | [CLI](docs/cli.md) · [MCP tools](docs/mcp.md) · [Skills](docs/skills.md) | [Scheduling](docs/scheduling.md) · [Data limits](docs/data-sources.md) · [Security](SECURITY.md) |
+
 One tool that pulls Google Search Console, Yandex Webmaster, Yandex Metrika, Bing Webmaster,
 Chrome UX Report and PageSpeed Insights into a single normalized model, crawls your site for
 technical SEO regressions, and turns all of it into **scheduled email reports**, **MCP tools**,
@@ -75,6 +83,32 @@ lv24-seo install --client claude|opencode|vscode|cursor
 
 > `npx @lv24/seo` requires [uv](https://docs.astral.sh/uv/) (or an installed `lv24-seo` binary): the
 > npm package is a launcher, not a second implementation.
+
+## See it work
+
+```text
+$ lv24-seo doctor
+
+[OK  ] python: 3.13.12
+[OK  ] platform: Windows 11
+[OK  ] config: C:\work\seo.toml
+[OK  ] cwd_writable: C:\work
+[FAIL] tokens: not configured yet (gsc / yandex / metrika / bing / crux)
+```
+
+```text
+$ lv24-seo report weekly --days 7 --json --out reports/
+
+# headline   clicks +18.2%, impressions +6.4%, position -1.1
+# traffic    gsc 1 240 clicks · yandex 310 · metrika 92 sessions
+# indexing   3 new "crawled - not indexed" URLs, 0 regressions
+# actions    5 opportunities, expected +41 clicks/week
+# honesty    data_age_days=2, yandex: top_3000_queries, no_query_page_join
+```
+
+The same data is available as MCP tools (`seo_weekly_report`, `gsc_search_analytics`,
+`yandex_query_stats`, `seo_indexing_triage`, …) and as three skills that encode
+audit → plan → fix → verify.
 
 ## What it will do
 
