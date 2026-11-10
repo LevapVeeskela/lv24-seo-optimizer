@@ -1,0 +1,45 @@
+{
+  "manifest_version": 1,
+  "schema_hash": "sha256:2060d1bbb28dcfde9fe4016b3ee03989cb90f6fdba795552d56bbdf48a9e5ab1",
+  "generated_from": "schemas/tools.json",
+  "skills": [
+    {
+      "name": "seo-weekly",
+      "version": "0.1.0",
+      "path": "skills/seo-weekly/SKILL.md",
+      "description": "Weekly organic search review: headline, what moved, indexing, actions.",
+      "requires_tools": [
+        "seo_weekly_report",
+        "gsc_search_analytics",
+        "yandex_query_stats",
+        "seo_opportunities",
+        "seo_indexing_triage"
+      ]
+    },
+    {
+      "name": "seo-indexing-triage",
+      "version": "0.1.0",
+      "path": "skills/seo-indexing-triage/SKILL.md",
+      "description": "Bucket not-indexed URLs by cause and produce an ordered fix plan.",
+      "requires_tools": [
+        "seo_indexing_triage",
+        "gsc_search_analytics",
+        "seo_crawl_site",
+        "yandex_indexing_state",
+        "seo_recrawl_request"
+      ]
+    },
+    {
+      "name": "seo-technical-audit",
+      "version": "0.1.0",
+      "path": "skills/seo-technical-audit/SKILL.md",
+      "description": "Crawl-based technical SEO audit with severity model and fix ownership.",
+      "requires_tools": [
+        "seo_crawl_site",
+        "gsc_search_analytics",
+        "yandex_indexing_state",
+        "seo_sitemap_submit"
+      ]
+    }
+  ]
+}
