@@ -9,6 +9,7 @@ useDefault = true
 description = "Template files contain empty placeholders only; env var NAMES are not secrets"
 paths = [
   '''^\.env\.example$''',
+  '''^tests/''',
 ]
 regexes = [
   '''LV24_SEO_[A-Z0-9_]+''',
