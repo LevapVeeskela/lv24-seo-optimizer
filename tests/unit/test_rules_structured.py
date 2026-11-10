@@ -1,4 +1,4 @@
-﻿"""Unit tests for Wave 3 rule group C: structured data, i18n and transport hygiene."""
+"""Unit tests for Wave 3 rule group C: structured data, i18n and transport hygiene."""
 
 from __future__ import annotations
 
@@ -498,4 +498,3 @@ def test_duplicate_organization_counts_graph_items() -> None:
 
     assert len(issues) == 1
     assert issues[0].detail == {"count": 2}
-

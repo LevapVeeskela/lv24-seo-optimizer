@@ -1,4 +1,4 @@
-﻿"""Offline contract tests for the integration service layer.
+"""Offline contract tests for the integration service layer.
 
 Every provider is replaced by a tiny object returning ``ProviderResult`` values, storage is a
 real SQLite database in ``tmp_path``, and both the report builder and delivery seams are
@@ -802,6 +802,3 @@ def test_crawl_and_store_without_store_still_returns_results(
     assert response["ok"] is True
     assert response["meta"]["pages_stored"] == 0
     assert "store: not configured; crawl results were not persisted" in response["warnings"]
-
-
-
