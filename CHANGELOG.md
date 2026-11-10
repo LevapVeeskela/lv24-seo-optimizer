@@ -5,6 +5,23 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-10
+
+### Fixed
+
+- `server.json` migrated to the current MCP Registry schema `2025-12-11` (the previous `2025-09-29`
+  form is deprecated); the entry is now published as `io.github.LevapVeeskela/lv24-seo@0.1.1`.
+- Release workflow is idempotent: PyPI and npm jobs skip versions that already exist, so a failed
+  channel can be retried from the same tag.
+- npm publishing uses **Trusted Publishing (OIDC)** with automatic provenance instead of a long-lived
+  token, matching the `lv24-brain` setup.
+
+### Added
+
+- npm launcher `@lv24/seo` (thin `uvx` wrapper) and its CI syntax/package check.
+
+## [0.1.0] - 2026-11-10
+
 ### Published
 
 - **PyPI** `lv24-seo 0.1.0` (OIDC trusted publisher, `pypi` environment).

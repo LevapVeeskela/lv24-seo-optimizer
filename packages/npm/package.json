@@ -1,6 +1,6 @@
 {
   "name": "@lv24/seo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Free-first SEO control plane for humans and AI agents — npx launcher for the Python package lv24-seo (GSC, Yandex Webmaster/Metrika, Bing, CrUX, PSI, crawl, reports, MCP).",
   "keywords": [
     "seo",
