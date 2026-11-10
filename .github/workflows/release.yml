@@ -16,6 +16,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish_registry:
+        description: "Publish server.json to the MCP Registry from this ref (no tag needed)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -194,6 +199,73 @@ jobs:
         # A new trust relationship must complete its first publish within 2 days.
         if: steps.exists.outputs.skip != 'true'
         run: npm publish --access public --provenance
+
+  publish-mcp-registry:
+    name: publish to MCP Registry
+    needs: [build, publish-pypi]
+    # Tag releases publish after PyPI accepted the version. A manual dispatch with
+    # publish_registry=true can publish the current server.json from any ref (useful to
+    # repair the registry without a new release).
+    if: |
+      always() && (
+        (startsWith(github.ref, 'refs/tags/v') && needs.publish-pypi.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish_registry)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # mcp-publisher exchanges the workflow OIDC token for a short-lived registry JWT:
+      # no device flow and no stored credential.
+      id-token: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install mcp-publisher
+        env:
+          PUBLISHER_VERSION: v1.8.9
+        run: |
+          curl -sSfL "https://github.com/modelcontextprotocol/registry/releases/download/${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin mcp-publisher
+          mcp-publisher --help >/dev/null
+
+      - name: Validate server.json
+        run: mcp-publisher validate
+
+      - name: Resolve the version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(python3 -c 'import json;print(json.load(open("server.json"))["version"])')"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "publishing ${version}"
+
+      - name: Skip when the version is already in the registry
+        id: exists
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          if curl -sSf "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.LevapVeeskela%2Flv24-seo" \
+             | jq -e --arg v "$VERSION" '.servers[] | select(.server.version == $v)' >/dev/null; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::MCP Registry already has ${VERSION} - skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login with GitHub OIDC
+        if: steps.exists.outputs.skip != 'true'
+        run: mcp-publisher login github-oidc
+
+      - name: Publish
+        if: steps.exists.outputs.skip != 'true'
+        run: mcp-publisher publish
 
   # ---------------------------------------------------------------------------
   # Optional and disabled: GHCR image for Docker/VPS users (WP10.3).

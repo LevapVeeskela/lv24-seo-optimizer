@@ -12,7 +12,7 @@ first public release is `0.1.0`.
 |---|---|---|---|
 | PyPI sdist + wheel (`lv24-seo`) | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | `publish-pypi` job, OIDC | $0 (public repo, standard runner) |
 | npm launcher (`@lv24/seo`) | `packages/npm` | `publish-npm` job, `NPM_TOKEN` | $0 (public npm package) |
-| `server.json` (MCP Registry) | this repository | `mcp-publisher`, manually | $0 |
+| `server.json` (MCP Registry) | this repository | `publish-mcp-registry` job, OIDC | $0 |
 | GHCR image (optional) | disabled job in `release.yml` | not enabled | public package storage/egress free; build minutes still count |
 
 ## Versioning policy
@@ -107,12 +107,17 @@ If the command prints nothing, add the line to `README.md` **before** `uv build`
 It must be part of the published `0.1.0` README; adding it in a later patch means the registry cannot
 verify `0.1.0` retroactively.
 
-### 3. `mcp-publisher`
+### 3. `mcp-publisher` (manual repair only)
+
+The release workflow publishes the registry entry itself with `mcp-publisher login github-oidc`
+(`id-token: write`), so no credential or device flow is needed for a normal release. Install the CLI
+locally only when you need to repair the registry without a new release:
 
 Install the official CLI from the
 [MCP Registry quickstart](https://modelcontextprotocol.io/registry/quickstart) (Homebrew or the
-release archive). Publishing is intentionally manual: it needs an interactive GitHub device login and
-the repository stores no registry token.
+release archive). Local publishing uses the interactive GitHub device flow and stores its token in
+`~/.config/mcp-publisher`; that token expires in roughly 20–30 minutes, which is why CI uses OIDC
+instead.
 
 GitHub login grants the `io.github.LevapVeeskela/*` namespace. The server name in `server.json` must
 keep exactly one slash and match that namespace. The PyPI package entry passes `mcp serve` through
@@ -268,29 +273,33 @@ curl -fsS https://pypi.org/pypi/lv24-seo/json \
 Both `uvx` commands must print `X.Y.Z`; the unpinned one proves the new version is the resolver's
 default. If `uvx` has a cached older build, add `--refresh`.
 
-### 8. Publish the MCP Registry manifest (manual)
+### 8. MCP Registry (automatic)
 
-Only after PyPI has accepted the files — the registry verifies that the package version exists and
-that its README contains the ownership marker:
+The `publish-mcp-registry` job runs after PyPI accepted the version and publishes `server.json` with
+`mcp-publisher login github-oidc` — no device flow, no stored token. It resolves the version from the
+tag (or from `server.json` on a manual dispatch), validates the manifest, skips versions that are
+already in the registry, and publishes the rest.
+
+Normal release: nothing to do. Watch the job in the same `release` run.
+
+Repair without a new release (for example after a registry outage):
 
 ```bash
-mcp-publisher validate server.json
-mcp-publisher login github
-mcp-publisher publish
+gh workflow run release.yml --ref main -f publish_registry=true
 ```
 
-`validate` performs schema and semantic checks and needs network access; `publish` uses the login
-token and the `io.github.LevapVeeskela/lv24-seo` name. Verify the entry:
+This reads the current `server.json` on `main`, so the version must already exist on PyPI. For a local
+repair, `mcp-publisher login github` + `mcp-publisher publish` still works but the token expires fast.
+
+Verify:
 
 ```bash
 curl -fsS "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.LevapVeeskela%2Flv24-seo"
 ```
 
 Confirm the registry shows `version` `X.Y.Z`, `isLatest: true` and the package `lv24-seo` version
-`X.Y.Z`. `0.1.0` is already published (`status: active`); every later release must bump `server.json`
-and re-run `mcp-publisher publish` **after** PyPI accepts the version, otherwise the registry keeps
-pointing at the previous release. If `validate` reports that the `$schema` URL is deprecated, update
-`server.json` and this document in the same change; do not publish with a deprecation warning.
+`X.Y.Z`. If `validate` reports that the `$schema` URL is deprecated, update `server.json` and this
+document in the same change; do not publish with a deprecation warning.
 
 ### 9. Post-release
 
