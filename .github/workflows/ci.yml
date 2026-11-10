@@ -37,9 +37,10 @@ jobs:
       - name: Mypy
         run: uv run mypy src
       - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks detect --source . --redact --verbose --exit-code 2 --log-opts="--all"
 
   test:
     runs-on: ubuntu-latest
