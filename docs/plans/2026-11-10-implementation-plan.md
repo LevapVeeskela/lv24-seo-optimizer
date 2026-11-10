@@ -3,8 +3,11 @@
 Дата: 2026-11-10 · Статус: **в исполнении** · Репозиторий: `github.com/LevapVeeskela/lv24-seo-optimizer`
 
 **Прогресс (2026-11-10):** W0 ✅ · W1 ✅ · W2 ✅ · W3 ✅ (30 правил) · W4 ✅ · W5 ✅ (без `report daily`/history) ·
-W6 ✅ · W7 ✅ (10 инструментов, 3 ресурса, 3 промпта) · W8 частично (рецепты Actions/VPS) ·
-W9–W10 в работе. Открытые хвосты: GSC service-account, write-gate в CLI, PyPI/registry, живой e2e.
+W6 ✅ · W7 ✅ (10 инструментов, 3 ресурса, 3 промпта) · W8 ✅ (write-gate + IndexNow; sitemap/recrawl адаптеры
+ещё без write-методов) · W9 частично · W10 частично (`server.json`, release workflow, docs; публикация
+PyPI/registry не выполнена). **826 тестов**, 87 файлов src / 17k строк.
+Открытые хвосты: GSC service-account, sitemap/recrawl write-методы, живой e2e, PyPI trusted publisher,
+MCP Registry publish.
 
 Связанные документы: [архитектура](../architecture.md) · [источники и лимиты](../data-sources.md) ·
 [MCP](../mcp.md) · [CLI](../cli.md) · [конфиг](../config.md) · [расписание](../scheduling.md) ·
