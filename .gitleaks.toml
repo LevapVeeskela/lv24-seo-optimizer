@@ -1,0 +1,12 @@
+# Gitleaks configuration.
+# The default rule set is kept; we only allowlist the documentation template whose values are
+# intentionally empty placeholders (a key *name* without a secret still matches generic-api-key).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Template files contain empty placeholders only"
+paths = [
+  '''^\.env\.example$''',
+]
