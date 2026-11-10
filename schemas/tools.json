@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "generated_from": "lv24_seo.mcp.registry",
+  "tools": [
+    {
+      "name": "seo_properties",
+      "title": "List properties",
+      "description": "List every site/property visible to the configured tokens.",
+      "kind": "read",
+      "providers": [
+        "gsc",
+        "yandex_webmaster",
+        "bing"
+      ],
+      "inputs": {},
+      "returns": "array of {provider, property_id, display_name, verified}",
+      "limitations": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "gsc_search_analytics",
+      "title": "Google search analytics",
+      "description": "Query GSC clicks/impressions/CTR/position by query, page, country or device.",
+      "kind": "read",
+      "providers": [
+        "gsc"
+      ],
+      "inputs": {
+        "property": "GSC property id, e.g. sc-domain:example.com",
+        "start_date": "ISO date",
+        "end_date": "ISO date",
+        "dimensions": "list[query|page|country|device|date]",
+        "limit": "1..500 (default 50)"
+      },
+      "returns": "{rows:[{keys,clicks,impressions,ctr,position}], total, truncated, data_age_days}",
+      "limitations": [
+        "50k rows/day/site/type",
+        "data lag 2-3 days",
+        "no query x page join"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "yandex_query_stats",
+      "title": "Yandex queries",
+      "description": "Top Yandex queries for a host with shows, clicks, position.",
+      "kind": "read",
+      "providers": [
+        "yandex_webmaster"
+      ],
+      "inputs": {
+        "host_id": "https:example.com:443",
+        "limit": "1..500",
+        "order_by": "TOTAL_SHOWS|TOTAL_CLICKS"
+      },
+      "returns": "{rows:[{query,shows,clicks,position}], total, truncated, data_age_days}",
+      "limitations": [
+        "top-3000 queries only",
+        "no query x page join",
+        "~4 day lag"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "yandex_indexing_state",
+      "title": "Yandex indexing state",
+      "description": "Indexing history, in-search page counts and diagnostics for a host.",
+      "kind": "read",
+      "providers": [
+        "yandex_webmaster"
+      ],
+      "inputs": {},
+      "returns": "{history:[...], problems:[...], data_age_days}",
+      "limitations": [
+        "per-URL sitemap errors are not exposed"
+      ],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "seo_crawl_site",
+      "title": "Crawl site",
+      "description": "Crawl a site (robots-respecting), return crawl summary and rule violations.",
+      "kind": "read",
+      "providers": [
+        "crawl"
+      ],
+      "inputs": {
+        "start_url": "https://example.com/",
+        "max_urls": "1..5000",
+        "include_rules": "list[rule_id]"
+      },
+      "returns": "{summary:{urls,fetched,errors}, issues:[{id,severity,url,detail}]}",
+      "limitations": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "seo_weekly_report",
+      "title": "Weekly report",
+      "description": "Build the weekly SEO digest (deltas vs last snapshot) for one property.",
+      "kind": "read",
+      "providers": [
+        "gsc",
+        "yandex_webmaster",
+        "yandex_metrika",
+        "crux",
+        "crawl"
+      ],
+      "inputs": {},
+      "returns": "{period, headline, deltas, issues, opportunities, limitations}",
+      "limitations": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "seo_indexing_triage",
+      "title": "Indexing triage",
+      "description": "Group not-indexed URLs by reason and propose the cheapest fix.",
+      "kind": "read",
+      "providers": [
+        "gsc",
+        "yandex_webmaster",
+        "crawl"
+      ],
+      "inputs": {},
+      "returns": "{buckets:[{reason,count,examples,next_action}]}",
+      "limitations": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "seo_opportunities",
+      "title": "Opportunities",
+      "description": "Striking-distance queries, CTR gaps, decayed pages, cannibalisation candidates.",
+      "kind": "read",
+      "providers": [
+        "gsc",
+        "yandex_webmaster"
+      ],
+      "inputs": {},
+      "returns": "{opportunities:[{kind,url,query,evidence,expected_gain}]}",
+      "limitations": [],
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "seo_recrawl_request",
+      "title": "Request recrawl (write)",
+      "description": "Queue URLs for Yandex recrawl within the daily quota.",
+      "kind": "write",
+      "providers": [
+        "yandex_webmaster"
+      ],
+      "inputs": {
+        "host_id": "https:example.com:443",
+        "urls": "list[url]"
+      },
+      "returns": "{queued, quota_left, task_ids}",
+      "limitations": [
+        "requires --allow-write",
+        "hard daily quota"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false
+      }
+    },
+    {
+      "name": "seo_sitemap_submit",
+      "title": "Submit sitemap (write)",
+      "description": "Submit or delete a sitemap in GSC/Bing.",
+      "kind": "write",
+      "providers": [
+        "gsc",
+        "bing"
+      ],
+      "inputs": {
+        "property": "property id",
+        "sitemap_url": "absolute URL",
+        "action": "submit|delete"
+      },
+      "returns": "{ok, provider, status}",
+      "limitations": [
+        "requires --allow-write"
+      ],
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false
+      }
+    }
+  ]
+}

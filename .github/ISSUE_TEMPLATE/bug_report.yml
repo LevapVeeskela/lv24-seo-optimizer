@@ -1,0 +1,46 @@
+name: Bug report
+description: Something in lv24-seo-optimizer does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do not paste tokens, cookies or real query data.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `lv24-seo version --json`
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options: [CLI, MCP server, skill, report/email, crawl, provider API, install, docs]
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider (if relevant)
+      placeholder: gsc / yandex_webmaster / yandex_metrika / bing / crux / psi / crawl
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. lv24-seo ...
+        2. ...
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted output
+      description: Run with `--verbose` and remove tokens, cookies and personal data.
+      render: text

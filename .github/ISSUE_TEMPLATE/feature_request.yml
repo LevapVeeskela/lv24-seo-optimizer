@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a provider, crawl rule, report or skill
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is it?
+      options: [free-tier provider, paid adapter (BYO key), crawl rule, report, MCP tool, CLI command, skill, docs]
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What SEO question cannot be answered today?
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Data source
+      description: API/docs link, free quota, auth model, what it can and cannot return.
+    validations:
+      required: true
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Project rules
+      options:
+        - label: It works on a free tier (or is an optional adapter with a user-supplied key)
+          required: true
+        - label: It does not require scraping Google/Yandex SERPs
+          required: true
+        - label: I checked that no existing tool in the repo covers this
+          required: true

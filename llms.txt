@@ -1,0 +1,28 @@
+# lv24-seo-optimizer
+
+> Free-first SEO control plane for humans and AI agents: Google Search Console, Yandex Webmaster,
+> Yandex Metrika, Bing/IndexNow, CrUX, PageSpeed Insights, site crawl and nginx logs in one model,
+> with scheduled email reports, an MCP server, a JSON-first CLI and portable agent skills.
+
+## Docs
+
+- [README](README.md): what it is, install, supported sources
+- [AGENTS.md](AGENTS.md): contract for AI agents working in the repo
+- [Implementation plan](docs/plans/2026-11-10-implementation-plan.md): waves and work packages
+- [Architecture](docs/architecture.md): layers, data model, provider contracts
+- [Data sources and limits](docs/data-sources.md): what each API can and cannot do
+- [MCP tool surface](docs/mcp.md): tool names, inputs, outputs, annotations
+- [CLI reference](docs/cli.md): commands, JSON envelope, exit codes
+- [Configuration](docs/config.md): seo.toml, env vars, secrets
+- [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
+- [Skills](docs/skills.md): skill format and mirrors
+- [Security](SECURITY.md): token handling, write gating
+
+## Machine-readable
+
+- [schemas/tools.json](schemas/tools.json): generated tool schemas for non-MCP agents
+- [skills/manifest.json](skills/manifest.json): skill index with schema hash
+
+## Notes for LLM crawlers
+
+Content is licensed Apache-2.0. Provider data is never shipped in this repo; fixtures are synthetic.
