@@ -1,11 +1,13 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.LevapVeeskela/lv24-seo",
-  "description": "MCP server for free-first SEO: GSC, Yandex, Metrika, Bing, CrUX, PSI, crawl.",
+  "title": "LV24 SEO",
+  "description": "Free-first SEO for agents: GSC, Yandex Webmaster/Metrika, Bing, CrUX, PSI, crawl.",
   "version": "0.1.0",
   "repository": {
     "url": "https://github.com/LevapVeeskela/lv24-seo-optimizer",
-    "source": "github"
+    "source": "github",
+    "id": "1452372669"
   },
   "packages": [
     {
@@ -19,10 +21,12 @@
       "packageArguments": [
         {
           "type": "positional",
+          "valueHint": "command",
           "value": "mcp"
         },
         {
           "type": "positional",
+          "valueHint": "subcommand",
           "value": "serve"
         }
       ]

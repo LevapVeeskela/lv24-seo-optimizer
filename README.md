@@ -120,6 +120,7 @@ what is read-only, how to propose a change. Machine-readable helpers:
 * `schemas/tools.json` — generated tool schemas (works without MCP)
 * `llms.txt` — doc map for LLM crawlers
 * `skills/*/SKILL.md` — portable skills (Claude Code, OpenCode, Codex)
+* MCP Registry: [`io.github.LevapVeeskela/lv24-seo`](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.LevapVeeskela%2Flv24-seo)
 
 ## License
 

@@ -283,12 +283,14 @@ mcp-publisher publish
 token and the `io.github.LevapVeeskela/lv24-seo` name. Verify the entry:
 
 ```bash
-curl -fsS "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.LevapVeeskela%2Flv24-seo"
+curl -fsS "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.LevapVeeskela%2Flv24-seo"
 ```
 
-Confirm the registry shows `version` `X.Y.Z` and the package `lv24-seo` version `X.Y.Z`. If
-`validate` reports that the `$schema` URL is deprecated, update `server.json` and this document in the
-same change; do not publish with a deprecation warning.
+Confirm the registry shows `version` `X.Y.Z`, `isLatest: true` and the package `lv24-seo` version
+`X.Y.Z`. `0.1.0` is already published (`status: active`); every later release must bump `server.json`
+and re-run `mcp-publisher publish` **after** PyPI accepts the version, otherwise the registry keeps
+pointing at the previous release. If `validate` reports that the `$schema` URL is deprecated, update
+`server.json` and this document in the same change; do not publish with a deprecation warning.
 
 ### 9. Post-release
 
