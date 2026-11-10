@@ -5,6 +5,12 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Published
+
+- **PyPI** `lv24-seo 0.1.0` (OIDC trusted publisher, `pypi` environment).
+- **npm** `@lv24/seo 0.1.0` — thin launcher over `uvx`; trusted publishing is configured for future
+  releases (first publish was manual).
+
 ### Added — engine (waves W0–W7)
 
 - **Core**: config (`seo.toml` + `LV24_SEO_*` env), secret store (keychain → env → `0600` file),
