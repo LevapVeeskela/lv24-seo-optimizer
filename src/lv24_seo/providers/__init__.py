@@ -1,1 +1,5 @@
-"""Package placeholder; implementation per docs/plans/2026-11-10-implementation-plan.md."""
+"""Provider adapters (see ``docs/data-sources.md`` for quotas and limits)."""
+
+from lv24_seo.providers.base import ProviderResult
+
+__all__ = ["ProviderResult"]
