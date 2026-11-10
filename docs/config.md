@@ -48,6 +48,10 @@ enabled = true
 to = ["owner@example.com"]
 from = "seo@example.com"
 only_on_change = true
+# SMTP transport (password comes from the keychain, not from this file)
+smtp_host = "smtp.example.com"
+smtp_port = 587
+smtp_user = "seo@example.com"
 
 [report.telegram]
 enabled = true
@@ -63,11 +67,10 @@ user_agent = "lv24-seo/0.1 (+https://example.com/bot)"
 [storage]
 data_dir = "./data"
 raw_retention_days = 90
-
-[privacy]
-# Never send provider data to a third party. There is no telemetry at all.
-telemetry = false
 ```
+
+> Telemetry is not configurable: the tool sends nothing anywhere. There is no `[privacy]` section and
+> no multi-site block yet — one `seo.toml` describes one project (multi-site lands in WP8.4).
 
 ## Secrets
 
@@ -91,6 +94,5 @@ See [`.env.example`](../.env.example). All are prefixed `LV24_SEO_`; the mapping
 
 ## Multi-property
 
-One `seo.toml` may describe several `[[sites]]` blocks; every command takes `--site <name>` when more
-than one exists. Reports iterate sites and produce one email per site (or one digest with a section per
-site with `report.email.combine = true`).
+Not supported yet (planned in WP8.4). Today one `seo.toml` describes exactly one project and one set of
+provider targets; run several configs (`--config path/to/seo.toml`) for several sites.

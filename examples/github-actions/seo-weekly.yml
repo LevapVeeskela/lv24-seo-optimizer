@@ -1,0 +1,146 @@
+# Weekly lv24-seo report on GitHub Actions.
+#
+# Copy this file to .github/workflows/seo-weekly.yml in *your site's* repository
+# (not the lv24-seo repository), then follow the guide in the lv24-seo repository:
+# docs/guides/github-actions.md.
+#
+# Zero-spend policy for this recipe:
+#   * public repository + standard ubuntu-latest runner = $0;
+#   * no matrix, no larger runner, no paid service;
+#   * artifacts are kept for 7 days (short retention, no long-term storage);
+#   * a private repository consumes included/billed Actions minutes and storage.
+name: seo-weekly
+
+on:
+  # GitHub cron is always UTC. 06:00 UTC = 09:00 Europe/Minsk (UTC+3, no DST).
+  # Monday morning is stable because GSC data lags 2-3 days (docs/scheduling.md).
+  schedule:
+    - cron: "0 6 * * 1"
+  # Manual run from the Actions tab; useful for the first setup and for token rotation.
+  workflow_dispatch:
+
+# Least privilege: the job only reads the checked-out repository.
+# No write scopes, so a compromised dependency cannot push or open PRs.
+permissions:
+  contents: read
+
+# Never let a manual run and a scheduled run overlap: two senders would race on the
+# SQLite state and could send the same report twice. Cancelling the older run is safe
+# because the report is idempotent (sends ledger + content hash).
+concurrency:
+  group: seo-weekly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    name: weekly report
+    # Standard GitHub-hosted runner only. Larger runners are always billed.
+    runs-on: ubuntu-latest
+    # Hard cap so a hung provider call cannot burn minutes indefinitely.
+    timeout-minutes: 15
+    env:
+      # Relative to the checkout. The directory must exist before the report; see below.
+      LV24_SEO_DATA_DIR: ./data
+      LV24_SEO_LOG_LEVEL: INFO
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          # The report job never pushes; do not leave the token in .git/config.
+          persist-credentials: false
+
+      - name: Install uv and Python
+        # Pinned to the same action version as this project's own CI.
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          # Sets UV_PYTHON; uvx downloads this interpreter on first use if absent.
+          python-version: "3.13"
+
+      - name: Create the data directory
+        # `lv24-seo init` creates ./data, but this workflow never runs init. The CLI opens
+        # SQLite only when the directory exists, so without this step no baseline is saved.
+        run: mkdir -p "$LV24_SEO_DATA_DIR"
+
+      - name: Restore the SQLite state
+        # A cache is not a backup. It preserves the sends ledger (idempotency) and snapshot
+        # history across ephemeral runners; report deltas come from the provider APIs.
+        # GitHub deletes cache entries that are not accessed for 7 days.
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            data/seo.sqlite3
+            data/seo.sqlite3-wal
+            data/seo.sqlite3-shm
+          # run_id makes the key unique; restore-keys picks the newest previous entry.
+          key: seo-db-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            seo-db-${{ github.ref_name }}-
+
+      - name: Materialise the Google service account
+        # Service account JSON cannot be pasted into seo.toml (it is a secret), and it
+        # must be a file for the Google auth library. Decode it into the runner temp dir.
+        # Delete this step if you do not use Search Console.
+        env:
+          GSC_SERVICE_ACCOUNT_B64: ${{ secrets.LV24_SEO_GSC_SERVICE_ACCOUNT_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ -z "${GSC_SERVICE_ACCOUNT_B64:-}" ]; then
+            echo "::error::repository secret LV24_SEO_GSC_SERVICE_ACCOUNT_B64 is not set"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/secrets"
+          printf '%s' "$GSC_SERVICE_ACCOUNT_B64" | base64 --decode > "$RUNNER_TEMP/secrets/gsc.json"
+          # Export the path to later steps without writing the JSON anywhere persistent.
+          printf 'LV24_SEO_GSC_SERVICE_ACCOUNT_FILE=%s\n' "$RUNNER_TEMP/secrets/gsc.json" >> "$GITHUB_ENV"
+
+      - name: Build and send the weekly report
+        # Only this step sees the provider and delivery credentials. GitHub masks secret
+        # values in logs; the CLI also redacts tokens from every error and JSON envelope.
+        # Non-secret identifiers (property, host_id, counter, mail addresses, chat_id)
+        # live in the committed seo.toml, not here.
+        env:
+          LV24_SEO_YANDEX_WEBMASTER_TOKEN: ${{ secrets.LV24_SEO_YANDEX_WEBMASTER_TOKEN }}
+          LV24_SEO_YANDEX_METRIKA_TOKEN: ${{ secrets.LV24_SEO_YANDEX_METRIKA_TOKEN }}
+          LV24_SEO_SMTP_PASSWORD: ${{ secrets.LV24_SEO_SMTP_PASSWORD }}
+          LV24_SEO_TELEGRAM_BOT_TOKEN: ${{ secrets.LV24_SEO_TELEGRAM_BOT_TOKEN }}
+        run: |
+          # `bash -e` (the GitHub default) would abort before we can inspect the exit code.
+          set +e
+          # Pin for reproducibility if you prefer: uvx --from "lv24-seo==0.1.0" ...
+          # Write the JSON to a file instead of the log: it can contain query/page data and
+          # logs of a public repository are public.
+          uvx --from lv24-seo lv24-seo report weekly --send --json > "$RUNNER_TEMP/weekly-report.json"
+          status=$?
+          # Exit code 5 is documented as partial success (truncated data in strict mode).
+          # Keep the run green but surface it; a skipped provider is only a warning.
+          if [ "$status" -eq 5 ]; then
+            echo "::warning title=Partial report::Exit code 5; check the JSON artifact for limitations."
+            status=0
+          fi
+          exit "$status"
+
+      - name: Save the SQLite state
+        # Runs even after a partial or failed report: the snapshot and sends ledger are
+        # still valid and must not be thrown away.
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            data/seo.sqlite3
+            data/seo.sqlite3-wal
+            data/seo.sqlite3-shm
+          key: seo-db-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: Upload the JSON envelope
+        # Small debug artefact. retention-days: 7 satisfies the zero-spend rule: no
+        # repository artifact may outlive seven days. On a private repository artifact
+        # storage counts against the included quota; delete this step for strict $0.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: weekly-report-json
+          path: ${{ runner.temp }}/weekly-report.json
+          retention-days: 7
+          if-no-files-found: ignore

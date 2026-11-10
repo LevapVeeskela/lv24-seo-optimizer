@@ -1,6 +1,11 @@
 # lv24-seo-optimizer — план реализации (роевая разработка)
 
-Дата: 2026-11-10 · Статус: **утверждаемый план** · Репозиторий: `github.com/LevapVeeskela/lv24-seo-optimizer`
+Дата: 2026-11-10 · Статус: **в исполнении** · Репозиторий: `github.com/LevapVeeskela/lv24-seo-optimizer`
+
+**Прогресс (2026-11-10):** W0 ✅ · W1 ✅ · W2 ✅ · W3 ✅ (30 правил) · W4 ✅ · W5 ✅ (без `report daily`/history) ·
+W6 ✅ · W7 ✅ (10 инструментов, 3 ресурса, 3 промпта) · W8 частично (рецепты Actions/VPS) ·
+W9–W10 в работе. Открытые хвосты: GSC service-account, write-gate в CLI, PyPI/registry, живой e2e.
+
 Связанные документы: [архитектура](../architecture.md) · [источники и лимиты](../data-sources.md) ·
 [MCP](../mcp.md) · [CLI](../cli.md) · [конфиг](../config.md) · [расписание](../scheduling.md) ·
 [скиллы](../skills.md) · [исследование 2026](../research/2026-11-landscape.md)

@@ -1,86 +1,100 @@
 # CLI reference
 
-Every command supports `--json` (machine output), `--verbose`, `--dry-run` where a write is involved,
-and `--config PATH`. Output envelope:
+Every command supports `--json` (machine output), `--config PATH` and a stable exit code.
+Output envelope:
 
 ```json
 { "ok": true, "data": {}, "meta": { "version": "0.1.0", "duration_ms": 812 }, "warnings": [] }
 ```
 
-Exit codes: `0` ok · `2` usage · `3` auth · `4` quota/upstream · `5` partial success · `1` unexpected.
+Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` partial · `1` unexpected.
 
-## Commands
+`--json` makes the command print exactly one envelope. Without it you get a short human summary on
+stdout; no ANSI colours.
 
-```
-lv24-seo init [--property https://example.com] [--non-interactive]
-lv24-seo doctor [--json]
-lv24-seo auth login --provider gsc|yandex|bing|crux [--no-browser]
-lv24-seo auth status [--json]
-lv24-seo auth logout --provider …
-lv24-seo config show|set|path
-lv24-seo properties list|add|remove
-```
+## Setup
 
-### Data
-
-```
-lv24-seo gsc query   --property sc-domain:example.com --start 2026-11-01 --end 2026-11-07 \
-                     --dimensions query --limit 100 [--json]
-lv24-seo gsc pages   --property … --days 28 --limit 100
-lv24-seo gsc inspect --property … --url https://example.com/page     # URL Inspection
-lv24-seo gsc sitemaps list|submit|delete                            # write, needs --allow-write
-
-lv24-seo yandex queries   --host https:example.com:443 --limit 100
-lv24-seo yandex indexing  --host …
-lv24-seo yandex diagnostics --host …
-lv24-seo yandex recrawl quota|queue|status --host …                 # write, needs --allow-write
-
-lv24-seo metrika report --counter 123456 --period 7d [--goals 1,2]
-lv24-seo crux origin --origin https://example.com
-lv24-seo psi url --url https://example.com --strategy mobile
-lv24-seo bing stats --site https://example.com
-lv24-seo indexnow submit --key … --urls urls.txt                    # write
+```bash
+lv24-seo version [--json]
+lv24-seo doctor [--json]                      # offline: python, config, data dir, token presence
+lv24-seo init [--property https://example.com] [--data-dir ./data] [--force]
+lv24-seo config show [--json]                 # redacted effective config
+lv24-seo properties [--json]                  # provider -> target + token present|missing
 ```
 
-### Crawl and audit
+`init` refuses to overwrite an existing `seo.toml` unless `--force` is passed.
 
-```
-lv24-seo crawl --start https://example.com --max-urls 500 --out data/crawl.json
-lv24-seo audit --start https://example.com [--rules all|core|tech] [--fail-on critical]
-lv24-seo audit logs --path /var/log/nginx/access.json.log --since 7d
-```
+## Authentication
 
-### Reports
-
-```
-lv24-seo report weekly  --property … [--no-send] [--always] [--out reports/]
-lv24-seo report indexing --property … 
-lv24-seo report opportunities --property …
-lv24-seo report send --file reports/weekly-2026-11-10.html --to owner@example.com
-lv24-seo report history [--limit 20]
+```bash
+lv24-seo auth status [--json]                                  # presence + source, never values
+lv24-seo auth set --provider gsc|yandex|bing|crux|psi|smtp|telegram [--stdin]
+lv24-seo auth login --provider gsc|yandex                      # prints the provider-specific steps
+lv24-seo auth logout --provider <name>
 ```
 
-### Automation
+`auth set` reads the secret from stdin or a hidden prompt, stores it in the OS keychain (or the
+`0600` file fallback), and prints only `{provider, stored, source}`.
 
+## Data
+
+```bash
+lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 [--dimensions query,page] [--limit 100]
+lv24-seo gsc query --days 7 [--limit 100]        # shorthand: last N full days
+lv24-seo yandex queries [--limit 100] [--json]
+lv24-seo yandex indexing [--json]
+lv24-seo crawl [--start URL] [--max-urls 500] [--json]
 ```
-lv24-seo schedule install --kind weekly --cron "0 6 * * 1" [--print]
-lv24-seo schedule install --kind daily  --cron "0 6 * * *"
-lv24-seo schedule status|remove
-lv24-seo mcp serve [--transport stdio|http] [--port 8765]
-lv24-seo install --client claude|opencode|vscode|cursor|copilot
-lv24-seo export tools [--out schemas/tools.json]
+
+`crawl` respects `robots.txt`, follows same-host links breadth-first, runs all 30 rules and stores
+pages/issues in SQLite when a store is configured.
+
+## Reports
+
+```bash
+lv24-seo report weekly [--days 7] [--lag-days 2] [--send] [--out reports/] [--json]
 ```
+
+- `--days` current window, `--lag-days` provider lag (GSC 2–3 days).
+- `--send` delivers through the channels enabled in `seo.toml` (email/Telegram). Without it the
+  report is only built and stored as a snapshot.
+- `--out DIR` writes `report.json` and `report.html`.
+- Reports are idempotent: a second run for the same period and content is skipped
+  (`already_sent`), and `only_on_change` skips a send when nothing material changed.
+
+Planned for the next wave: `report indexing`, `report opportunities`, `report history`
+(see `docs/plans/2026-11-10-implementation-plan.md`, WP5.5).
+
+## Scheduling
+
+```bash
+lv24-seo schedule print --cron "0 6 * * 1" [--target cron|systemd|windows] [--json]
+lv24-seo schedule install --kind weekly|daily [--cron "0 6 * * 1"] [--print] [--json]
+```
+
+`print` renders the artefact without touching the host; `install` writes the cron block / systemd user
+units / Task Scheduler XML. Generated jobs call `report weekly --send --json`, so a scheduled run
+delivers the report.
+
+Only simple cron expressions (`M H * * *` and `M H * * DOW`) can be converted to systemd/Windows.
+
+## Agent integration
+
+```bash
+lv24-seo install --client claude|opencode|vscode|cursor [--print]   # merges the MCP server entry
+lv24-seo export tools [--out schemas/tools.json]                    # registry for non-MCP agents
+```
+
+`install` merges into the host config instead of replacing it, and `--print` shows the exact JSON.
 
 ## Conventions
 
-* `--json` is always available and always the same envelope; humans get tables on a TTY.
-* Dates are ISO-8601 (`2026-11-10`), durations are `7d`, `28d`, `90d`.
-* `--allow-write` is required for every provider write; without it the command prints the plan and exits 0
-  with `"dry_run": true`.
-* `--idempotency-key` is accepted by write commands and stored in the audit table.
-* No command ever prints a token, cookie or full `Authorization` header.
+- Dates are ISO-8601 (`2026-11-10`); durations are `7d`, `28d`, `90d` where a flag accepts them.
+- Write operations (sitemap submit, recrawl queue, IndexNow) are not exposed by the CLI yet; they land
+  in WP8.2 behind `--allow-write` with a dry-run + confirm token (ADR-0003).
+- No command prints a token, cookie or full `Authorization` header.
 
 ## Windows notes
 
-* `lv24-seo schedule install` on Windows writes a Task Scheduler XML and calls `schtasks /Create /XML`.
-* Paths in docs are given for both PowerShell and bash where they differ.
+- `schedule install --target windows` writes a UTF-16 Task Scheduler XML (what `schtasks` expects).
+- Paths are handled with `pathlib`; no POSIX-only assumptions in user-facing commands.

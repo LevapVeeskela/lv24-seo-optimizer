@@ -38,9 +38,17 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Pre-alpha — design and scaffolding.** The implementation plan lives in
-[`docs/plans/2026-11-10-implementation-plan.md`](docs/plans/2026-11-10-implementation-plan.md).
-Landscape research (2026) is in [`docs/research/`](docs/research/).
+**Alpha (v0.1.0 in progress).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
+Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule crawler, SQLite history, analysis (deltas, opportunities,
+indexing triage, multi-engine fusion, nginx log stats), report builders + HTML/text/Markdown renderers,
+SMTP/Telegram delivery with idempotency, the full CLI, the MCP server (10 tools, 3 resources,
+3 prompts) and scheduler generators.
+
+Still missing before `v0.1.0`: PyPI publishing, GSC service-account auth (OAuth token only today),
+write operations (sitemap submit / recrawl / IndexNow are implemented in adapters but not gated in the
+CLI yet), and an end-to-end run against a live property. See
+[`docs/plans/2026-11-10-implementation-plan.md`](docs/plans/2026-11-10-implementation-plan.md) for the
+wave status.
 
 ## Install (planned, v0.1)
 
