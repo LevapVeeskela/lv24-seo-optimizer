@@ -275,3 +275,96 @@ def test_query_page_rows_feed_opportunities_and_decay(tmp_path) -> None:  # type
     # omitted by the API), so an absent row is unknown, never modelled as zero.
     assert [row["query"] for row in decays] == []
     assert "unknown, not zero" in " ".join(response["data"]["limitations"])
+
+
+class _ScriptedGsc:
+    """Returns (rows, truncated) per call: date-current, date-previous, query x2."""
+
+    def __init__(self, script: list[tuple[list[dict[str, Any]], bool]]) -> None:
+        self.script = script
+        self.calls = 0
+
+    def search_analytics(self, **kwargs: Any) -> ProviderResult[dict[str, Any]]:
+        rows, truncated = self.script[min(self.calls, len(self.script) - 1)]
+        self.calls += 1
+        return _result("gsc", rows, truncated=truncated)
+
+
+class _EmptyMetrika:
+    def stat_data(self, **kwargs: Any) -> ProviderResult[dict[str, Any]]:
+        return _result("yandex_metrika", [])
+
+
+def _complete_case(store: Store, clients: dict[str, Any]) -> dict[str, Any]:
+    return _service(store, clients).weekly_report(send=False)
+
+
+def test_complete_is_false_for_truncated_gsc(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    with Store(tmp_path / "seo.db") as store:
+        response = _complete_case(
+            store,
+            {
+                "gsc": _ScriptedGsc([(GSC_CURRENT, True), (GSC_PREVIOUS, False)]),
+                "yandex_webmaster": _Webmaster(),
+                "yandex_metrika": _Metrika(120.0),
+            },
+        )
+    assert response["meta"]["complete"] is False
+    assert "gsc" in response["meta"]["sources_incomplete"]
+    assert response["meta"]["truncated"] is True
+
+
+def test_complete_is_false_when_gsc_previous_window_is_empty(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    with Store(tmp_path / "seo.db") as store:
+        response = _complete_case(
+            store,
+            {
+                "gsc": _ScriptedGsc([(GSC_CURRENT, False), ([], False)]),
+                "yandex_webmaster": _Webmaster(),
+                "yandex_metrika": _Metrika(120.0),
+            },
+        )
+    assert response["meta"]["complete"] is False
+    assert "gsc" in response["meta"]["sources_incomplete"]
+    assert "headline delta unavailable" in " ".join(response["meta"]["limitations"])
+
+
+def test_complete_is_false_for_an_empty_source(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    with Store(tmp_path / "seo.db") as store:
+        response = _complete_case(
+            store,
+            {
+                "gsc": _Gsc([GSC_CURRENT, GSC_PREVIOUS, GSC_CURRENT, GSC_PREVIOUS]),
+                "yandex_webmaster": _Webmaster(),
+                "yandex_metrika": _EmptyMetrika(),
+            },
+        )
+    assert response["meta"]["complete"] is False
+    assert response["meta"]["sources_incomplete"] == ["yandex_metrika"]
+
+
+def test_complete_is_false_when_a_configured_source_is_missing(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    with Store(tmp_path / "seo.db") as store:
+        service = SeoService(
+            _config(),
+            store=store,
+            secrets=SecretStore(env={"LV24_SEO_GSC_TOKEN": "g"}),
+            clients={"gsc": _Gsc([GSC_CURRENT, GSC_PREVIOUS, GSC_CURRENT, GSC_PREVIOUS])},
+        )
+        response = service.weekly_report(send=False)
+    assert response["meta"]["complete"] is False
+    assert response["meta"]["sources_missing"] == ["yandex_metrika", "yandex_webmaster"]
+
+
+def test_complete_is_true_only_when_every_source_is_whole(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    with Store(tmp_path / "seo.db") as store:
+        response = _complete_case(
+            store,
+            {
+                "gsc": _Gsc([GSC_CURRENT, GSC_PREVIOUS, GSC_CURRENT, GSC_PREVIOUS]),
+                "yandex_webmaster": _Webmaster(),
+                "yandex_metrika": _Metrika(120.0),
+            },
+        )
+    assert response["meta"]["complete"] is True
+    assert response["meta"]["sources_incomplete"] == []

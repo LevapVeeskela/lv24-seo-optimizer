@@ -155,3 +155,132 @@ def test_close_workspaces_is_idempotent() -> None:
     close_workspaces()
     close_workspaces()
     assert server_module._OPEN_WORKSPACES == []
+
+
+class _RecordingGsc(_FakeGsc):
+    """Records the calling thread and the peak number of overlapping calls."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.threads: set[int] = set()
+        self.active = 0
+        self.peak = 0
+
+    def search_analytics(self, **kwargs: Any) -> ProviderResult[dict[str, Any]]:
+        import threading
+        import time
+
+        self.threads.add(threading.get_ident())
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        try:
+            time.sleep(0.02)  # a blocking provider call: must not interleave with others
+            return super().search_analytics(**kwargs)
+        finally:
+            self.active -= 1
+
+
+def test_negative_control_raw_sync_tool_runs_in_worker_thread(tmp_path: Path) -> None:
+    """Without the adapter the SDK dispatches the sync body off the loop thread.
+
+    This proves the adapter is load-bearing on the installed SDK: the same tool
+    registered raw cannot persist (sqlite ``check_same_thread``) and the service
+    returns an honest failure envelope instead of a fake success.
+    """
+    from lv24_seo.mcp.tools import TOOL_BUILDERS, ToolState
+
+    store = Store(tmp_path / "seo.db")
+    try:
+        service = SeoService(
+            _config(tmp_path),
+            store=store,
+            secrets=SecretStore(env={"LV24_SEO_GSC_TOKEN": "token"}),
+            clients={"gsc": _RecordingGsc()},
+        )
+        raw = server_module._SERVER_CLASS(name="raw")
+        raw.tool(name="gsc_search_analytics")(
+            TOOL_BUILDERS["gsc_search_analytics"](ToolState(service=service))
+        )
+        result = asyncio.run(raw.call_tool("gsc_search_analytics", {"limit": 10}))
+        envelope = _payload(result)
+        assert envelope["ok"] is False
+        assert envelope["error"]["code"] == "INTERNAL"
+        assert store.get_metric_windows(PROPERTY, source="gsc") == []
+    finally:
+        store.close()
+
+
+def test_concurrent_calls_are_serial_on_the_loop_thread(tmp_path: Path) -> None:
+    import threading
+
+    store = Store(tmp_path / "seo.db")
+    fake = _RecordingGsc()
+    try:
+        service = SeoService(
+            _config(tmp_path),
+            store=store,
+            secrets=SecretStore(env={"LV24_SEO_GSC_TOKEN": "token"}),
+            clients={"gsc": fake},
+        )
+        server = create_server(service)
+
+        async def burst() -> list[Any]:
+            return await asyncio.gather(
+                *(server.call_tool("gsc_search_analytics", {"limit": 10}) for _ in range(4))
+            )
+
+        results = asyncio.run(burst())
+        assert all(_payload(r)["ok"] for r in results)
+        assert fake.calls == 4
+        assert fake.peak == 1, "calls must be serialised, not interleaved"
+        assert fake.threads == {threading.get_ident()}
+        assert store.get_metric_windows(PROPERTY, source="gsc")
+    finally:
+        store.close()
+
+
+def test_default_workspace_persists_and_close_workspaces_closes_store(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """``create_server()`` with no service opens the shared workspace store."""
+    import sqlite3
+
+    import pytest
+
+    from lv24_seo import composition
+
+    data_dir = tmp_path / ".lv24-seo"
+    data_dir.mkdir()
+    config = _config(data_dir)
+    fake = _FakeGsc()
+
+    def open_workspace(*args: Any, **kwargs: Any) -> composition.Workspace:
+        store = composition.open_store(config)
+        assert store is not None
+        service = SeoService(
+            config,
+            store=store,
+            secrets=SecretStore(env={"LV24_SEO_GSC_TOKEN": "token"}),
+            clients={"gsc": fake},
+        )
+        return composition.Workspace(config=config, service=service, store=store)
+
+    monkeypatch.setattr(composition, "open_workspace", open_workspace)
+    close_workspaces()
+    server = create_server()
+    assert len(server_module._OPEN_WORKSPACES) == 1
+    workspace = server_module._OPEN_WORKSPACES[0]
+    result = asyncio.run(server.call_tool("gsc_search_analytics", {"limit": 10}))
+    assert _payload(result)["meta"]["persisted"]["metrics"] == 2
+    assert workspace.store.get_metric_windows(PROPERTY, source="gsc")
+
+    close_workspaces()
+    close_workspaces()
+    assert server_module._OPEN_WORKSPACES == []
+    with pytest.raises(sqlite3.ProgrammingError):
+        workspace.store.get_metric_windows(PROPERTY, source="gsc")
+    reopened = Store(data_dir / composition.DB_FILENAME)
+    try:
+        assert reopened.get_metric_windows(PROPERTY, source="gsc"), "data must be durable"
+    finally:
+        reopened.close()

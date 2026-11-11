@@ -129,3 +129,67 @@ def test_migrate_upgrades_pre_windows_database_without_losing_data(tmp_path: Pat
         assert migrate(store.conn) == []
     finally:
         store.close()
+
+
+def _legacy_db_with_gsc_daily(path: Path) -> None:
+    """Simulate a pre-0.2.0 database: GSC rows in metric_daily, no migration 2."""
+    legacy = Store(path)
+    legacy.upsert_metric_daily("p", "gsc", "2026-11-01", metric="clicks", value=70.0)
+    legacy.upsert_metric_daily("p", "bing", "2026-11-01", metric="clicks", value=3.0)
+    legacy.conn.execute("DELETE FROM schema_migrations WHERE version = 2")
+    legacy.conn.execute("UPDATE metric_daily SET accuracy = NULL")
+    legacy.conn.commit()
+    legacy.close()
+
+
+def test_migration_2_marks_only_legacy_gsc_daily_rows(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    _legacy_db_with_gsc_daily(path)
+
+    store = Store(path)
+    try:
+        daily = store.get_metric_daily("p")
+        assert [row["source"] for row in daily] == ["bing"], "legacy GSC rows leak into daily"
+        with_legacy = store.get_metric_daily("p", include_legacy=True)
+        gsc = [row for row in with_legacy if row["source"] == "gsc"]
+        assert gsc and gsc[0]["accuracy"] == "legacy_unknown_granularity"
+        assert gsc[0]["value"] == 70.0, "history must be retained, not deleted"
+
+        # A true daily write after the migration is a normal daily row again.
+        store.upsert_metric_daily("p", "gsc", "2026-11-02", metric="clicks", value=9.0)
+        assert [r["date"] for r in store.get_metric_daily("p", source="gsc")] == ["2026-11-02"]
+        assert migrate(store.conn) == []
+    finally:
+        store.close()
+
+
+def test_failed_migration_rolls_back_data_and_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lv24_seo.store import db
+
+    path = tmp_path / "seo.db"
+    Store(path).close()
+    broken = (
+        99,
+        "deliberately broken",
+        "CREATE TABLE half_applied (id INTEGER); INSERT INTO no_such_table VALUES (1);",
+    )
+    monkeypatch.setattr(db, "_MIGRATIONS", (*db._MIGRATIONS, broken))
+
+    conn = db.connect(path)
+    try:
+        with pytest.raises(Exception, match="no_such_table"):
+            db.migrate(conn)
+        assert (
+            conn.execute("SELECT name FROM sqlite_master WHERE name='half_applied'").fetchone()
+            is None
+        ), "DDL from a failed migration must roll back"
+        assert conn.execute("SELECT 1 FROM schema_migrations WHERE version=99").fetchone() is None
+
+        fixed = (99, "fixed", "CREATE TABLE half_applied (id INTEGER);")
+        monkeypatch.setattr(db, "_MIGRATIONS", (*db._MIGRATIONS[:-1], fixed))
+        assert db.migrate(conn) == [99]
+        assert db.migrate(conn) == []
+    finally:
+        conn.close()
