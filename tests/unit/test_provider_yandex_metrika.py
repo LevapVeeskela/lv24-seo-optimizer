@@ -179,12 +179,12 @@ def test_stat_data_maps_rows_and_reports_sampling() -> None:
     assert result.property_id == "123456"
 
     request = seen[0]
-    assert request.method == "POST"
+    assert request.method == "GET"
     assert request.url.path == "/stat/v1/data"
     assert request.headers["authorization"] == f"OAuth {TOKEN}"
-    assert request.headers["content-type"].startswith("application/x-www-form-urlencoded")
+    assert request.content == b""
 
-    form = parse_qs(request.content.decode())
+    form = parse_qs(request.url.query.decode())
     assert form["ids"] == ["123456"]
     assert form["metrics"] == [",".join(metrics)]
     assert form["dimensions"] == ["ym:s:startURLPath"]

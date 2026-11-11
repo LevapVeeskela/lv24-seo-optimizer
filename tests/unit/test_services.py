@@ -163,8 +163,18 @@ class FakeWebmasterClient:
         *,
         limit: int = 500,
         order_by: str = "TOTAL_SHOWS",
+        date_from: Any | None = None,
+        date_to: Any | None = None,
     ) -> ProviderResult[dict[str, Any]]:
-        self.query_calls.append({"host_id": host_id, "limit": limit, "order_by": order_by})
+        self.query_calls.append(
+            {
+                "host_id": host_id,
+                "limit": limit,
+                "order_by": order_by,
+                "date_from": date_from,
+                "date_to": date_to,
+            }
+        )
         return _result(
             "yandex_webmaster",
             [{"query": "seo", "shows": 300.0, "clicks": 30.0, "position": 4.0}],
@@ -325,11 +335,13 @@ def test_gsc_query_returns_rows_meta_and_persists_metrics(store: Store) -> None:
         }
     ]
 
-    persisted = store.get_metric_daily(PROPERTY, source="gsc")
+    persisted = store.get_metric_windows(PROPERTY, source="gsc")
     assert len(persisted) == 4
     assert {row["metric"] for row in persisted} == {"clicks", "impressions"}
     assert {row["scope"] for row in persisted} == {"query"}
     assert {row["key"] for row in persisted} == {"seo", "audit"}
+    assert {row["start"] for row in persisted} == {"2026-11-01"}
+    assert {row["end"] for row in persisted} == {"2026-11-07"}
     clicks = sum(row["value"] for row in persisted if row["metric"] == "clicks")
     assert clicks == 15.0
     assert store.list_pages(PROPERTY) == []
@@ -367,8 +379,36 @@ def test_gsc_query_persists_page_rows_as_unknown_status(store: Store) -> None:
     assert pages[0]["url"] == "https://example.com/seo"
     assert pages[0]["status"] == 0
     assert pages[0]["index_state"] == "gsc_search_analytics"
-    metrics = store.get_metric_daily(PROPERTY, source="gsc", scope="page")
+    metrics = store.get_metric_windows(PROPERTY, source="gsc", scope="page")
     assert {row["key"] for row in metrics} == {"https://example.com/seo"}
+
+
+def test_gsc_query_with_date_dimension_persists_daily_not_windows(store: Store) -> None:
+    rows = [
+        {"date": "2026-11-06", "clicks": 4.0, "impressions": 40.0, "ctr": 0.1, "position": 3.0},
+        {"date": "2026-11-07", "clicks": 6.0, "impressions": 60.0, "ctr": 0.1, "position": 4.0},
+    ]
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="token"),
+        clients={"gsc": FakeGscClient([rows])},
+    )
+
+    response = service.gsc_query(
+        start=date(2026, 11, 6),
+        end=date(2026, 11, 7),
+        dimensions=("date",),
+        limit=10,
+    )
+
+    assert response["ok"] is True
+    daily = store.get_metric_daily(PROPERTY, source="gsc")
+    assert [(row["date"], row["value"]) for row in daily if row["metric"] == "clicks"] == [
+        ("2026-11-06", 4.0),
+        ("2026-11-07", 6.0),
+    ]
+    assert store.get_metric_windows(PROPERTY, source="gsc") == []
 
 
 def test_gsc_query_without_store_warns_but_returns_rows() -> None:
@@ -485,7 +525,15 @@ def test_yandex_queries_passes_host_and_limit() -> None:
     assert response["data"]["rows"][0]["query"] == "seo"
     assert response["meta"]["host_id"] == HOST_ID
     assert response["meta"]["limit"] == 7
-    assert client.query_calls == [{"host_id": HOST_ID, "limit": 7, "order_by": "TOTAL_SHOWS"}]
+    assert client.query_calls == [
+        {
+            "host_id": HOST_ID,
+            "limit": 7,
+            "order_by": "TOTAL_SHOWS",
+            "date_from": None,
+            "date_to": None,
+        }
+    ]
 
 
 def test_yandex_indexing_combines_all_reads() -> None:
@@ -548,12 +596,21 @@ def test_weekly_report_calls_builder_and_saves_snapshot(
     assert response["meta"]["data_age_days"] == 4
     assert "delivery:" not in " ".join(response["warnings"])
 
-    assert builder_capture["current"]["clicks"] == 45.0
+    assert builder_capture["current"]["clicks"] == 15.0
     assert builder_capture["current"]["impressions"] == 150.0
     assert builder_capture["previous"]["clicks"] > 0.0
     assert "yandex_rows" in builder_capture
     assert "metrika_rows" in builder_capture
     assert "gsc_rows" in builder_capture
+    assert "gsc_previous_rows" in builder_capture
+    assert "issues" in builder_capture
+    # Canonical source ids: collector keys must reach the builder sections.
+    assert builder_capture["yandex_rows"] == [
+        {"query": "seo", "shows": 300.0, "clicks": 30.0, "position": 4.0}
+    ]
+    assert builder_capture["metrika_rows"] == [{"visits": 120.0, "users": 100.0}]
+    assert response["meta"]["sources_failed"] == []
+    assert response["meta"]["complete"] is True
     start = builder_capture["period_start"]
     end = builder_capture["period_end"]
     assert (end - start) == timedelta(days=6)
@@ -611,10 +668,10 @@ def test_weekly_report_send_false_does_not_touch_delivery(
     builder_capture: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def forbidden(*args: Any, **kwargs: Any) -> None:
+    def forbidden(self: SeoService, report: object, warnings: list[str]) -> bool:
         raise AssertionError("delivery must not be called when send=False")
 
-    monkeypatch.setattr(services, "_load_deliver", lambda: forbidden)
+    monkeypatch.setattr(SeoService, "_deliver_report", forbidden)
     service = SeoService(
         _config(),
         store=store,

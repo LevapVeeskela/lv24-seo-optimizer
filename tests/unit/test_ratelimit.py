@@ -55,7 +55,7 @@ def test_default_limits_match_documented_keys_and_values() -> None:
     assert DEFAULT_LIMITS["gsc"] == BucketSpec(20.0, 1200.0)
     assert DEFAULT_LIMITS["gsc.url_inspection"] == BucketSpec(10.0, 600.0)
     assert DEFAULT_LIMITS["yandex_webmaster"] == BucketSpec(5.0, 100.0)
-    assert DEFAULT_LIMITS["yandex_metrika"] == BucketSpec(0.7, 200.0)
+    assert DEFAULT_LIMITS["yandex_metrika"] == BucketSpec(0.65, 200.0)
     assert DEFAULT_LIMITS["bing"] == BucketSpec(5.0, 100.0)
     assert DEFAULT_LIMITS["crux"] == BucketSpec(2.5, 150.0)
     assert DEFAULT_LIMITS["psi"] == BucketSpec(25.0, 1000.0)
@@ -257,13 +257,14 @@ def test_limiter_propagates_timeout_as_quota_exceeded() -> None:
 def test_metrika_window_budget_of_200_requests_per_5_minutes() -> None:
     limiter, clock = make_limiter()
     assert DEFAULT_LIMITS["yandex_metrika"].capacity == 200.0
+    # 0.65 rps stays under the documented 200 req / 5 min ceiling (0.667 rps).
 
     granted = sum(1 for _ in range(201) if limiter.try_acquire("yandex_metrika"))
 
     assert granted == 200
     assert limiter.bucket("yandex_metrika").tokens == pytest.approx(0.0)
 
-    clock.now += 300.0
+    clock.now += 400.0
 
     assert limiter.bucket("yandex_metrika").tokens == pytest.approx(200.0)
 

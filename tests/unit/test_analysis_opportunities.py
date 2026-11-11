@@ -114,13 +114,15 @@ def test_decay_matches_by_query_and_page_and_by_query_alone() -> None:
     assert [(item.query, item.page, item.expected_clicks) for item in result] == [
         ("alpha", "https://example.com/a", 60.0),
         ("beta", None, 60.0),
+        ("gamma", "https://example.com/b", 60.0),
     ]
-    alpha, beta = result
+    alpha, beta, gamma = result
     assert alpha.kind == "decay"
     assert alpha.evidence["previous_clicks"] == 100.0
     assert alpha.evidence["clicks"] == 40.0
     assert alpha.evidence["match"] == "query+page"
     assert beta.evidence["match"] == "query"
+    assert gamma.evidence["match"] == "query_rollup"
 
 
 def test_decay_query_row_rolls_up_previous_page_rows() -> None:

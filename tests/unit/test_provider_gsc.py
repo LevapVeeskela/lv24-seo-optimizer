@@ -149,14 +149,20 @@ def test_search_analytics_maps_rows_and_data_age(monkeypatch: pytest.MonkeyPatch
     assert result.total == 1
     assert result.truncated is False
     assert ROWS_CAP_50000 in result.limitations
-    assert _body(seen[0]) == {
+    body = _body(seen[0])
+    assert body == {
         "startDate": "2026-10-01",
         "endDate": "2026-11-03",
         "dimensions": ["query", "page"],
         "type": "web",
         "rowLimit": 25_000,
         "startRow": 0,
-        "filters": [{"dimension": "country", "operator": "equals", "expression": "blr"}],
+        "dimensionFilterGroups": [
+            {
+                "groupType": "and",
+                "filters": [{"dimension": "country", "operator": "equals", "expression": "blr"}],
+            }
+        ],
     }
 
 

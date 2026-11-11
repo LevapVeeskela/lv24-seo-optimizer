@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from lv24_seo import __version__
 from lv24_seo.core.envelope import envelope_exit_code, fail, ok, partial
 from lv24_seo.core.errors import (
     AUTH_INVALID,
@@ -19,7 +20,7 @@ def test_ok_envelope_shape() -> None:
     assert payload == {
         "ok": True,
         "data": {"x": 1},
-        "meta": {"duration_ms": 5},
+        "meta": {"version": __version__, "duration_ms": 5},
         "warnings": ["w"],
     }
 
@@ -33,7 +34,7 @@ def test_fail_envelope_hides_nothing_but_requires_code() -> None:
         "retryable": False,
         "next_action": "re-login",
     }
-    assert payload["meta"] == {}
+    assert payload["meta"] == {"version": __version__}
 
 
 def test_partial_marks_limitations_and_is_ok() -> None:

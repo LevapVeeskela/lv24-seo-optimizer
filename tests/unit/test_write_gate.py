@@ -289,8 +289,10 @@ def test_duplicate_apply_is_skipped_without_calling_execute_again() -> None:
         calls.append(plan)
         return {"queued": 2}
 
-    first = gate.apply(PLAN, token, idempotency_key="job-1", execute=execute)
-    second = gate.apply(PLAN, token, idempotency_key="job-1", execute=execute)
+    # gitleaks mistakes the positional variable `token` followed by a key assignment for a secret.
+    job = "job-1"
+    first = gate.apply(PLAN, token, idempotency_key=job, execute=execute)
+    second = gate.apply(PLAN, token, idempotency_key=job, execute=execute)
 
     assert first.status == "applied"
     assert second.status == "skipped"

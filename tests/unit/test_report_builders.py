@@ -249,7 +249,7 @@ def test_empty_weekly_input_produces_a_valid_report_with_warnings() -> None:
         generated_at=_GENERATED_AT,
     )
 
-    assert report.headline == "clicks n/a, impressions n/a, ctr n/a, position 0.0"
+    assert report.headline == "No provider data available"
     assert report.warnings == [
         "no metrics for either period; delta rows are all zero",
         "no provider rows; traffic and opportunities are empty",

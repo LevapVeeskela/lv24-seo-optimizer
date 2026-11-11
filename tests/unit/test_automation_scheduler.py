@@ -47,7 +47,7 @@ def test_render_cron_block() -> None:
 
     assert text == (
         "# lv24-seo scheduled job\n"
-        "# CRON_TZ=Europe/Minsk\n"
+        "CRON_TZ=Europe/Minsk\n"
         "0 6 * * 1 /usr/local/bin/lv24-seo report weekly --json\n"
     )
 
@@ -65,7 +65,7 @@ def test_render_cron_applies_workdir_and_custom_metadata() -> None:
     lines = render_cron(spec).splitlines()
 
     assert lines[0] == "# nightly crawl audit"
-    assert lines[1] == "# CRON_TZ=UTC"
+    assert lines[1] == "CRON_TZ=UTC"
     assert lines[2] == ("30 4 * * * cd /srv/lv24 && /opt/lv24-seo/bin/lv24-seo crawl audit --json")
 
 

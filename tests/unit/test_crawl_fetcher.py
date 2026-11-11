@@ -36,11 +36,15 @@ def _fetcher(
     *,
     max_redirects: int = 5,
     max_bytes: int = 5_000_000,
+    resolver: Callable[[str], list[str]] | None = None,
 ) -> Fetcher:
+    # A fixed public IP keeps MockTransport tests hermetic (no real DNS);
+    # per-test resolvers cover the private/rebinding cases.
     return Fetcher(
         transport=httpx.MockTransport(handler),
         max_redirects=max_redirects,
         max_bytes=max_bytes,
+        resolver=resolver or (lambda _host: ["93.184.215.14"]),
     )
 
 
@@ -322,27 +326,26 @@ def test_fetch_robots_parses_a_200_response() -> None:
     assert policy.sitemaps == ["https://example.com/sitemap.xml"]
 
 
-def test_fetch_robots_network_error_allows_everything() -> None:
+def test_fetch_robots_network_error_defers_crawl() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("no route to host")
 
     with _fetcher(handler) as fetcher:
         policy = fetcher.fetch_robots("https://example.com")
 
-    assert policy.disallow == []
-    assert policy.allow == []
-    assert is_allowed(policy, "/any/path") is True
+    assert policy.deferred is True
+    assert is_allowed(policy, "/any/path") is False
 
 
-def test_fetch_robots_server_error_allows_everything() -> None:
+def test_fetch_robots_server_error_defers_crawl() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503)
 
     with _fetcher(handler) as fetcher:
         policy = fetcher.fetch_robots("https://example.com")
 
-    assert policy.disallow == []
-    assert is_allowed(policy, "/any/path") is True
+    assert policy.deferred is True
+    assert is_allowed(policy, "/any/path") is False
 
 
 @pytest.mark.parametrize(

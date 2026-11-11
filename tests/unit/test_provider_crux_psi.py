@@ -28,7 +28,7 @@ CRUX_RECORD = {
                     {"min": 3000, "proportion": 0.1},
                 ],
             },
-            "cumulative_layout_adjustment": {
+            "cumulative_layout_shift": {
                 "percentiles": {"p75": 0.06},
                 "distributions": [
                     {"min": 0, "max": 0.1, "proportion": 0.82},
@@ -123,7 +123,7 @@ def test_crux_maps_metrics_to_p75_rows() -> None:
             "unit": "ms",
         },
         {
-            "metric": "cumulative_layout_adjustment",
+            "metric": "cumulative_layout_shift",
             "p75": 0.06,
             "good": 0.82,
             "needs_improvement": 0.12,

@@ -25,7 +25,7 @@ from lv24_seo.report.delivery import (
     send_telegram,
 )
 from lv24_seo.report.models import Report, ReportSection
-from lv24_seo.report.render import render_html, render_markdown, render_text
+from lv24_seo.report.render import render_html, render_text
 
 SendKey = tuple[str, str, str, str, str]
 
@@ -74,8 +74,17 @@ def _telegram_config(**overrides: Any) -> TelegramConfig:
 
 
 def _expected_hash(report: Report) -> str:
+    """Mirror of the semantic-hash contract: volatile envelope fields excluded."""
+    payload = report.to_dict()
+    semantic = {
+        "kind": payload.get("kind"),
+        "property_id": payload.get("property_id"),
+        "period": payload.get("period"),
+        "headline": payload.get("headline"),
+        "sections": payload.get("sections"),
+    }
     canonical = json.dumps(
-        report.to_dict(),
+        semantic,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -96,13 +105,15 @@ class _FakeSMTP:
         self.host = host
         self.port = port
         self.started_tls = False
+        self.tls_context: object = None
         self.logged_in: tuple[str, str] | None = None
         self.sent: list[tuple[str, list[str], str]] = []
         self.quit_called = False
         _FakeSMTP.instances.append(self)
 
-    def starttls(self) -> None:
+    def starttls(self, *, context: object = None) -> None:
         self.started_tls = True
+        self.tls_context = context
 
     def login(self, user: str, password: str) -> None:
         self.logged_in = (user, password)
@@ -115,7 +126,7 @@ class _FakeSMTP:
 
 
 class _RejectingSMTP(_FakeSMTP):
-    def starttls(self) -> None:
+    def starttls(self, *, context: object = None) -> None:
         raise smtplib.SMTPAuthenticationError(
             535,
             f"bad credentials for {self.host} with super-secret-password".encode(),
@@ -332,7 +343,7 @@ def test_email_connection_error_reports_exception_class_only() -> None:
 # -- telegram ---------------------------------------------------------------------------------
 
 
-def test_telegram_sends_markdown_truncated_to_4000_chars() -> None:
+def test_telegram_sends_plain_text_truncated_to_4000_chars() -> None:
     long_rows = [{"metric": f"metric-{index}", "note": "long value " * 12} for index in range(120)]
     report = replace(
         _report(),
@@ -346,7 +357,7 @@ def test_telegram_sends_markdown_truncated_to_4000_chars() -> None:
             )
         ],
     )
-    assert len(render_markdown(report)) > 4000
+    assert len(render_text(report)) > 4000
     calls: list[tuple[str, dict[str, Any]]] = []
 
     def fake_post(url: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -362,8 +373,9 @@ def test_telegram_sends_markdown_truncated_to_4000_chars() -> None:
     url, payload = calls[0]
     assert url == "https://api.telegram.org/bot123456:token/sendMessage"
     assert payload["chat_id"] == "-100500"
-    assert payload["parse_mode"] == "Markdown"
-    assert payload["text"] == render_markdown(report)[:4000]
+    assert "parse_mode" not in payload
+    assert payload["disable_web_page_preview"] is True
+    assert payload["text"] == render_text(report)[:4000]
     assert len(payload["text"]) == 4000
 
 

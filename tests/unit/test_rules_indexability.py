@@ -44,12 +44,14 @@ def _ctx(
     *pages: PageData,
     sitemap_urls: list[str] | None = None,
     robots_disallow: list[str] | None = None,
+    robots_allow: list[str] | None = None,
 ) -> RuleContext:
     return RuleContext(
         pages=list(pages),
         site_url="https://example.com",
         sitemap_urls=list(sitemap_urls or []),
         robots_disallow=list(robots_disallow or []),
+        robots_allow=list(robots_allow or []),
     )
 
 
@@ -84,9 +86,24 @@ def test_robots_blocked_matches_prefix_and_wildcard_patterns() -> None:
         "https://example.com/private/secret?token=1",
         "https://example.com/docs/guide.pdf",
     ]
-    assert [issue.detail["pattern"] for issue in issues] == ["/private/", "/*.pdf$"]
+    assert [issue.detail["final_url"] for issue in issues] == [
+        "https://example.com/private/secret?token=1",
+        "https://example.com/docs/guide.pdf",
+    ]
     assert all(issue.rule_id == "robots-blocked" for issue in issues)
     assert all(issue.severity == "critical" for issue in issues)
+
+
+def test_robots_blocked_honours_allow_over_disallow() -> None:
+    pages = [
+        _page("https://example.com/private/public/page"),
+        _page("https://example.com/private/secret"),
+    ]
+    issues = ROBOTS_BLOCKED.run(
+        _ctx(*pages, robots_disallow=["/private/"], robots_allow=["/private/public"]),
+    )
+
+    assert [issue.url for issue in issues] == ["https://example.com/private/secret"]
 
 
 def test_robots_blocked_ignores_allowed_paths_and_non_200_pages() -> None:
@@ -258,7 +275,7 @@ def test_redirect_chain_ignores_direct_200_pages() -> None:
     assert REDIRECT_CHAIN.run(ctx) == []
 
 
-def test_sitemap_url_not_ok_reports_missing_and_non_200_urls() -> None:
+def test_sitemap_url_not_ok_reports_confirmed_non_200_only() -> None:
     ctx = _ctx(
         _page("https://example.com/ok"),
         _page("https://example.com/err", status=500),
@@ -270,29 +287,38 @@ def test_sitemap_url_not_ok_reports_missing_and_non_200_urls() -> None:
     )
     issues = SITEMAP_URL_NOT_OK.run(ctx)
 
-    assert [issue.url for issue in issues] == [
-        "https://example.com/missing",
-        "https://example.com/err",
-    ]
-    assert issues[0].detail == {"reason": "missing", "status": None}
-    assert issues[1].detail == {"reason": "status", "status": 500}
+    assert [issue.url for issue in issues] == ["https://example.com/err"]
+    assert issues[0].detail == {"reason": "status", "status": 500}
     assert all(issue.rule_id == "sitemap-url-not-ok" for issue in issues)
     assert all(issue.severity == "high" for issue in issues)
 
 
-def test_sitemap_url_not_ok_accepts_all_live_urls_and_trailing_slash_variants() -> None:
+def test_sitemap_url_not_ok_matches_exact_spellings_case_insensitively() -> None:
     ctx = _ctx(
         _page("https://example.com/one"),
         _page("https://example.com/two"),
-        sitemap_urls=["https://example.com/one/", "HTTPS://EXAMPLE.COM/two"],
+        sitemap_urls=["https://example.com/one", "HTTPS://EXAMPLE.COM/two"],
     )
 
     assert SITEMAP_URL_NOT_OK.run(ctx) == []
 
 
+def test_sitemap_url_not_ok_checks_trailing_slash_variant_independently() -> None:
+    ctx = _ctx(
+        _page("https://example.com/one"),
+        _page("https://example.com/one/", status=404),
+        sitemap_urls=["https://example.com/one/"],
+    )
+
+    issues = SITEMAP_URL_NOT_OK.run(ctx)
+    assert [issue.url for issue in issues] == ["https://example.com/one/"]
+    assert issues[0].detail == {"reason": "status", "status": 404}
+
+
 def test_sitemap_url_not_ok_caps_issues_at_100_and_flags_truncation() -> None:
     sitemap_urls = [f"https://example.com/page-{index}" for index in range(150)]
-    issues = SITEMAP_URL_NOT_OK.run(_ctx(sitemap_urls=sitemap_urls))
+    pages = [_page(url, status=404) for url in sitemap_urls]
+    issues = SITEMAP_URL_NOT_OK.run(_ctx(*pages, sitemap_urls=sitemap_urls))
 
     assert len(issues) == 100
     assert issues[0].url == "https://example.com/page-0"

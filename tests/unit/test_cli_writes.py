@@ -26,7 +26,7 @@ PROPERTY = "sc-domain:example.com"
 SITEMAP_URL = "https://example.com/sitemap.xml"
 HOST_ID = "https:example.com:443"
 INDEXNOW_HOST = "example.com"
-INDEXNOW_KEY = "abc123def456"
+INDEXNOW_KEY = "abc123def456"  # gitleaks:allow -- synthetic IndexNow fixture
 URL_A = "https://example.com/a"
 URL_B = "https://example.com/b"
 

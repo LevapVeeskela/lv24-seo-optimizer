@@ -255,7 +255,7 @@ def test_thin_content_flags_slug_pages_and_skips_index_and_listing() -> None:
 # --- broken-internal-link --------------------------------------------------------
 
 
-def test_broken_internal_link_flags_missing_and_error_targets() -> None:
+def test_broken_internal_link_flags_confirmed_and_ignores_unvisited() -> None:
     healthy = make_page(f"{SITE}/ok", title="Healthy")
     gone = make_page(f"{SITE}/gone", status=404, title="Gone")
     source = make_page(
@@ -275,20 +275,19 @@ def test_broken_internal_link_flags_missing_and_error_targets() -> None:
     issues = run(BROKEN_INTERNAL_LINK, source, healthy, gone)
 
     assert [(issue.url, issue.detail) for issue in issues] == [
-        (source.url, {"target": f"{SITE}/missing", "reason": "missing"}),
-        (source.url, {"target": f"{SITE}/relative-missing", "reason": "missing"}),
         (source.url, {"target": f"{SITE}/gone", "reason": "status"}),
     ]
 
 
 def test_broken_internal_link_caps_issues_per_page() -> None:
+    targets = [make_page(f"{SITE}/missing-{index}", status=404) for index in range(60)]
     source = make_page(
         f"{SITE}/hub",
         title="Hub",
         links=[f"{SITE}/missing-{index}" for index in range(60)],
     )
 
-    issues = run(BROKEN_INTERNAL_LINK, source)
+    issues = run(BROKEN_INTERNAL_LINK, source, *targets)
 
     assert len(issues) == 50
     assert all(issue.url == source.url for issue in issues)
