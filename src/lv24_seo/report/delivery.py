@@ -63,6 +63,7 @@ _REASON_MATERIAL = "no_material_change"
 _SUBJECT_PREFIX = "[SEO] "
 _SUBJECT_LIMIT = 120
 _TELEGRAM_LIMIT = 4000
+_TELEGRAM_TRUNCATED = "\n... [truncated: see the email/HTML report for the full text]"
 _SMTP_TIMEOUT = 30.0
 _HTTP_TIMEOUT = 15.0
 
@@ -311,15 +312,19 @@ def deliver(
     for channel, send in channels:
         atomic = getattr(store, "atomic", None)
         guard = atomic() if callable(atomic) else contextlib.nullcontext()
+        result: DeliveryResult | None = None
         try:
             with guard:
                 result = _deliver_channel(
                     report, store, only_on_change, period, digest, channel, send
                 )
         except Exception:
+            # A journal COMMIT can fail after the message already left: that is
+            # still "sent" (with an unrecorded journal), never "failed".
+            sent = result is not None and result.status == STATUS_SENT
             result = DeliveryResult(
                 channel=channel,
-                status=STATUS_FAILED,
+                status=STATUS_SENT if sent else STATUS_FAILED,
                 reason="delivery_journal_failed",
                 content_hash=digest,
             )
@@ -389,7 +394,11 @@ def _subject(report: Report) -> str:
 
 
 def _telegram_text(report: Report) -> str:
-    return _renderers().render_text(report)[:_TELEGRAM_LIMIT]
+    text = _renderers().render_text(report)
+    if len(text) <= _TELEGRAM_LIMIT:
+        return text
+    # Say so when the message is cut: a silently shortened report reads as complete.
+    return text[: _TELEGRAM_LIMIT - len(_TELEGRAM_TRUNCATED)] + _TELEGRAM_TRUNCATED
 
 
 def _renderers() -> _Renderers:

@@ -11,6 +11,7 @@ import ssl
 from typing import Any, ClassVar
 
 from lv24_seo.report.delivery import (
+    DeliveryResult,
     EmailConfig,
     TelegramConfig,
     content_hash,
@@ -233,3 +234,51 @@ def test_duplicate_race_keeps_sent_with_race_note(monkeypatch: Any) -> None:
 
     assert results[0].status == "sent"
     assert results[0].reason == "duplicate_race"
+
+
+class _CommitFailingStore:
+    """Journal claim succeeds, but the surrounding transaction fails to COMMIT."""
+
+    def __init__(self) -> None:
+        self.records: list[str] = []
+
+    def was_sent(self, *args: Any) -> bool:
+        return False
+
+    def record_send(self, *args: Any) -> bool:
+        self.records.append(args[-1])
+        return True
+
+    def atomic(self) -> Any:
+        import contextlib
+
+        @contextlib.contextmanager
+        def guard() -> Any:
+            yield
+            raise RuntimeError("database is locked")
+
+        return guard()
+
+
+def test_commit_failure_after_send_is_reported_sent_not_failed(monkeypatch: Any) -> None:
+    from lv24_seo.report import delivery
+
+    monkeypatch.setattr(
+        delivery,
+        "send_telegram",
+        lambda report, cfg: DeliveryResult(channel="telegram", status="sent", content_hash="h"),
+    )
+    store = _CommitFailingStore()
+    results = deliver(_report(), telegram=TelegramConfig(bot_token="t", chat_id="1"), store=store)
+    assert [(r.status, r.reason) for r in results] == [("sent", "delivery_journal_failed")]
+
+
+def test_telegram_text_marks_truncation(monkeypatch: Any) -> None:
+    from lv24_seo.report import delivery, render
+
+    monkeypatch.setattr(render, "render_text", lambda report: "x" * 9000)
+    text = delivery._telegram_text(_report())
+    assert len(text) == delivery._TELEGRAM_LIMIT
+    assert text.endswith(delivery._TELEGRAM_TRUNCATED)
+    monkeypatch.setattr(render, "render_text", lambda report: "short")
+    assert delivery._telegram_text(_report()) == "short"

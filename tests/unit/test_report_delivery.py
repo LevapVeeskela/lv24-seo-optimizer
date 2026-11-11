@@ -375,7 +375,10 @@ def test_telegram_sends_plain_text_truncated_to_4000_chars() -> None:
     assert payload["chat_id"] == "-100500"
     assert "parse_mode" not in payload
     assert payload["disable_web_page_preview"] is True
-    assert payload["text"] == render_text(report)[:4000]
+    full = render_text(report)
+    assert len(payload["text"]) == 4000
+    assert payload["text"].endswith(delivery._TELEGRAM_TRUNCATED)
+    assert full.startswith(payload["text"][: 4000 - len(delivery._TELEGRAM_TRUNCATED)])
     assert len(payload["text"]) == 4000
 
 
