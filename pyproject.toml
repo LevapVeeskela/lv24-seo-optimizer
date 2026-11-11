@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lv24-seo"
-version = "0.2.0"
+version = "0.3.0"
 description = "Free-first SEO control plane: Search Console, Yandex, Bing, CrUX, PSI, crawl and weekly diff reports for humans and AI agents."
 readme = "README.md"
 requires-python = ">=3.11"

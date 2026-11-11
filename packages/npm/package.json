@@ -1,6 +1,6 @@
 {
   "name": "@lv24/seo",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "SEO audits and diff reports from Search Console, Yandex, Bing, CrUX and PSI - npx CLI + MCP.",
   "keywords": [
     "seo",
