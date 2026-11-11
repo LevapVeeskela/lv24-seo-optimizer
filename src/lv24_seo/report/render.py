@@ -119,6 +119,12 @@ def render_text(report: Report) -> str:
         if section_text:
             blocks.append(section_text)
 
+    if report.warnings:
+        warning_lines = ["Warnings"]
+        for item in report.warnings:
+            warning_lines.extend(_wrap(f"- {_stringify(item)}", subsequent_indent="  "))
+        blocks.append("\n".join(warning_lines))
+
     if report.limitations:
         limitations = [_LIMITATIONS_TITLE]
         for item in report.limitations:
@@ -195,6 +201,11 @@ def render_markdown(report: Report) -> str:
 
     for section in report.sections:
         blocks.append(_markdown_section(section))
+
+    if report.warnings:
+        blocks.append(
+            "\n".join(["## Warnings", *(f"- {_markdown_text(item)}" for item in report.warnings)])
+        )
 
     if report.limitations:
         lines = [f"## {_LIMITATIONS_TITLE}"]
@@ -287,6 +298,18 @@ def render_html(report: Report, *, title: str | None = None, locale: str = "en")
 
     for section in report.sections:
         lines.extend(_html_section(section))
+
+    if report.warnings:
+        lines.extend(
+            _html_section(
+                ReportSection(
+                    key="warnings",
+                    title="Warnings",
+                    summary="",
+                    notes=list(report.warnings),
+                )
+            )
+        )
 
     if report.limitations:
         lines.append(f'<div style="{_FOOTER_STYLE}">')

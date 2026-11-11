@@ -23,9 +23,10 @@ import contextlib
 import hashlib
 import json
 import smtplib
+import ssl
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from email.message import EmailMessage
 from functools import partial
@@ -109,9 +110,22 @@ class DeliveryResult:
 
 
 def content_hash(report: Report) -> str:
-    """SHA-256 of the canonical report JSON used for delivery de-duplication."""
+    """SHA-256 of the semantic report content used for delivery de-duplication.
+
+    Volatile envelope fields (``generated_at``) and derived diagnostics
+    (``limitations``, ``warnings``) are excluded: two builds of the same period
+    with the same headline and sections share a hash even when rebuilt later.
+    """
+    payload = report.to_dict()
+    semantic = {
+        "kind": payload.get("kind"),
+        "property_id": payload.get("property_id"),
+        "period": payload.get("period"),
+        "headline": payload.get("headline"),
+        "sections": payload.get("sections"),
+    }
     canonical = json.dumps(
-        report.to_dict(),
+        semantic,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -144,15 +158,25 @@ def send_email(
             content_hash=digest,
         )
 
-    message = _build_email(report, cfg)
     smtp: Any | None = None
     try:
+        message = _build_email(report, cfg)
         smtp = _open_smtp(cfg, smtp_factory)
         if cfg.use_tls:
-            smtp.starttls()
+            # A verifying context: without it smtplib silently accepts any
+            # certificate, so credentials could leak to an active MITM.
+            # login() below only runs after a verified handshake.
+            smtp.starttls(context=ssl.create_default_context())
         if cfg.user:
             smtp.login(cfg.user, cfg.password)
-        smtp.sendmail(cfg.sender, list(cfg.recipients), message.as_string())
+        refused = smtp.sendmail(cfg.sender, list(cfg.recipients), message.as_string())
+        if refused:
+            return DeliveryResult(
+                channel=CHANNEL_EMAIL,
+                status=STATUS_FAILED,
+                reason="recipients_refused",
+                content_hash=digest,
+            )
     except Exception as exc:
         return DeliveryResult(
             channel=CHANNEL_EMAIL,
@@ -172,7 +196,7 @@ def send_telegram(
     *,
     http_post: HttpPost | None = None,
 ) -> DeliveryResult:
-    """Send the markdown report to Telegram via the Bot API ``sendMessage`` method.
+    """Send a plain-text report to Telegram via the Bot API ``sendMessage`` method.
 
     ``http_post(url, json)`` is called positionally and may return ``None`` (fire-and-forget),
     an object with ``status_code``, or an object with ``raise_for_status()``. Missing token or
@@ -190,7 +214,6 @@ def send_telegram(
     payload: dict[str, Any] = {
         "chat_id": cfg.chat_id,
         "text": _telegram_text(report),
-        "parse_mode": "Markdown",
         "disable_web_page_preview": True,
     }
     url = f"https://api.telegram.org/bot{cfg.bot_token}/sendMessage"
@@ -204,7 +227,10 @@ def send_telegram(
             content_hash=digest,
         )
 
-    failure = _http_failure_reason(response)
+    try:
+        failure = _http_failure_reason(response)
+    except Exception as exc:
+        failure = type(exc).__name__
     if failure is not None:
         return DeliveryResult(
             channel=CHANNEL_TELEGRAM,
@@ -224,6 +250,7 @@ def deliver(
     store: Any | None = None,
     only_on_change: bool = True,
     material_threshold: float = 0.0,
+    material_thresholds: Mapping[str, float] | None = None,
 ) -> list[DeliveryResult]:
     """Deliver a report over every configured channel.
 
@@ -233,9 +260,21 @@ def deliver(
     implementation is :class:`lv24_seo.store.repositories.Store`. Without a store every call
     sends, because there is nowhere to remember previous deliveries.
 
-    ``material_threshold`` greater than zero suppresses delivery unless the report carries at
-    least one row with a truthy ``significant`` flag. Rows are read from every section
-    (``report.to_dict()["sections"]``) because builders may name the delta block ``headline``.
+    ``material_threshold`` (percent) or ``material_thresholds`` (per-metric mapping
+    with keys ``clicks_pct`` / ``impressions_pct`` / ``position_abs``) suppresses
+    delivery unless at least one section row carries a numeric change field at or
+    above the gate, or a truthy ``significant`` flag set by the analysis layer.
+    A row without any change field never opens the gate: silence means
+    "no evidence of movement", not "movement of zero".
+
+    Retry policy: delivery is **at-least-once** per channel. A transport error
+    after the remote side accepted the message is indistinguishable from "not
+    sent", so an ambiguous failure is reported as ``failed`` (never recorded)
+    and the next scheduled run may deliver a duplicate. Concurrent processes
+    are de-duplicated best-effort via the store claim; when two processes race,
+    the loser keeps ``sent`` with reason ``duplicate_race`` because its message
+    already left. SMTP and the Telegram Bot API offer no exactly-once primitive
+    to build on, so none is promised.
     """
     if material_threshold < 0:
         raise SeoError(
@@ -253,7 +292,11 @@ def deliver(
     if telegram is not None:
         channels.append((CHANNEL_TELEGRAM, partial(send_telegram, report, telegram)))
 
-    if material_threshold > 0 and not _has_material_change(report):
+    if (
+        only_on_change
+        and (material_threshold > 0 or material_thresholds)
+        and not _has_material_change(report, material_threshold, material_thresholds)
+    ):
         return [
             DeliveryResult(
                 channel=channel,
@@ -266,27 +309,64 @@ def deliver(
 
     results: list[DeliveryResult] = []
     for channel, send in channels:
-        if (
-            store is not None
-            and only_on_change
-            and _already_sent(store, report, period, digest, channel)
-        ):
-            results.append(
-                DeliveryResult(
-                    channel=channel,
-                    status=STATUS_SKIPPED,
-                    reason=_REASON_ALREADY_SENT,
-                    content_hash=digest,
+        atomic = getattr(store, "atomic", None)
+        guard = atomic() if callable(atomic) else contextlib.nullcontext()
+        try:
+            with guard:
+                result = _deliver_channel(
+                    report, store, only_on_change, period, digest, channel, send
                 )
+        except Exception:
+            result = DeliveryResult(
+                channel=channel,
+                status=STATUS_FAILED,
+                reason="delivery_journal_failed",
+                content_hash=digest,
             )
-            continue
-
-        result = send()
-        if store is not None and result.status == STATUS_SENT:
-            # The journal records reality; a duplicate return value cannot un-send the message.
-            store.record_send(report.kind, report.property_id, period, digest, channel)
         results.append(result)
     return results
+
+
+def _deliver_channel(
+    report: Report,
+    store: Any,
+    only_on_change: bool,
+    period: str,
+    digest: str,
+    channel: str,
+    send: Callable[[], DeliveryResult],
+) -> DeliveryResult:
+    """Serialize check/send/journal with the real store's cross-process write lock."""
+    if (
+        store is not None
+        and only_on_change
+        and _already_sent(store, report, period, digest, channel)
+    ):
+        return DeliveryResult(
+            channel=channel,
+            status=STATUS_SKIPPED,
+            reason=_REASON_ALREADY_SENT,
+            content_hash=digest,
+        )
+    result = send()
+    if store is not None and result.status == STATUS_SENT:
+        try:
+            recorded = store.record_send(report.kind, report.property_id, period, digest, channel)
+        except Exception:
+            return DeliveryResult(
+                channel=channel,
+                status=STATUS_SENT,
+                reason="delivery_journal_failed",
+                content_hash=digest,
+            )
+        if not recorded:
+            return DeliveryResult(
+                channel=channel,
+                status=STATUS_SENT,
+                reason="duplicate_race",
+                content_hash=digest,
+            )
+    return result
 
 
 def _build_email(report: Report, cfg: EmailConfig) -> EmailMessage:
@@ -309,7 +389,7 @@ def _subject(report: Report) -> str:
 
 
 def _telegram_text(report: Report) -> str:
-    return _renderers().render_markdown(report)[:_TELEGRAM_LIMIT]
+    return _renderers().render_text(report)[:_TELEGRAM_LIMIT]
 
 
 def _renderers() -> _Renderers:
@@ -344,9 +424,32 @@ def _close_smtp(smtp: Any | None) -> None:
 
 
 def _http_failure_reason(response: Any) -> str | None:
-    """Map an injected HTTP response to a failure reason, or ``None`` when it succeeded."""
+    """Map an injected HTTP response to a failure reason, or ``None`` when it succeeded.
+
+    The default transport returns a bare ``int`` status code, while injected
+    test doubles may return ``None``, a ``status_code`` object, a
+    ``raise_for_status`` object or a decoded Bot API ``dict`` — all are
+    normalized here so an HTTP 400/429 can never be reported as ``sent``.
+    """
     if response is None:
         return None
+    if isinstance(response, bool):
+        return None if response else "http_unknown"
+    if isinstance(response, int):
+        if 200 <= response < 300:
+            return None
+        return f"http_{response}"
+    if isinstance(response, Mapping):
+        ok = response.get("ok")
+        if ok is False:
+            code = response.get("error_code")
+            if isinstance(code, int):
+                return f"http_{code}"
+            return "telegram_error"
+        if ok is True:
+            return None
+        # A mapping without an ``ok`` flag is not a success receipt.
+        return "unexpected_response_shape"
     status = getattr(response, "status_code", None)
     if isinstance(status, int):
         if 200 <= status < 300:
@@ -358,7 +461,8 @@ def _http_failure_reason(response: Any) -> str | None:
             raise_for_status()
         except Exception as exc:
             return type(exc).__name__
-    return None
+        return None
+    return "unexpected_response_shape"
 
 
 def _default_http_post(url: str, payload: dict[str, Any]) -> int:
@@ -390,11 +494,51 @@ def _already_sent(
     return bool(store.was_sent(report.kind, report.property_id, period, digest, channel))
 
 
-def _has_material_change(report: Report) -> bool:
+_CHANGE_GATE_FIELDS: dict[str, tuple[str, ...]] = {
+    "clicks_pct": ("clicks_change_pct", "clicks_delta_pct", "clicks_growth_pct"),
+    "impressions_pct": (
+        "impressions_change_pct",
+        "impressions_delta_pct",
+        "impressions_growth_pct",
+    ),
+    "position_abs": ("position_change", "position_delta"),
+}
+_GENERIC_CHANGE_MARKERS = ("change", "delta", "growth", "pct")
+
+
+def _has_material_change(
+    report: Report,
+    threshold: float = 0.0,
+    thresholds: Mapping[str, float] | None = None,
+) -> bool:
+    """Return True when at least one row shows movement at or above the gate."""
+    gates = dict(thresholds) if thresholds else {}
     for section in report.to_dict().get("sections", []):
         rows = section.get("rows") or []
-        if any(isinstance(row, dict) and row.get("significant") for row in rows):
-            return True
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if row.get("significant"):
+                return True
+            for gate_key, fields in _CHANGE_GATE_FIELDS.items():
+                gate = gates.get(gate_key, threshold)
+                for field_name in fields:
+                    value = row.get(field_name)
+                    if isinstance(value, bool):
+                        continue
+                    if isinstance(value, (int, float)) and abs(value) >= gate:
+                        return True
+            if not gates and threshold > 0:
+                # Legacy uniform gate: any change-like numeric field counts.
+                for key, value in row.items():
+                    if isinstance(value, bool) or not isinstance(value, (int, float)):
+                        continue
+                    lowered = str(key).lower()
+                    change_like = "change" in lowered or any(
+                        marker in lowered for marker in ("delta", "growth", "pct")
+                    )
+                    if change_like and abs(value) >= threshold:
+                        return True
     return False
 
 

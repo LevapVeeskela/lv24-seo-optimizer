@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from typing import Any
 
-from lv24_seo.analysis.delta import DeltaRow, compute_delta, headline, summary
+from lv24_seo.analysis.delta import DeltaRow, DeltaThresholds, compute_delta, headline, summary
 from lv24_seo.analysis.fusion import EngineSummary, FusionReport, fuse_engines
 from lv24_seo.analysis.indexing import Bucket, triage
 from lv24_seo.analysis.opportunities import Opportunity, find_opportunities
@@ -50,23 +50,54 @@ def build_weekly(
     current: Mapping[str, float],
     previous: Mapping[str, float],
     gsc_rows: Sequence[Mapping[str, Any]] = (),
+    gsc_previous_rows: Sequence[Mapping[str, Any]] = (),
+    gsc_previous_complete: bool = False,
     yandex_rows: Sequence[Mapping[str, Any]] = (),
     metrika_rows: Sequence[Mapping[str, Any]] = (),
     issues: Sequence[Mapping[str, Any]] = (),
+    extra_engines: Sequence[Mapping[str, Any]] = (),
     limitations: Sequence[str] = (),
+    thresholds: DeltaThresholds | None = None,
     generated_at: datetime | None = None,
 ) -> Report:
-    """Build the weekly review: deltas, traffic, opportunities, issues and sources."""
-    delta_rows = compute_delta(current, previous)
+    """Build the weekly review: deltas, traffic, opportunities, issues and sources.
+
+    ``current``/``previous`` carry one engine's comparable window totals (GSC):
+    the headline never merges engines with different sampling or windows.
+    ``gsc_rows`` are the current-window ``query``/``page`` rows for fusion and
+    opportunities; ``gsc_previous_rows`` enables decay matching, and
+    ``gsc_previous_complete`` must be True only when both windows share the same
+    cap without truncation. ``extra_engines`` are ``{"engine", "kind", "rows",
+    "limitations"}`` mappings (Bing traffic, CrUX field, PSI lab) shown
+    per-engine, never merged. ``issues`` are stored crawl findings, newest last
+    write wins; an empty list renders an explicit "no issue rows" note, never a
+    clean bill of health.
+    """
+    delta_rows = (
+        compute_delta(current, previous, thresholds=thresholds) if current and previous else []
+    )
     fusion = fuse_engines(gsc=gsc_rows, yandex=yandex_rows, metrika=metrika_rows)
-    opportunities = find_opportunities(gsc_rows, limit=_WEEKLY_OPPORTUNITIES)
+    opportunities = find_opportunities(
+        gsc_rows,
+        previous=gsc_previous_rows or None,
+        previous_complete=gsc_previous_complete,
+        limit=_WEEKLY_OPPORTUNITIES,
+    )
+    has_source_data = bool(gsc_rows or yandex_rows or metrika_rows or extra_engines)
+    headline_text = (
+        _weekly_headline(delta_rows)
+        if delta_rows
+        else "GSC comparison unavailable"
+        if has_source_data
+        else "No provider data available"
+    )
 
     return Report(
         kind="weekly",
         property_id=property_id,
         period_start=_iso_date(period_start),
         period_end=_iso_date(period_end),
-        headline=_weekly_headline(delta_rows),
+        headline=headline_text,
         sections=[
             _headline_section(delta_rows),
             _traffic_section(fusion),
@@ -79,6 +110,7 @@ def build_weekly(
                     "yandex": len(yandex_rows),
                     "metrika": len(metrika_rows),
                 },
+                extra_engines=extra_engines,
                 limitations=limitations,
             ),
         ],
@@ -234,6 +266,7 @@ def _sources_section(
     fusion: FusionReport,
     *,
     row_counts: Mapping[str, int],
+    extra_engines: Sequence[Mapping[str, Any]] = (),
     limitations: Sequence[str],
 ) -> ReportSection:
     engine_limits = {engine.engine: engine.limitations for engine in fusion.engines}
@@ -257,14 +290,36 @@ def _sources_section(
         else:
             notes.append(f"{engine}: missing (no rows)")
 
+    for extra in extra_engines:
+        name = str(extra.get("engine", "unknown"))
+        kind = str(extra.get("kind", "traffic"))
+        extra_rows = extra.get("rows", [])
+        count = len(extra_rows) if isinstance(extra_rows, list) else 0
+        extra_limits = extra.get("limitations", [])
+        rows.append(
+            {
+                "source": name,
+                "status": "rows" if count > 0 else "missing",
+                "rows": count,
+                "kind": kind,
+                "limitations": list(extra_limits) if isinstance(extra_limits, list) else [],
+            }
+        )
+        if count > 0:
+            present.append(f"{name} ({kind})")
+            notes.append(f"{name} ({kind}): {count} {_plural(count, 'row')}")
+        else:
+            notes.append(f"{name} ({kind}): missing (no rows)")
+
     notes.extend(f"limitation: {text}" for text in limitations)
     notes.extend(f"caveat: {text}" for text in fusion.caveats)
 
+    total_engines = len(_ENGINES) + len(extra_engines)
     return ReportSection(
         key="sources",
         title="Sources",
         summary=(
-            f"{len(present)} of {len(_ENGINES)} engines returned rows"
+            f"{len(present)} of {total_engines} engines returned rows"
             if present
             else "No engine returned rows"
         ),
@@ -334,6 +389,8 @@ def _weekly_headline(rows: Sequence[DeltaRow]) -> str:
 
 
 def _delta_summary_text(rows: Sequence[DeltaRow]) -> str:
+    if not rows:
+        return "Comparison unavailable: both complete baseline windows are required"
     rollup = summary(rows)
     significant = len(rollup["significant"])
     if significant == 0:

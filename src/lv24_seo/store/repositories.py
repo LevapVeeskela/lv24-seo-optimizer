@@ -19,10 +19,13 @@ Design notes
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import hashlib
 import json
+import logging
 import sqlite3
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import TracebackType
@@ -107,6 +110,7 @@ class Store:
     def __init__(self, path: Path | str) -> None:
         self.path = str(path)
         self._closed = False
+        self._batch_depth = 0
         conn = connect(path)
         try:
             initialize(conn)
@@ -125,6 +129,42 @@ class Store:
         traceback: TracebackType | None,
     ) -> None:
         self.close()
+
+    @contextlib.contextmanager
+    def atomic(self) -> Iterator[None]:
+        """Run a block of writes as one transaction (``BEGIN IMMEDIATE``).
+
+        Related multi-write operations (a provider window sync, a crawl persist)
+        must commit or roll back together: a crash mid-window must not leave a
+        half-synced period behind. Nested ``atomic()`` blocks join the outer
+        transaction; single writes outside ``atomic()`` keep their own commit.
+        """
+        if self._batch_depth > 0:
+            self._batch_depth += 1
+            try:
+                yield
+            finally:
+                self._batch_depth -= 1
+            return
+        self.conn.execute("BEGIN IMMEDIATE")
+        self._batch_depth += 1
+        try:
+            yield
+        except BaseException:
+            self.conn.rollback()
+            raise
+        else:
+            self.conn.commit()
+        finally:
+            self._batch_depth -= 1
+
+    @contextlib.contextmanager
+    def _write_tx(self) -> Iterator[None]:
+        if self._batch_depth > 0:
+            yield
+        else:
+            with self.conn:
+                yield
 
     def close(self) -> None:
         """Close the connection; repeated calls are no-ops."""
@@ -148,7 +188,7 @@ class Store:
     ) -> None:
         """Insert or update one property; ``config`` replaces the stored JSON (``None`` clears)."""
         config_json = None if config is None else canonical_json(config)
-        with self.conn:
+        with self._write_tx():
             self.conn.execute(
                 """
                 INSERT INTO properties (
@@ -212,7 +252,7 @@ class Store:
         The natural key is ``(property_id, source, date, scope, key, metric)``; re-syncing the
         same day replaces the value instead of duplicating the row.
         """
-        with self.conn:
+        with self._write_tx():
             self.conn.execute(
                 """
                 INSERT INTO metric_daily (
@@ -243,14 +283,21 @@ class Store:
         scope: str | None = None,
         start: date | str | None = None,
         end: date | str | None = None,
+        include_legacy: bool = False,
     ) -> list[JsonObject]:
-        """Metrics for a property, optionally filtered by source, scope and an inclusive range."""
+        """True daily rows; opt in to legacy rows whose granularity is unknown.
+
+        Older releases dated whole-window GSC aggregates at the window end.
+        Migration 2 preserves those rows with an explicit accuracy marker; they
+        must not enter a daily series unless a caller requests legacy data.
+        """
         params: dict[str, object] = {
             "property_id": property_id,
             "source": source,
             "scope": scope,
             "start": None if start is None else _day(start, name="start"),
             "end": None if end is None else _day(end, name="end"),
+            "include_legacy": include_legacy,
         }
         rows = self.conn.execute(
             """
@@ -261,7 +308,86 @@ class Store:
               AND (:scope  IS NULL OR "scope" = :scope)
               AND (:start  IS NULL OR "date" >= :start)
               AND (:end    IS NULL OR "date" <= :end)
+              AND (:include_legacy OR accuracy IS NULL OR accuracy != 'legacy_unknown_granularity')
             ORDER BY "date", source, "scope", "key", metric
+            """,
+            params,
+        ).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
+    # -- window aggregates --------------------------------------------------------------------
+
+    def upsert_metric_window(
+        self,
+        property_id: str,
+        source: str,
+        start: date | str,
+        end: date | str,
+        *,
+        scope: str = "total",
+        key: str = "",
+        metric: str,
+        value: float,
+        accuracy: str | None = None,
+    ) -> None:
+        """Insert or overwrite one window-aggregate metric value.
+
+        Window aggregates (a weekly GSC query total, a Metrika visit count) carry
+        their real ``[start, end]`` window in the key, so overlapping windows never
+        overwrite each other and a window can never masquerade as a daily row.
+        """
+        with self._write_tx():
+            self.conn.execute(
+                """
+                INSERT INTO metric_windows (
+                    property_id, source, start, "end", "scope", "key", metric, value, accuracy
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (property_id, source, start, "end", "scope", "key", metric)
+                DO UPDATE SET
+                    value    = excluded.value,
+                    accuracy = excluded.accuracy
+                """,
+                (
+                    property_id,
+                    source,
+                    _day(start, name="start"),
+                    _day(end, name="end"),
+                    scope,
+                    key,
+                    metric,
+                    float(value),
+                    accuracy,
+                ),
+            )
+
+    def get_metric_windows(
+        self,
+        property_id: str,
+        *,
+        source: str | None = None,
+        scope: str | None = None,
+        start: date | str | None = None,
+        end: date | str | None = None,
+    ) -> list[JsonObject]:
+        """Window aggregates for a property, optionally filtered by the window bounds."""
+        params: dict[str, object] = {
+            "property_id": property_id,
+            "source": source,
+            "scope": scope,
+            "start": None if start is None else _day(start, name="start"),
+            "end": None if end is None else _day(end, name="end"),
+        }
+        rows = self.conn.execute(
+            """
+            SELECT property_id, source, start, "end", "scope", "key", metric, value, accuracy
+            FROM metric_windows
+            WHERE property_id = :property_id
+              AND (:source IS NULL OR source = :source)
+              AND (:scope  IS NULL OR "scope" = :scope)
+              AND (:start  IS NULL OR "end" >= :start)
+              AND (:end    IS NULL OR start <= :end)
+            ORDER BY start, "end", source, "scope", "key", metric
             """,
             params,
         ).fetchall()
@@ -282,7 +408,7 @@ class Store:
     ) -> None:
         """Record one crawl observation; the first observation keeps ``first_seen`` forever."""
         stamp = _timestamp(seen_at, name="seen_at")
-        with self.conn:
+        with self._write_tx():
             self.conn.execute(
                 """
                 INSERT INTO pages (
@@ -324,6 +450,44 @@ class Store:
         ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
+    def record_gsc_sighting(
+        self,
+        property_id: str,
+        url: str,
+        *,
+        seen_at: datetime | str | None = None,
+    ) -> None:
+        """Record that GSC search analytics mentioned ``url`` without touching crawl truth.
+
+        A read-only analytics row must never overwrite crawl observations: an existing
+        page keeps its ``status``/``index_state``/``canonical``/``title_hash`` and only
+        ``last_seen`` advances. A never-crawled URL gains a ``gsc_search_analytics``
+        placeholder row so the sighting is not lost.
+        """
+        stamp = _timestamp(seen_at, name="seen_at")
+        with self._write_tx():
+            self.conn.execute(
+                """
+                INSERT INTO pages (
+                    property_id, url, status, index_state, canonical, title_hash,
+                    first_seen, last_seen
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (property_id, url) DO UPDATE SET
+                    last_seen = excluded.last_seen
+                """,
+                (
+                    property_id,
+                    url,
+                    0,
+                    "gsc_search_analytics",
+                    None,
+                    None,
+                    stamp,
+                    stamp,
+                ),
+            )
+
     # -- issues -------------------------------------------------------------------------------
 
     def upsert_issue(
@@ -345,7 +509,7 @@ class Store:
         """
         stamp = _timestamp(seen_at, name="seen_at")
         detail_json = None if detail is None else canonical_json(detail)
-        with self.conn:
+        with self._write_tx():
             existing = self.conn.execute(
                 """
                 SELECT first_seen, state
@@ -422,7 +586,7 @@ class Store:
         Raises :class:`KeyError` when the id does not exist: silently ignoring a typo would let
         a report claim that an issue was triaged when it was not.
         """
-        with self.conn:
+        with self._write_tx():
             cursor = self.conn.execute(
                 "UPDATE issues SET state = ? WHERE id = ?", (state, issue_id)
             )
@@ -444,7 +608,7 @@ class Store:
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         # mtime=0 removes a timestamp from the gzip header: the blob is reproducible too.
         blob = gzip.compress(canonical.encode("utf-8"), mtime=0)
-        with self.conn:
+        with self._write_tx():
             self.conn.execute(
                 """
                 INSERT INTO snapshots (
@@ -496,7 +660,7 @@ class Store:
         changed report legitimately opens a new slot. A duplicate never overwrites the original
         row (its timestamp and status stay the audit trail of the first attempt).
         """
-        with self.conn:
+        with self._write_tx():
             cursor = self.conn.execute(
                 """
                 INSERT INTO sends (
@@ -546,7 +710,7 @@ class Store:
         stats: JsonObject | None = None,
     ) -> int:
         """Append a run row and return its id. ``stats`` is stored as canonical JSON."""
-        with self.conn:
+        with self._write_tx():
             cursor = self.conn.execute(
                 """
                 INSERT INTO runs (
@@ -571,11 +735,17 @@ class Store:
     # -- retention ----------------------------------------------------------------------------
 
     def prune_raw(self, *, before: datetime) -> int:
-        """Reserved for WP2.3 raw-archive retention; intentionally deletes nothing today.
+        """Retention entry point for on-disk raw provider archives (not yet implemented).
 
-        Raw provider responses live on disk under ``data/raw/<source>/<date>/`` and are pruned by
-        the retention job that owns those files. Snapshots are report history and must survive:
-        deleting them here would break the "what changed since last send" comparison. The method
-        exists so callers can wire the retention schedule now and get a real implementation later.
+        Raw provider responses were never written to disk by any shipped command, so
+        there is nothing to delete: this method returns ``0`` and logs that the
+        ``raw_retention_days`` setting currently has no effect. Keeping the method
+        (instead of removing the setting) preserves the call sites that will own
+        the real implementation; claiming deletions here would be dishonest.
         """
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "raw retention is not implemented: no raw archives are written, "
+            "raw_retention_days is ignored"
+        )
         return 0

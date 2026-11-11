@@ -27,7 +27,7 @@ import inspect
 import logging
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -49,8 +49,17 @@ from lv24_seo.core.timeutil import compare_period, days_between, local_today, ut
 from lv24_seo.crawl.fetcher import Fetcher, RobotsPolicy, is_allowed
 from lv24_seo.crawl.graph import GraphStats, build_graph, normalize_url
 from lv24_seo.crawl.html import parse_html
-from lv24_seo.crawl.models import Issue, PageData, RuleContext
+from lv24_seo.crawl.models import FetchResult, Issue, PageData, RuleContext
 from lv24_seo.crawl.rules import run_all
+from lv24_seo.crawl.sitemap import SitemapReader
+from lv24_seo.providers.base import (
+    SOURCE_BING,
+    SOURCE_CRUX,
+    SOURCE_GSC,
+    SOURCE_PSI,
+    SOURCE_YANDEX_METRIKA,
+    SOURCE_YANDEX_WEBMASTER,
+)
 from lv24_seo.providers.bing import BingClient
 from lv24_seo.providers.crux import CruxClient
 from lv24_seo.providers.gsc import GscClient
@@ -96,10 +105,6 @@ _WEEKLY_YANDEX_LIMIT = 500
 _GSC_MAX_LIMIT = 50_000
 _YANDEX_MAX_LIMIT = 500
 
-# GSC search analytics carries no HTTP status; 0 means "unknown", never a made-up 200.
-_GSC_PAGE_STATUS = 0
-_GSC_PAGE_INDEX_STATE = "gsc_search_analytics"
-
 _HTTP_SCHEMES = frozenset({"http", "https"})
 # PSI works keyless; a key only raises the quota, so it never blocks client construction.
 _KEYLESS_CLIENTS = frozenset({"psi"})
@@ -107,7 +112,6 @@ _DELIVERY_UNAVAILABLE = "delivery: unavailable; report was not sent"
 _BUILDERS_UNAVAILABLE = "report builders: unavailable; using a minimal fallback report"
 
 ReportBuilder = Callable[..., Report]
-Delivery = Callable[..., object]
 
 
 def _load_weekly_builder() -> ReportBuilder | None:
@@ -117,19 +121,6 @@ def _load_weekly_builder() -> ReportBuilder | None:
     except ImportError:
         return None
     return build_weekly if callable(build_weekly) else None
-
-
-def _load_deliver() -> Delivery | None:
-    """Return ``report.delivery.deliver`` when the delivery layer is importable.
-
-    Delivery is optional and must never turn a finished report into a failed run, so even a
-    broken optional module degrades to the "delivery unavailable" warning.
-    """
-    try:
-        from lv24_seo.report.delivery import deliver
-    except Exception:
-        return None
-    return deliver if callable(deliver) else None
 
 
 @dataclass(slots=True)
@@ -145,6 +136,12 @@ class _CrawlOutcome:
     truncated: bool
     graph: GraphStats
     robots: RobotsPolicy
+    sitemap_urls: list[str] = field(default_factory=list)
+    sitemap_truncated: bool = False
+    sitemap_errors: list[str] = field(default_factory=list)
+    request_count: int = 0
+    request_budget: int = 0
+    coverage_notes: list[str] = field(default_factory=list)
 
 
 class SeoService:
@@ -337,38 +334,47 @@ class SeoService:
             return {"metrics": 0, "pages": 0}
 
         scope = _scope_for_dimensions(dimensions)
-        fallback_day = end
+        daily = "date" in dimensions
         counts = {"metrics": 0, "pages": 0}
 
-        for row in rows:
-            day = _row_day(row, dimensions, fallback_day)
-            key = _metric_key(row, dimensions)
-            for metric in ("clicks", "impressions"):
-                value = _float_or_none(row.get(metric))
-                if value is None:
-                    continue
-                store.upsert_metric_daily(
-                    property_id,
-                    "gsc",
-                    day,
-                    scope=scope,
-                    key=key,
-                    metric=metric,
-                    value=value,
-                )
-                counts["metrics"] += 1
+        with store.atomic():
+            for row in rows:
+                key = _metric_key(row, dimensions)
+                for metric in ("clicks", "impressions"):
+                    value = _float_or_none(row.get(metric))
+                    if value is None:
+                        continue
+                    if daily:
+                        day = _row_day(row, dimensions, end)
+                        store.upsert_metric_daily(
+                            property_id,
+                            "gsc",
+                            day,
+                            scope=scope,
+                            key=key,
+                            metric=metric,
+                            value=value,
+                        )
+                    else:
+                        store.upsert_metric_window(
+                            property_id,
+                            "gsc",
+                            start,
+                            end,
+                            scope=scope,
+                            key=key,
+                            metric=metric,
+                            value=value,
+                        )
+                    counts["metrics"] += 1
 
-        for row in rows:
-            page_url = row.get("page")
-            if not isinstance(page_url, str) or not page_url.strip():
-                continue
-            store.upsert_page(
-                property_id,
-                page_url.strip(),
-                status=_GSC_PAGE_STATUS,
-                index_state=_GSC_PAGE_INDEX_STATE,
-            )
-            counts["pages"] += 1
+            for row in rows:
+                page_url = row.get("page")
+                if not isinstance(page_url, str) or not page_url.strip():
+                    continue
+                # A sighting, not a crawl: never overwrite crawl observations.
+                store.record_gsc_sighting(property_id, page_url.strip())
+                counts["pages"] += 1
 
         return counts
 
@@ -503,6 +509,10 @@ class SeoService:
             "blocked": len(outcome.blocked),
             "issues": len(outcome.issues),
             "truncated": outcome.truncated,
+            "sitemap_urls": len(outcome.sitemap_urls),
+            "sitemap_truncated": outcome.sitemap_truncated,
+            "request_count": outcome.request_count,
+            "request_budget": outcome.request_budget,
         }
         graph = {
             "nodes": outcome.graph.nodes,
@@ -510,6 +520,8 @@ class SeoService:
             "max_depth": outcome.graph.max_depth,
             "orphans": outcome.graph.orphans,
             "broken": outcome.graph.broken,
+            "unvisited": outcome.graph.unvisited,
+            "failed": outcome.graph.failed,
         }
         data = {
             "summary": summary,
@@ -523,6 +535,14 @@ class SeoService:
             warnings.append(f"crawl: {len(outcome.errors)} urls could not be fetched")
         if outcome.blocked:
             warnings.append(f"crawl: {len(outcome.blocked)} urls blocked by robots.txt")
+        if outcome.robots.deferred:
+            warnings.append("crawl: robots.txt unreachable; crawl deferred (no fail-open)")
+        if outcome.sitemap_errors:
+            warnings.append(f"crawl: {len(outcome.sitemap_errors)} sitemap fetch errors")
+        if outcome.sitemap_truncated:
+            warnings.append("crawl: sitemap inventory truncated by budget")
+        for note in outcome.coverage_notes:
+            warnings.append(f"crawl coverage: {note}")
 
         meta = {
             "property_id": property_id,
@@ -553,47 +573,120 @@ class SeoService:
         errors: list[str] = []
         blocked: list[str] = []
         truncated = False
+        coverage_notes: list[str] = []
+        downgrades = 0
+        sitemap_urls: list[str] = []
+        sitemap_truncated = False
+        sitemap_errors: list[str] = []
 
-        while queue:
-            url = queue.popleft()
-            path = _request_path(url)
-            if respect_robots and not is_allowed(robots, path):
-                blocked.append(url)
-                pages.append(_blocked_page(url))
-                continue
+        def allow_url(target: str) -> bool:
+            target_parts = urlsplit(target)
+            if (target_parts.scheme.lower(), target_parts.netloc.lower()) != (
+                parts.scheme.lower(),
+                parts.netloc.lower(),
+            ):
+                coverage_notes.append("off-origin URL excluded from crawl scope")
+                return False
+            return not respect_robots or is_allowed(robots, _request_path(target))
 
-            result = fetcher.fetch(url)
-            page = _page_from_fetch(url, result)
-            pages.append(page)
-            if result.error:
-                errors.append(f"{url}: {result.error}")
-                continue
-            if not 200 <= page.status < 300:
-                continue
+        supports_allow_url = "allow_url" in inspect.signature(fetcher.fetch).parameters
 
-            for link in page.links:
-                if _host_of(link) != host:
-                    continue
-                key = normalize_url(link)
-                if key in discovered:
-                    continue
-                if len(discovered) >= max_urls:
+        max_redirects = getattr(fetcher, "max_redirects", 5)
+        if not isinstance(max_redirects, int) or max_redirects < 0:
+            max_redirects = 5
+        request_budget = 1 + max_urls * (max_redirects + 1)
+
+        def _request_count() -> int:
+            count = getattr(fetcher, "request_count", 0)
+            return count if isinstance(count, int) else 0
+
+        if robots.deferred:
+            blocked.append(f"{start_url}: robots_unreachable_deferred")
+            coverage_notes.append("robots.txt unreachable (5xx/network): crawl deferred")
+        else:
+            if respect_robots and robots.crawl_delay:
+                try:
+                    fetcher.politeness_delay = robots.crawl_delay
+                except AttributeError:
+                    coverage_notes.append("crawl-delay ignored: fetcher has no pacing hook")
+            sitemap_urls, sitemap_truncated, sitemap_errors = self._discover_sitemap_urls(
+                fetcher, site_url, host, robots, max_urls, discovered, queue, coverage_notes
+            )
+
+            while queue:
+                if _request_count() >= request_budget:
                     truncated = True
+                    coverage_notes.append(
+                        f"request budget exhausted ({_request_count()}/{request_budget})"
+                    )
+                    break
+                url = queue.popleft()
+                path = _request_path(url)
+                if respect_robots and not is_allowed(robots, path):
+                    blocked.append(url)
+                    pages.append(_blocked_page(url))
                     continue
-                discovered.add(key)
-                queue.append(link)
+
+                if supports_allow_url:
+                    result = fetcher.fetch(url, allow_url=allow_url)
+                else:
+                    result = fetcher.fetch(url)
+                if _request_count() > request_budget:
+                    truncated = True
+                    coverage_notes.append(
+                        f"request budget exhausted ({_request_count()}/{request_budget})"
+                    )
+                    break
+                page = _page_from_fetch(url, result)
+                if page.error == "robots_blocked":
+                    blocked.append(url)
+                    pages.append(page)
+                    continue
+                if page.error in ("blocked_private",):
+                    errors.append(f"{url}: {page.error}")
+                    pages.append(page)
+                    continue
+                if page.error is None and page.status == 200 and respect_robots:
+                    # The seed check ran before the fetch; a redirect may have
+                    # landed on a disallowed path — re-check the final address.
+                    final_path = _request_path(page.final_url or url)
+                    if not is_allowed(robots, final_path):
+                        blocked.append(url)
+                        pages.append(_blocked_page(url))
+                        continue
+                pages.append(page)
+                if page.downgraded:
+                    downgrades += 1
+                if result.error:
+                    errors.append(f"{url}: {result.error}")
+                    continue
+                if not 200 <= page.status < 300:
+                    continue
+
+                for link in page.links:
+                    if _host_of(link) != host:
+                        continue
+                    key = normalize_url(link)
+                    if key in discovered:
+                        continue
+                    if len(discovered) >= max_urls:
+                        truncated = True
+                        continue
+                    discovered.add(key)
+                    queue.append(link)
 
         graph = build_graph(pages, site_host=host, root_url=start_url)
         issues = run_all(
             RuleContext(
                 pages=pages,
                 site_url=site_url,
-                sitemap_urls=[],
+                sitemap_urls=list(sitemap_urls),
                 robots_sitemaps=list(robots.sitemaps),
                 robots_disallow=list(robots.disallow),
+                robots_allow=list(robots.allow),
             )
         )
-        return _CrawlOutcome(
+        outcome = _CrawlOutcome(
             start_url=start_url,
             site_url=site_url,
             pages=pages,
@@ -604,6 +697,96 @@ class SeoService:
             graph=graph,
             robots=robots,
         )
+        outcome.sitemap_urls = list(sitemap_urls)
+        outcome.sitemap_truncated = sitemap_truncated
+        outcome.sitemap_errors = list(sitemap_errors)
+        outcome.request_count = _request_count()
+        outcome.request_budget = request_budget
+        if downgrades:
+            coverage_notes.append(f"{downgrades} https downgrade(s) observed")
+        outcome.coverage_notes = _unique(coverage_notes)
+        return outcome
+
+    def _discover_sitemap_urls(
+        self,
+        fetcher: Fetcher,
+        site_url: str,
+        host: str,
+        robots: RobotsPolicy,
+        max_urls: int,
+        discovered: set[str],
+        queue: deque[str],
+        notes: list[str],
+    ) -> tuple[list[str], bool, list[str]]:
+        """Seed the frontier with sitemap inventory (bounded; failures are notes)."""
+        candidates = list(robots.sitemaps)
+        standard = f"{site_url}/sitemap.xml"
+        if standard not in candidates:
+            candidates.append(standard)
+        site_parts = urlsplit(site_url)
+        site_origin = (site_parts.scheme.lower(), site_parts.netloc.lower())
+        supports_allow_url = "allow_url" in inspect.signature(fetcher.fetch).parameters
+
+        def _sitemap_in_scope(target: str) -> bool:
+            target_parts = urlsplit(target)
+            return (target_parts.scheme.lower(), target_parts.netloc.lower()) == site_origin
+
+        def _scoped_fetch(url: str) -> FetchResult:
+            if _host_of(url) != host or not _sitemap_in_scope(url):
+                return FetchResult(url=url, status=0, final_url=url, error="robots_blocked")
+            if supports_allow_url:
+                return fetcher.fetch(url, allow_url=_sitemap_in_scope)
+            return fetcher.fetch(url)
+
+        reader = SitemapReader(_scoped_fetch, max_urls=max_urls, max_depth=2, max_docs=20)
+        collected: list[str] = []
+        truncated = False
+        reader_errors: list[str] = []
+        for candidate in candidates:
+            if _host_of(candidate) != host or not _sitemap_in_scope(candidate):
+                notes.append(f"off-origin sitemap skipped: {candidate}")
+                continue
+            try:
+                doc = reader.read(candidate)
+            except Exception as exc:  # the reader is total, but the fetch may not be
+                reader_errors.append(f"{candidate}: {type(exc).__name__}")
+                continue
+            for error in doc.errors:
+                # A missing standard sitemap is normal (no sitemap published),
+                # not a fetch failure worth warning about.
+                if candidate == standard and error == "http_404":
+                    continue
+                if error == "robots_blocked":
+                    notes.append(f"off-origin sitemap target excluded: {candidate}")
+                    continue
+                reader_errors.append(f"{candidate}: {error}")
+            truncated = truncated or doc.truncated
+            for url in doc.urls:
+                if _host_of(url) != host:
+                    continue
+                if url not in collected:
+                    collected.append(url)
+            if len(collected) >= max_urls:
+                truncated = True
+                break
+        added = 0
+        for url in collected:
+            key = normalize_url(url)
+            if key in discovered:
+                continue
+            if len(discovered) >= max_urls:
+                truncated = True
+                break
+            discovered.add(key)
+            queue.append(url)
+            added += 1
+        if truncated:
+            notes.append("sitemap inventory truncated")
+        if reader_errors:
+            notes.append(f"sitemap errors: {len(reader_errors)}")
+        if added:
+            notes.append(f"sitemap-only seeds: {added}")
+        return collected, truncated, reader_errors
 
     def _persist_crawl(
         self,
@@ -618,40 +801,41 @@ class SeoService:
             warnings.append("store: not configured; crawl results were not persisted")
             return 0, 0
 
-        for page in outcome.pages:
-            store.upsert_page(
-                property_id,
-                page.url,
-                status=page.status,
-                index_state=_index_state(page),
-                canonical=page.canonical,
-                title_hash=_title_hash(page.title),
-            )
+        with store.atomic():
+            for page in outcome.pages:
+                store.upsert_page(
+                    property_id,
+                    page.url,
+                    status=page.status,
+                    index_state=_index_state(page),
+                    canonical=page.canonical,
+                    title_hash=_title_hash(page.title),
+                )
 
-        for issue in outcome.issues:
-            store.upsert_issue(
-                issue.rule_id,
-                issue.severity,
-                property_id,
-                issue.url,
-                issue.detail,
-            )
+            for issue in outcome.issues:
+                store.upsert_issue(
+                    issue.rule_id,
+                    issue.severity,
+                    property_id,
+                    issue.url,
+                    issue.detail,
+                )
 
-        status = "partial" if outcome.errors else "ok"
-        store.record_run(
-            "crawl",
-            property_id,
-            status,
-            started_at=started_at,
-            finished_at=finished_at,
-            stats={
-                "urls": len(outcome.pages),
-                "errors": len(outcome.errors),
-                "blocked": len(outcome.blocked),
-                "issues": len(outcome.issues),
-                "truncated": outcome.truncated,
-            },
-        )
+            status = "partial" if outcome.errors else "ok"
+            store.record_run(
+                "crawl",
+                property_id,
+                status,
+                started_at=started_at,
+                finished_at=finished_at,
+                stats={
+                    "urls": len(outcome.pages),
+                    "errors": len(outcome.errors),
+                    "blocked": len(outcome.blocked),
+                    "issues": len(outcome.issues),
+                    "truncated": outcome.truncated,
+                },
+            )
         return len(outcome.pages), len(outcome.issues)
 
     # -- reports -----------------------------------------------------------------------------
@@ -690,25 +874,133 @@ class SeoService:
         sources: dict[str, dict[str, Any]] = {}
         limitations: list[str] = []
         provider_warnings: list[str] = []
+        sources_failed: list[str] = []
+        gsc_query_current: list[dict[str, Any]] = []
+        gsc_query_previous: list[dict[str, Any]] = []
 
-        self._collect_gsc_weekly(
-            start, current_end, previous_start, previous_end, current, previous, sources, warnings
+        self._isolated_collect(
+            "gsc",
+            warnings,
+            sources_failed,
+            lambda: self._collect_gsc_weekly(
+                start,
+                current_end,
+                previous_start,
+                previous_end,
+                current,
+                previous,
+                sources,
+                gsc_query_current,
+                gsc_query_previous,
+                warnings,
+            ),
         )
-        self._collect_yandex_weekly(start, current_end, current, sources, warnings)
-        self._collect_metrika_weekly(
-            start, current_end, previous_start, previous_end, current, previous, sources, warnings
+        self._isolated_collect(
+            SOURCE_YANDEX_WEBMASTER,
+            warnings,
+            sources_failed,
+            lambda: self._collect_yandex_weekly(start, current_end, current, sources, warnings),
+        )
+        self._isolated_collect(
+            SOURCE_YANDEX_METRIKA,
+            warnings,
+            sources_failed,
+            lambda: self._collect_metrika_weekly(
+                start,
+                current_end,
+                previous_start,
+                previous_end,
+                current,
+                previous,
+                sources,
+                warnings,
+            ),
+        )
+        self._isolated_collect(
+            SOURCE_BING,
+            warnings,
+            sources_failed,
+            lambda: self._collect_bing_weekly(sources, warnings),
+        )
+        self._isolated_collect(
+            SOURCE_CRUX,
+            warnings,
+            sources_failed,
+            lambda: self._collect_crux_weekly(sources, warnings),
+        )
+        self._isolated_collect(
+            SOURCE_PSI,
+            warnings,
+            sources_failed,
+            lambda: self._collect_psi_weekly(sources, warnings),
         )
 
         for source in sources.values():
-            limitations.extend(_list_of_str(source["meta"].get("limitations")))
-            provider_warnings.extend(_list_of_str(source["meta"].get("warnings")))
+            source_meta = source.get("meta", {})
+            if isinstance(source_meta, Mapping):
+                limitations.extend(_list_of_str(source_meta.get("limitations")))
+                provider_warnings.extend(_list_of_str(source_meta.get("warnings")))
+
+        requested = {
+            name
+            for name, block, _, target, _ in self._provider_specs()
+            if block is not None and target.strip()
+        } | set(self._overrides)
+        missing = sorted(requested - sources.keys() - set(sources_failed))
+        if missing:
+            limitations.append("configured sources unavailable: " + ", ".join(missing))
+        if sources_failed:
+            limitations.append(
+                "source collection failed: " + ", ".join(sorted(set(sources_failed)))
+            )
+        if not sources or not any(source.get("rows") for source in sources.values()):
+            limitations.append("no source returned usable rows; report is a no-data fallback")
+
+        # The headline compares one engine across two identical windows: GSC.
+        # Yandex exposes a windowed top-queries report without a previous window
+        # for a delta, Metrika counts
+        # sessions (not clicks) — merging any of them into the delta would
+        # fabricate growth (F01). Per-engine numbers stay visible in the
+        # traffic section; the headline never claims a cross-engine total.
+        headline_current = {SOURCE_GSC: current.get(SOURCE_GSC, {})}
+        headline_previous = {SOURCE_GSC: previous.get(SOURCE_GSC, {})}
+        gsc_complete = (
+            SOURCE_GSC in sources
+            and SOURCE_GSC not in sources_failed
+            and bool(current.get(SOURCE_GSC))
+            and bool(previous.get(SOURCE_GSC))
+            and bool(sources[SOURCE_GSC].get("comparable"))
+        )
+        if not gsc_complete:
+            headline_current = {}
+            headline_previous = {}
+            limitations.append(
+                "headline delta unavailable: no comparable GSC windows; "
+                "per-engine numbers are shown without a total"
+            )
+        else:
+            limitations.append(
+                "headline delta covers GSC windows only; yandex query window and "
+                "metrika sessions are shown per-engine, never merged"
+            )
         limitations = _unique(limitations)
+
+        # Search Analytics omits anonymized/top rows even below the requested cap.
+        # No successful query/page response proves that an absent row had zero traffic.
+        query_complete = False
+        if gsc_query_current or gsc_query_previous:
+            limitations.append(
+                "gsc query/page coverage is not exhaustive: vanished rows are unknown, not zero"
+            )
+            limitations = _unique(limitations)
 
         if self._store is None:
             warnings.append("store: not configured; snapshot was not saved")
         all_warnings = _unique([*warnings, *provider_warnings])
         property_id = _report_property_id(self._config)
         period = f"{start.isoformat()}..{current_end.isoformat()}"
+
+        stored_issues = self._stored_issue_rows(property_id)
 
         builder = _load_weekly_builder()
         report_obj: Report
@@ -730,12 +1022,21 @@ class SeoService:
                     property_id=property_id,
                     period_start=start,
                     period_end=current_end,
-                    current=_flatten_totals(current),
-                    previous=_flatten_totals(previous),
-                    gsc_rows=_source_rows(sources, "gsc"),
-                    yandex_rows=_source_rows(sources, "yandex"),
-                    metrika_rows=_source_rows(sources, "metrika"),
+                    current=_flatten_totals(headline_current) if gsc_complete else {},
+                    previous=_flatten_totals(headline_previous) if gsc_complete else {},
+                    gsc_rows=gsc_query_current,
+                    gsc_previous_rows=gsc_query_previous,
+                    gsc_previous_complete=query_complete,
+                    yandex_rows=_source_rows(sources, SOURCE_YANDEX_WEBMASTER),
+                    metrika_rows=_source_rows(sources, SOURCE_YANDEX_METRIKA),
+                    issues=stored_issues,
+                    extra_engines=_extra_engine_rows(sources),
                     limitations=limitations,
+                    thresholds=DeltaThresholds(
+                        clicks_pct=self._config.report.thresholds.clicks_pct,
+                        impressions_pct=self._config.report.thresholds.impressions_pct,
+                        position_abs=self._config.report.thresholds.position_abs,
+                    ),
                 )
             except TypeError:
                 all_warnings = _unique(
@@ -752,8 +1053,10 @@ class SeoService:
                 )
         payload = _report_payload(report_obj)
 
-        payload["warnings"] = _unique([*_list_of_str(payload.get("warnings")), *all_warnings])
-        payload["limitations"] = _unique([*_list_of_str(payload.get("limitations")), *limitations])
+        report_obj.warnings = _unique([*report_obj.warnings, *all_warnings])
+        report_obj.limitations = _unique([*report_obj.limitations, *limitations])
+        payload["warnings"] = list(report_obj.warnings)
+        payload["limitations"] = list(report_obj.limitations)
 
         snapshot_hash: str | None = None
         if self._store is not None:
@@ -764,9 +1067,22 @@ class SeoService:
             sent = self._deliver_report(report_obj, warnings)
 
         data_age = max(
-            (_int_of(source["meta"].get("data_age_days")) for source in sources.values()),
+            (
+                _int_of(source["meta"].get("data_age_days"))
+                for source in sources.values()
+                if isinstance(source.get("meta"), Mapping)
+            ),
             default=0,
         )
+        failed = sorted(set(sources_failed))
+        incomplete = sorted(
+            name
+            for name, source in sources.items()
+            if not source.get("rows")
+            or source.get("meta", {}).get("truncated")
+            or (name == SOURCE_GSC and not gsc_complete)
+        )
+        complete = bool(sources) and not (failed or missing or incomplete)
         meta: dict[str, Any] = {
             "sent": sent,
             "property_id": property_id,
@@ -776,13 +1092,42 @@ class SeoService:
                 "end": previous_end.isoformat(),
             },
             "sources": sorted(sources),
+            "sources_failed": failed,
+            "sources_missing": missing,
+            "sources_incomplete": incomplete,
+            "complete": complete,
             "data_age_days": data_age,
-            "truncated": any(bool(source["meta"].get("truncated")) for source in sources.values()),
+            "truncated": any(
+                bool(source["meta"].get("truncated"))
+                for source in sources.values()
+                if isinstance(source.get("meta"), Mapping)
+            ),
             "limitations": limitations,
         }
         if snapshot_hash is not None:
             meta["snapshot_hash"] = snapshot_hash
         return ok(payload, meta=meta, warnings=_unique(warnings))
+
+    def _stored_issue_rows(self, property_id: str) -> list[dict[str, Any]]:
+        """Latest open crawl issues for the report, or [] without a store."""
+        if self._store is None:
+            return []
+        try:
+            issues = self._store.list_issues(property_id, limit=200)
+        except Exception:  # storage must never cancel a report
+            logger.warning("weekly: could not read stored issues")
+            return []
+        rows: list[dict[str, Any]] = []
+        for issue in issues:
+            rows.append(
+                {
+                    "rule_id": issue.get("rule_id"),
+                    "severity": issue.get("severity"),
+                    "url": issue.get("url"),
+                    "detail": issue.get("detail", {}),
+                }
+            )
+        return rows
 
     def _deliver_report(self, report: Report, warnings: list[str]) -> bool:
         """Send a built report through the configured channels (best-effort)."""
@@ -819,11 +1164,36 @@ class SeoService:
             telegram=telegram,
             store=self._store,
             only_on_change=cfg.email.only_on_change,
+            material_thresholds={
+                "clicks_pct": cfg.thresholds.clicks_pct,
+                "impressions_pct": cfg.thresholds.impressions_pct,
+                "position_abs": cfg.thresholds.position_abs,
+            },
         )
         for result in results:
             if result.status == "failed":
                 warnings.append(f"delivery {result.channel}: {result.reason}")
         return any(result.status == "sent" for result in results)
+
+    @staticmethod
+    def _isolated_collect(
+        name: str,
+        warnings: list[str],
+        sources_failed: list[str],
+        action: Callable[[], None],
+    ) -> None:
+        """Run one source collector; a provider failure isolates to that source.
+
+        A 401/403/429/timeout in one engine must not cancel the whole weekly
+        digest: the failure is recorded in ``sources_failed`` with a warning and
+        the available sources still produce a report. Only when *no* source
+        yields usable rows does the report degrade to a no-data fallback.
+        """
+        try:
+            action()
+        except SeoError as exc:
+            sources_failed.append(name)
+            warnings.append(f"{name}: {exc.code}: {exc.message}")
 
     def _collect_gsc_weekly(
         self,
@@ -834,16 +1204,19 @@ class SeoService:
         current: dict[str, dict[str, float]],
         previous: dict[str, dict[str, float]],
         sources: dict[str, dict[str, Any]],
+        gsc_query_current: list[dict[str, Any]],
+        gsc_query_previous: list[dict[str, Any]],
         warnings: list[str],
     ) -> None:
-        client = self._maybe_client("gsc")
+        client = self._maybe_client(SOURCE_GSC)
         if client is None:
             warnings.append("gsc: token missing")
             return
-        if "gsc" not in self._overrides and not _gsc_configured_property(self._config):
+        if SOURCE_GSC not in self._overrides and not _gsc_configured_property(self._config):
             warnings.append("gsc: property missing")
             return
 
+        # Dataset 1 (date dimension): comparable window totals for the headline.
         current_result = _call(
             client,
             "search_analytics",
@@ -864,9 +1237,54 @@ class SeoService:
         )
         current_rows = _result_rows(current_result)
         previous_rows = _result_rows(previous_result)
-        current["gsc"] = _gsc_totals(current_rows)
-        previous["gsc"] = _gsc_totals(previous_rows)
-        sources["gsc"] = _source_entry(current_result, current_rows)
+        current[SOURCE_GSC] = _gsc_totals(current_rows) if current_rows else {}
+        previous[SOURCE_GSC] = _gsc_totals(previous_rows) if previous_rows else {}
+        sources[SOURCE_GSC] = _source_entry(current_result, current_rows)
+        sources[SOURCE_GSC]["comparable"] = bool(
+            current_rows
+            and previous_rows
+            and not _result_truncated(current_result)
+            and not _result_truncated(previous_result)
+        )
+        sources[SOURCE_GSC]["meta"] = _combined_result_meta(
+            (current_result, previous_result), source=SOURCE_GSC
+        )
+
+        # Dataset 2 (query+page dimensions): per-URL/query rows for opportunities
+        # and fusion. A date-dimensioned row carries no query/page and would make
+        # find_opportunities blind, so it must never feed that path (F25).
+        query_current_result = _call(
+            client,
+            "search_analytics",
+            start_date=start,
+            end_date=end,
+            dimensions=("query", "page"),
+            row_limit=_WEEKLY_GSC_LIMIT,
+            max_rows=_WEEKLY_GSC_LIMIT,
+        )
+        query_previous_result = _call(
+            client,
+            "search_analytics",
+            start_date=previous_start,
+            end_date=previous_end,
+            dimensions=("query", "page"),
+            row_limit=_WEEKLY_GSC_LIMIT,
+            max_rows=_WEEKLY_GSC_LIMIT,
+        )
+        gsc_query_current.extend(_result_rows(query_current_result))
+        gsc_query_previous.extend(_result_rows(query_previous_result))
+        warnings.extend(_result_warnings(query_current_result))
+        warnings.extend(_result_warnings(query_previous_result))
+        query_truncated = bool(
+            getattr(query_current_result, "truncated", False)
+            or getattr(query_previous_result, "truncated", False)
+        )
+        sources[SOURCE_GSC]["query_rows"] = len(gsc_query_current)
+        sources[SOURCE_GSC]["query_truncated"] = query_truncated
+        sources[SOURCE_GSC]["meta"] = _combined_result_meta(
+            (current_result, previous_result, query_current_result, query_previous_result),
+            source=SOURCE_GSC,
+        )
 
     def _collect_yandex_weekly(
         self,
@@ -876,8 +1294,7 @@ class SeoService:
         sources: dict[str, dict[str, Any]],
         warnings: list[str],
     ) -> None:
-        del start, end  # Yandex Webmaster exposes the current report, not a window.
-        client = self._maybe_client("yandex_webmaster")
+        client = self._maybe_client(SOURCE_YANDEX_WEBMASTER)
         if client is None:
             warnings.append("yandex_webmaster: token missing")
             return
@@ -886,10 +1303,17 @@ class SeoService:
             warnings.append("yandex_webmaster: host_id missing")
             return
 
-        result = _call(client, "popular_queries", host_id, limit=_WEEKLY_YANDEX_LIMIT)
+        result = _call(
+            client,
+            "popular_queries",
+            host_id,
+            limit=_WEEKLY_YANDEX_LIMIT,
+            date_from=start,
+            date_to=end,
+        )
         rows = _result_rows(result)
-        current["yandex_webmaster"] = _yandex_totals(rows)
-        sources["yandex_webmaster"] = _source_entry(result, rows)
+        current[SOURCE_YANDEX_WEBMASTER] = _yandex_totals(rows)
+        sources[SOURCE_YANDEX_WEBMASTER] = _source_entry(result, rows)
 
     def _collect_metrika_weekly(
         self,
@@ -902,7 +1326,7 @@ class SeoService:
         sources: dict[str, dict[str, Any]],
         warnings: list[str],
     ) -> None:
-        client = self._maybe_client("yandex_metrika")
+        client = self._maybe_client(SOURCE_YANDEX_METRIKA)
         if client is None:
             warnings.append("yandex_metrika: token missing")
             return
@@ -933,27 +1357,84 @@ class SeoService:
         )
         current_rows = _result_rows(current_result)
         previous_rows = _result_rows(previous_result)
-        current["yandex_metrika"] = _metrika_totals(current_rows)
-        previous["yandex_metrika"] = _metrika_totals(previous_rows)
-        sources["yandex_metrika"] = _source_entry(current_result, current_rows)
+        current[SOURCE_YANDEX_METRIKA] = _metrika_totals(current_rows)
+        previous[SOURCE_YANDEX_METRIKA] = _metrika_totals(previous_rows)
+        sources[SOURCE_YANDEX_METRIKA] = _source_entry(current_result, current_rows)
+        sources[SOURCE_YANDEX_METRIKA]["meta"] = _combined_result_meta(
+            (current_result, previous_result), source=SOURCE_YANDEX_METRIKA
+        )
 
-    def _deliver(
-        self,
-        deliver: Delivery,
-        payload: Mapping[str, Any],
-        warnings: list[str],
-    ) -> bool:
-        channels = _delivery_channels(self._config)
-        try:
-            outcome = _invoke_delivery(deliver, payload, channels, self._config, self._store)
-        except SeoError as exc:
-            warnings.append(f"delivery: failed ({exc.code})")
-            return False
-        except Exception:
-            logger.warning("unexpected delivery failure")
-            warnings.append("delivery: failed")
-            return False
-        return _delivery_sent(outcome)
+    def _collect_bing_weekly(self, sources: dict[str, dict[str, Any]], warnings: list[str]) -> None:
+        """Collect Bing query stats when the site is configured (traffic only).
+
+        Bing rows are shown per-engine; they never merge into the GSC headline
+        because the sampling and windows differ.
+        """
+        client = self._maybe_client(SOURCE_BING)
+        if client is None:
+            return
+        bing = self._config.providers.bing
+        if bing is None or not bing.site.strip():
+            warnings.append("bing: site missing")
+            return
+        result = _call(client, "query_stats")
+        rows = _result_rows(result)
+        sources[SOURCE_BING] = _source_entry(result, rows)
+
+    def _collect_crux_weekly(self, sources: dict[str, dict[str, Any]], warnings: list[str]) -> None:
+        """Collect CrUX *field* data for the configured origin (real-user p75s)."""
+        client = self._maybe_client(SOURCE_CRUX)
+        if client is None:
+            return
+        crux = self._config.providers.crux
+        origin = crux.origin.strip() if crux is not None else ""
+        if not origin:
+            warnings.append("crux: origin missing")
+            return
+        result = _call(client, "origin", origin)
+        rows = _result_rows(result)
+        entry = _source_entry(result, rows)
+        entry["kind"] = "field"
+        sources[SOURCE_CRUX] = entry
+
+    def _collect_psi_weekly(self, sources: dict[str, dict[str, Any]], warnings: list[str]) -> None:
+        """Collect PSI *lab* data for the configured URLs (synthetic, not field).
+
+        Lab numbers describe a simulated load, not real users, so they are
+        labelled ``lab`` and kept out of every field-data comparison.
+        """
+        client = self._maybe_client(SOURCE_PSI)
+        if client is None:
+            return
+        psi = self._config.providers.psi
+        urls = list(psi.urls) if psi is not None else []
+        if not urls:
+            warnings.append("psi: urls missing")
+            return
+        collected: list[dict[str, Any]] = []
+        psi_warnings: list[str] = []
+        strategy = psi.strategy if psi is not None else "mobile"
+        for url in urls[:5]:
+            result = _call(client, "run", url, strategy=strategy)
+            rows = _result_rows(result)
+            collected.extend(rows)
+            psi_warnings.extend(_result_warnings(result))
+        warnings.extend(psi_warnings)
+        entry: dict[str, Any] = {
+            "meta": {
+                "source": SOURCE_PSI,
+                "rows": len(collected),
+                "kind": "lab",
+                "data_age_days": 0,
+                "truncated": len(urls) > 5,
+            },
+            "rows": len(collected),
+            "data": collected,
+            "kind": "lab",
+        }
+        if len(urls) > 5:
+            warnings.append("psi: url list capped at 5 per weekly run")
+        sources[SOURCE_PSI] = entry
 
     def _fallback_weekly_report(
         self,
@@ -973,8 +1454,8 @@ class SeoService:
             position_abs=self._config.report.thresholds.position_abs,
         )
 
-        gsc_current = current.get("gsc")
-        gsc_previous = previous.get("gsc")
+        gsc_current = current.get(SOURCE_GSC)
+        gsc_previous = previous.get(SOURCE_GSC)
         if gsc_current or gsc_previous:
             deltas = compute_delta(gsc_current or {}, gsc_previous or {}, thresholds=thresholds)
             sections.append(
@@ -1009,12 +1490,12 @@ class SeoService:
                     title="Yandex Webmaster",
                     summary=", ".join(f"{row['metric']} {row['current']:.1f}" for row in rows),
                     rows=rows,
-                    notes=["Yandex Webmaster exposes the current query report only."],
+                    notes=["Yandex Webmaster exposes a windowed top-queries report only."],
                 )
             )
 
-        metrika_current = current.get("yandex_metrika")
-        metrika_previous = previous.get("yandex_metrika")
+        metrika_current = current.get(SOURCE_YANDEX_METRIKA)
+        metrika_previous = previous.get(SOURCE_YANDEX_METRIKA)
         if metrika_current or metrika_previous:
             rows = [
                 {
@@ -1257,11 +1738,56 @@ def _source_entry(result: object, rows: Sequence[Any]) -> dict[str, Any]:
     return {"meta": meta, "rows": len(rows), "data": list(rows)}
 
 
+def _combined_result_meta(results: Sequence[object], *, source: str) -> dict[str, Any]:
+    """Carry bounds and caveats from every dataset, including previous windows."""
+    metadata = [
+        _result_meta(result, source=source, rows=_result_rows(result)) for result in results
+    ]
+    return {
+        "source": source,
+        "truncated": any(meta.get("truncated") for meta in metadata),
+        "total": sum(_int_of(meta.get("total")) for meta in metadata),
+        "data_age_days": max((_result_data_age(result) for result in results), default=0),
+        "limitations": _unique(
+            [item for result in results for item in _result_limitations(result)]
+        ),
+        "warnings": _unique([item for result in results for item in _result_warnings(result)]),
+        "datasets": metadata,
+    }
+
+
 def _source_rows(sources: Mapping[str, Mapping[str, Any]], engine: str) -> list[Any]:
     """Rows captured for one engine during the weekly collection."""
     entry = sources.get(engine) or {}
     data = entry.get("data")
     return list(data) if isinstance(data, list) else []
+
+
+def _extra_engine_rows(sources: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Traffic rows for engines outside the GSC/Yandex/Metrika fusion.
+
+    Bing query stats, CrUX field p75s and PSI lab scores are shown per-engine in
+    the sources section; they are never merged into a cross-engine total and
+    field (CrUX) and lab (PSI) data stay labelled apart.
+    """
+    extras: list[dict[str, Any]] = []
+    for engine in (SOURCE_BING, SOURCE_CRUX, SOURCE_PSI):
+        entry = sources.get(engine)
+        if not entry:
+            continue
+        rows = entry.get("data")
+        row_list = list(rows) if isinstance(rows, list) else []
+        meta = entry.get("meta", {})
+        meta_map = meta if isinstance(meta, Mapping) else {}
+        extras.append(
+            {
+                "engine": engine,
+                "kind": entry.get("kind", "field" if engine == SOURCE_CRUX else "traffic"),
+                "rows": row_list,
+                "limitations": list(meta_map.get("limitations", [])),
+            }
+        )
+    return extras
 
 
 def _flatten_totals(totals: Mapping[str, Mapping[str, float]]) -> dict[str, float]:
@@ -1334,80 +1860,6 @@ def _report_payload(report: object) -> dict[str, Any]:
     return dict(payload)
 
 
-def _delivery_sent(outcome: object) -> bool:
-    if outcome is None:
-        return True
-    if isinstance(outcome, bool):
-        return outcome
-    if isinstance(outcome, Mapping):
-        for key in ("sent", "delivered", "ok"):
-            if key in outcome:
-                return bool(outcome[key])
-        status = outcome.get("status")
-        if isinstance(status, str):
-            return status.strip().lower() in {"sent", "delivered", "ok", "success"}
-        return True
-    return bool(outcome)
-
-
-def _delivery_channels(config: SeoConfig) -> list[str]:
-    """Enabled delivery channels, in a stable order.
-
-    ``report/delivery`` follows ``deliver(report, channels)`` (see docs/architecture.md §5).
-    A disabled channel is simply absent; an empty list lets the delivery layer decide whether
-    that is a warning or a no-op.
-    """
-    channels: list[str] = []
-    if config.report.email.enabled:
-        channels.append("email")
-    if config.report.telegram.enabled:
-        channels.append("telegram")
-    return channels
-
-
-def _invoke_delivery(
-    deliver: Delivery,
-    report: Mapping[str, Any],
-    channels: Sequence[str],
-    config: SeoConfig,
-    store: Store | None,
-) -> object:
-    """Call ``deliver`` with the documented signature, plus config/store when accepted.
-
-    WP5 is landing in parallel: the contract is ``deliver(report, channels)``, while a richer
-    implementation may also want the workspace config and the idempotency store. Inspecting the
-    signature once keeps the service compatible with both without swallowing a real TypeError
-    from inside delivery.
-    """
-    try:
-        signature = inspect.signature(deliver)
-    except (TypeError, ValueError):
-        return deliver(report, channels)
-
-    parameters = signature.parameters
-    accepts_kwargs = any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
-    )
-    positional = [
-        parameter
-        for parameter in parameters.values()
-        if parameter.kind
-        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    ]
-    args: list[object] = [report]
-    if len(positional) >= 2:
-        args.append(channels)
-
-    kwargs: dict[str, object] = {}
-    if len(positional) < 2 and "channels" in parameters:
-        kwargs["channels"] = channels
-    if accepts_kwargs or "config" in parameters:
-        kwargs["config"] = config
-    if accepts_kwargs or "store" in parameters:
-        kwargs["store"] = store
-    return deliver(*args, **kwargs)
-
-
 # -- crawl helpers ---------------------------------------------------------------------------
 
 
@@ -1450,6 +1902,7 @@ def _page_from_fetch(url: str, result: object) -> PageData:
     final_url = str(getattr(result, "final_url", url) or url)
     error = getattr(result, "error", None)
     redirect_chain = list(getattr(result, "redirect_chain", ()) or ())
+    downgraded = bool(getattr(result, "downgraded", False))
     if error:
         return PageData(
             url=url,
@@ -1458,6 +1911,7 @@ def _page_from_fetch(url: str, result: object) -> PageData:
             headers=dict(headers) if isinstance(headers, Mapping) else {},
             error=str(error),
             redirect_chain=redirect_chain,
+            downgraded=downgraded,
         )
     body = getattr(result, "body", b"")
     page = parse_html(
@@ -1468,6 +1922,7 @@ def _page_from_fetch(url: str, result: object) -> PageData:
         final_url=final_url,
     )
     page.redirect_chain = redirect_chain
+    page.downgraded = downgraded
     return page
 
 

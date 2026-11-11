@@ -12,6 +12,36 @@
 -- The tables, column names and primary keys below are the stable interface. Add a migration
 -- instead of renaming anything once user data exists.
 
+-- Schema migrations ledger. Applied by `store.db.migrate()` in version order; every row is
+-- append-only so a half-applied upgrade can resume instead of re-running DDL.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version     INTEGER NOT NULL PRIMARY KEY,
+    description TEXT NOT NULL,
+    applied_at  TEXT NOT NULL
+);
+
+-- Window aggregates (F14): non-daily provider rows keyed by their real window.
+-- `metric_daily` holds only true per-day rows (queries with a `date` dimension);
+-- everything else lands here so a weekly aggregate dated at its end can never
+-- overwrite (or be overwritten by) a daily row again. Rows written before this
+-- table existed stay in `metric_daily` with accuracy='legacy_unknown_granularity':
+-- their window is unrecoverable, so daily reads exclude them unless explicitly requested.
+CREATE TABLE IF NOT EXISTS metric_windows (
+    property_id TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    start       TEXT NOT NULL,
+    "end"       TEXT NOT NULL,
+    "scope"     TEXT NOT NULL,
+    "key"       TEXT NOT NULL,
+    metric      TEXT NOT NULL,
+    value       REAL NOT NULL,
+    accuracy    TEXT,
+    PRIMARY KEY (property_id, source, start, "end", "scope", "key", metric)
+);
+
+CREATE INDEX IF NOT EXISTS idx_metric_windows_end
+    ON metric_windows (property_id, "end");
+
 CREATE TABLE IF NOT EXISTS properties (
     provider      TEXT NOT NULL,
     property_id   TEXT NOT NULL,
