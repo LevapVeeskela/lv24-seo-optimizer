@@ -10,8 +10,9 @@ Design notes
   requires. Bytes without a declared charset are decoded as UTF-8 with
   ``errors="replace"``, so a wrong or missing declaration never breaks a crawl.
   ``<meta charset>`` is not sniffed.
-* URLs are resolved against ``final_url or url`` with :func:`urllib.parse.urljoin`.
-  Link fragments are dropped: for a crawler every fragment is the same document.
+* URLs are resolved against the first ``<base href>`` when present, else
+  ``final_url or url``, with :func:`urllib.parse.urljoin`. Link fragments are
+  dropped: for a crawler every fragment is the same document.
 * Extraction is best effort. Invalid JSON-LD blocks and hostile markup are skipped,
   never raised; only a catastrophic parser failure produces ``error="parse_error"``.
 """
@@ -152,6 +153,7 @@ class _HtmlParser(HTMLParser):
     def __init__(self, *, base_url: str) -> None:
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
+        self._base_href: str | None = None
         self.title: str | None = None
         self.meta_description: str | None = None
         self.meta_robots: list[str] = []
@@ -175,6 +177,13 @@ class _HtmlParser(HTMLParser):
     def text(self) -> str:
         """Collapsed visible text (script/style/noscript and the document title removed)."""
         return _collapse(self.text_parts)
+
+    @property
+    def effective_base(self) -> str:
+        """Resolution base: the first ``<base href>`` when present, else the page URL."""
+        if self._base_href:
+            return urljoin(self.base_url, self._base_href)
+        return self.base_url
 
     def finalize(self) -> None:
         """Flush constructs left open at end of input (tolerant parsing)."""
@@ -207,6 +216,13 @@ class _HtmlParser(HTMLParser):
                 lang = _attr(attributes, "lang")
                 if lang:
                     self.html_lang = lang
+        elif tag == "base":
+            # The first <base href> wins per the HTML standard; it must appear
+            # before any relative URL is used.
+            if self._base_href is None:
+                href = _attr(attributes, "href")
+                if href:
+                    self._base_href = href
         elif tag == "meta":
             self._handle_meta(attributes)
         elif tag == "link":
@@ -219,7 +235,7 @@ class _HtmlParser(HTMLParser):
             src = _attr(attributes, "src")
             self.images.append(
                 {
-                    "src": _resolve_url(src, self.base_url) if src else "",
+                    "src": _resolve_url(src, self.effective_base) if src else "",
                     "alt": _attr(attributes, "alt"),
                 }
             )
@@ -278,14 +294,14 @@ class _HtmlParser(HTMLParser):
             return
 
         if "canonical" in rel and self.canonical is None:
-            self.canonical = _resolve_url(href, self.base_url)
+            self.canonical = _resolve_url(href, self.effective_base)
 
         if "alternate" not in rel:
             return
         lang = _attr(attributes, "hreflang")
         if not lang:
             return
-        url = _resolve_url(href, self.base_url)
+        url = _resolve_url(href, self.effective_base)
         key = (lang.lower(), url)
         if key in self._seen_hreflang:
             return
@@ -293,7 +309,7 @@ class _HtmlParser(HTMLParser):
         self.hreflang.append({"lang": lang, "url": url})
 
     def _add_link(self, href: str) -> None:
-        url = urldefrag(_resolve_url(href, self.base_url)).url
+        url = urldefrag(_resolve_url(href, self.effective_base)).url
         if not url or urlsplit(url).scheme.lower() not in _LINK_SCHEMES:
             return
         if url in self._seen_links:

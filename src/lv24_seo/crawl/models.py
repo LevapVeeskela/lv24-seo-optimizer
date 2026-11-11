@@ -20,6 +20,7 @@ class FetchResult:
     elapsed_ms: float = 0.0
     redirect_chain: list[str] = field(default_factory=list)
     error: str | None = None
+    downgraded: bool = False
 
 
 @dataclass(slots=True)
@@ -46,6 +47,7 @@ class PageData:
     word_count: int = 0
     redirect_chain: list[str] = field(default_factory=list)
     error: str | None = None
+    downgraded: bool = False
 
     @property
     def robots_directives(self) -> set[str]:
@@ -77,3 +79,4 @@ class RuleContext:
     sitemap_urls: list[str] = field(default_factory=list)
     robots_sitemaps: list[str] = field(default_factory=list)
     robots_disallow: list[str] = field(default_factory=list)
+    robots_allow: list[str] = field(default_factory=list)

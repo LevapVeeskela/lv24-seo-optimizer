@@ -1,4 +1,11 @@
-"""robots-blocked: a 200 URL whose path is disallowed for crawlers in robots.txt."""
+"""robots-blocked: a 200 URL whose path is disallowed for crawlers in robots.txt.
+
+Uses the same longest-match semantics as the fetcher (RFC 9309 §2.2.2): the longest
+matching pattern wins and ``Allow`` wins ties, so an ``Allow: /private/public``
+entry exempts a path that ``Disallow: /private/`` would otherwise block. Both the
+requested and the final (post-redirect) URL are checked: a redirect that lands on
+a disallowed path is a finding, not a clean page.
+"""
 
 from __future__ import annotations
 
@@ -36,23 +43,42 @@ def _compile(pattern: str) -> re.Pattern[str]:
     return re.compile(body + ("$" if anchored else ""))
 
 
-def _matchers(patterns: list[str]) -> list[tuple[str, re.Pattern[str]]]:
-    return [(pattern.strip(), _compile(pattern.strip())) for pattern in patterns if pattern.strip()]
+def _longest_match(patterns: list[str], target: str) -> int:
+    """Longest pattern length that matches ``target`` (RFC 9309 longest-match), or -1."""
+    best = -1
+    for pattern in patterns:
+        candidate = pattern.strip()
+        if not candidate:
+            continue
+        try:
+            regex = _compile(candidate)
+        except re.error:
+            continue
+        if regex.match(target) and len(candidate) > best:
+            best = len(candidate)
+    return best
 
 
 def _check(ctx: RuleContext) -> list[Issue]:
-    matchers = _matchers(ctx.robots_disallow)
-    if not matchers:
+    allow = list(getattr(ctx, "robots_allow", []) or [])
+    if not ctx.robots_disallow and not allow:
         return []
     issues: list[Issue] = []
     for page in ctx.pages:
         if page.status != 200:
             continue
-        target = _target(page.url)
-        for pattern, regex in matchers:
-            if regex.match(target):
-                issues.append(_issue(page.url, {"pattern": pattern}))
-                break
+        for candidate in (page.url, page.final_url):
+            if not candidate:
+                continue
+            target = _target(candidate)
+            disallow_hit = _longest_match(ctx.robots_disallow, target)
+            if disallow_hit < 0:
+                continue
+            # ``Allow`` wins ties and longer allows exempt the path.
+            if _longest_match(allow, target) >= disallow_hit:
+                continue
+            issues.append(_issue(page.url, {"pattern": target, "final_url": page.final_url}))
+            break
     return issues
 
 

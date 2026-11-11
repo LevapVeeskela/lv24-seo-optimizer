@@ -21,11 +21,15 @@ Design notes
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import re
+import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
+from itertools import pairwise
 from types import TracebackType
 from urllib.parse import urlsplit
 
@@ -51,6 +55,7 @@ class RobotsPolicy:
     allow: list[str]
     sitemaps: list[str]
     crawl_delay: float | None = None
+    deferred: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +65,20 @@ class _Group:
 
 
 class Fetcher:
-    """Synchronous page fetcher with manual redirects and a body size cap."""
+    """Synchronous page fetcher with manual redirects and a body size cap.
+
+    Outbound policy: every requested URL — the seed and each redirect hop — is
+    resolved and its addresses must be public. Loopback, private, link-local,
+    multicast, reserved and unspecified addresses (IPv4 and IPv6, including the
+    cloud metadata address ``169.254.169.254``) are refused with
+    ``error="blocked_private"`` unless ``allow_private`` is set explicitly for
+    local-site audits. The default transport connects to the validated IP,
+    preserving the original HTTP Host and TLS SNI, so connection setup cannot
+    resolve the hostname again to a different address. Custom injected transports
+    are trusted adapters: they retain the original URL and must enforce their own
+    connection-address policy. Pass a custom ``resolver`` in tests to avoid real
+    DNS; it receives a hostname and returns a list of IP strings.
+    """
 
     def __init__(
         self,
@@ -70,6 +88,9 @@ class Fetcher:
         max_redirects: int = _DEFAULT_MAX_REDIRECTS,
         transport: httpx.BaseTransport | None = None,
         max_bytes: int = _DEFAULT_MAX_BYTES,
+        allow_private: bool = False,
+        resolver: Callable[[str], list[str]] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not math.isfinite(timeout) or timeout <= 0:
             raise SeoError(
@@ -93,10 +114,22 @@ class Fetcher:
         self._user_agent = user_agent
         self._max_redirects = max_redirects
         self._max_bytes = max_bytes
+        self._allow_private = allow_private
+        self._resolver = resolver or _resolve_host
+        self._sleep = sleep
+        self._request_count = 0
+        self._last_end: float | None = None
+        self.politeness_delay: float = 0.0
+        self._pin_addresses = transport is None
 
         if transport is None:
             # See the module docstring: many VPS hosts are IPv4-only.
-            transport = httpx.HTTPTransport(local_address="0.0.0.0")  # noqa: S104
+            # The pool sees pinned IP origins. Do not reuse a TLS connection for
+            # a different hostname sharing that IP (and therefore different SNI).
+            transport = httpx.HTTPTransport(
+                local_address="0.0.0.0",  # noqa: S104
+                limits=httpx.Limits(max_keepalive_connections=0),
+            )
 
         self._client = httpx.Client(
             timeout=httpx.Timeout(timeout),
@@ -105,7 +138,17 @@ class Fetcher:
             follow_redirects=False,
         )
 
-    def fetch(self, url: str) -> FetchResult:
+    @property
+    def request_count(self) -> int:
+        """HTTP requests issued so far (page fetches, robots.txt, redirect hops)."""
+        return self._request_count
+
+    @property
+    def max_redirects(self) -> int:
+        """Redirect hops followed per page before ``too_many_redirects``."""
+        return self._max_redirects
+
+    def fetch(self, url: str, *, allow_url: Callable[[str], bool] | None = None) -> FetchResult:
         """GET ``url`` and never raise for network, size or redirect failures."""
         started = time.perf_counter()
         chain = [url]
@@ -114,15 +157,37 @@ class Fetcher:
         initial = _http_url(url)
         if initial is None:
             return self._failure(url, current, chain, "invalid_url", started)
+        if allow_url is not None and not allow_url(str(initial)):
+            return self._failure(url, current, chain, "robots_blocked", started)
+        address = self._outbound_address(initial)
+        if address is None:
+            return self._failure(url, current, chain, "blocked_private", started)
         visited = {str(initial)}
 
         try:
             while True:
-                with self._client.stream("GET", current) as response:
+                self._pace()
+                self._request_count += 1
+                target_url = httpx.URL(current)
+                request_url = (
+                    target_url.copy_with(host=address) if self._pin_addresses else target_url
+                )
+                headers = {"Host": target_url.netloc.decode("ascii")}
+                extensions = {"sni_hostname": target_url.host}
+                with self._client.stream(
+                    "GET", request_url, headers=headers, extensions=extensions
+                ) as response:
                     if response.is_redirect:
                         target = _resolve_redirect(current, response.headers["Location"])
                         if target is None:
                             return self._failure(url, current, chain, "invalid_url", started)
+                        if allow_url is not None and not allow_url(str(target)):
+                            return self._failure(
+                                url, str(target), [*chain, str(target)], "robots_blocked", started
+                            )
+                        address = self._outbound_address(target)
+                        if address is None:
+                            return self._failure(url, current, chain, "blocked_private", started)
                         key = str(target)
                         if key in visited:
                             return self._failure(url, current, chain, "redirect_loop", started)
@@ -132,11 +197,13 @@ class Fetcher:
                         visited.add(key)
                         current = key
                         chain.append(current)
+                        self._last_end = time.perf_counter()
                         continue
 
                     body = self._read_body(response)
                     if body is None:
                         return self._failure(url, current, chain, "too_large", started)
+                    self._last_end = time.perf_counter()
                     return FetchResult(
                         url=url,
                         status=response.status_code,
@@ -145,6 +212,7 @@ class Fetcher:
                         body=body,
                         elapsed_ms=_elapsed_ms(started),
                         redirect_chain=list(chain),
+                        downgraded=_is_downgrade(chain),
                     )
         except httpx.TimeoutException:
             return self._failure(url, current, chain, "timeout", started)
@@ -152,12 +220,21 @@ class Fetcher:
             return self._failure(url, current, chain, "invalid_url", started)
         except httpx.HTTPError:
             return self._failure(url, current, chain, "connect_error", started)
+        finally:
+            self._last_end = time.perf_counter()
 
     def fetch_robots(self, base_url: str) -> RobotsPolicy:
-        """Load ``{base_url}/robots.txt``; missing or broken robots allows everything."""
+        """Load ``{base_url}/robots.txt``.
+
+        A missing robots.txt (404/other 4xx) allows everything. A 5xx status or a
+        network-level failure *defers* the crawl (RFC 9309 §2.3.1: an unavailable
+        robots.txt must not fail open), reported via ``RobotsPolicy.deferred``.
+        """
         robots_url = f"{base_url.strip().rstrip('/')}/robots.txt"
         result = self.fetch(robots_url)
         if result.status != 200:
+            if result.status >= 500 or (result.status == 0 and result.error != "blocked_private"):
+                return RobotsPolicy(disallow=["/"], allow=[], sitemaps=[], deferred=True)
             return RobotsPolicy(disallow=[], allow=[], sitemaps=[])
         text = result.body.decode("utf-8", errors="replace")
         return parse_robots(text, user_agent=self._user_agent)
@@ -187,6 +264,40 @@ class Fetcher:
                 return None
             chunks.append(chunk)
         return b"".join(chunks)
+
+    def _pace(self) -> None:
+        """Honor ``politeness_delay`` between requests (robots Crawl-delay)."""
+        if self.politeness_delay <= 0:
+            return
+        if self._last_end is None:
+            return
+        wait = self.politeness_delay - (time.perf_counter() - self._last_end)
+        if wait > 0:
+            self._sleep(wait)
+
+    def _outbound_address(self, target: httpx.URL) -> str | None:
+        """Return a validated connection address, never a hostname requiring DNS."""
+        if self._allow_private:
+            return target.host
+        host = target.host or ""
+        try:
+            addresses = self._resolver(host)
+        except OSError:
+            return None
+        if not addresses:
+            return None
+        approved: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+        for raw in addresses:
+            try:
+                address = ipaddress.ip_address(raw.strip())
+            except ValueError:
+                return None
+            if not address.is_global or address.is_multicast:
+                return None
+            approved.append(address)
+        # Prefer IPv4 for the default IPv4-bound transport.
+        approved.sort(key=lambda item: item.version)
+        return str(approved[0])
 
     def _failure(
         self,
@@ -241,11 +352,16 @@ def parse_robots(text: str, *, user_agent: str = DEFAULT_USER_AGENT) -> RobotsPo
 def is_allowed(policy: RobotsPolicy, path: str) -> bool:
     """Return whether ``path`` may be crawled under ``policy`` (RFC 9309 matching).
 
-    The longest matching pattern wins; ``Allow`` wins ties. ``*`` matches any sequence
-    and a trailing ``$`` anchors the pattern to the end of the URL. An empty policy or
-    a path that matches no rule is allowed. A ``Disallow: /`` blocks every path, as
-    required by RFC 9309 §2.2.2; only an empty ``Disallow:`` value is ignored.
+    A ``deferred`` policy (robots.txt unreachable with 5xx/network error) allows
+    nothing until robots.txt can be fetched: failing open would crawl a site whose
+    owner may have disallowed everything. The longest matching pattern wins;
+    ``Allow`` wins ties. ``*`` and a trailing ``$`` anchor are supported. An empty
+    policy or a path that matches no rule is allowed. A ``Disallow: /`` blocks
+    every path, as required by RFC 9309 §2.2.2; only an empty ``Disallow:`` value
+    is ignored.
     """
+    if policy.deferred:
+        return False
     target = _rule_path(path)
     best_length = -1
     allowed = True
@@ -392,6 +508,19 @@ def _resolve_redirect(current: str, location: str) -> httpx.URL | None:
     if target.scheme not in _ALLOWED_SCHEMES or not target.host:
         return None
     return target
+
+
+def _resolve_host(host: str) -> list[str]:
+    """Resolve ``host`` to IP strings; raises :class:`OSError` when unresolvable."""
+    infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    addresses = [str(info[4][0]) for info in infos if info[4] and info[4][0]]
+    return addresses
+
+
+def _is_downgrade(chain: list[str]) -> bool:
+    """Return True when the chain steps down from HTTPS to plain HTTP."""
+    schemes = [urlsplit(url).scheme.lower() for url in chain]
+    return any(first == "https" and second == "http" for first, second in pairwise(schemes))
 
 
 def _elapsed_ms(started: float) -> float:

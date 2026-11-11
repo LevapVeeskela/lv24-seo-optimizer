@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
+from lv24_seo.crawl.graph import normalize_url
 from lv24_seo.crawl.models import Issue, PageData, RuleContext, Severity
 from lv24_seo.crawl.rules.base import Rule
 
@@ -17,20 +18,6 @@ def _issue(url: str, detail: dict[str, Any] | None = None) -> Issue:
     # Rule.run() stamps id/severity, but keeping them here also makes direct _check() calls
     # (and focused unit tests) return fully labelled issues.
     return Issue(rule_id=_RULE_ID, severity=_SEVERITY, url=url, detail=detail or {})
-
-
-def _norm(url: str) -> str:
-    """Strip the fragment, lowercase the host and drop a trailing slash."""
-    parsed = urlsplit(url.strip())
-    return urlunsplit(
-        (
-            parsed.scheme.lower(),
-            parsed.netloc.lower(),
-            parsed.path.rstrip("/"),
-            parsed.query,
-            "",
-        )
-    )
 
 
 def _target(url: str) -> str:
@@ -67,7 +54,9 @@ def _robots_pattern(page: PageData, matchers: list[tuple[str, re.Pattern[str]]])
 def _index(pages: list[PageData]) -> dict[str, list[PageData]]:
     by_url: dict[str, list[PageData]] = {}
     for page in pages:
-        by_url.setdefault(_norm(page.url), []).append(page)
+        for candidate in (page.url, page.final_url):
+            if candidate:
+                by_url.setdefault(normalize_url(candidate), []).append(page)
     return by_url
 
 
@@ -77,7 +66,7 @@ def _check(ctx: RuleContext) -> list[Issue]:
     issues: list[Issue] = []
     seen: set[str] = set()
     for sitemap_url in ctx.sitemap_urls:
-        key = _norm(sitemap_url)
+        key = normalize_url(sitemap_url)
         if key in seen:
             continue
         seen.add(key)

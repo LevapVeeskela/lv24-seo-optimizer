@@ -95,10 +95,12 @@ class SitemapReader:
         *,
         max_urls: int = MAX_URLS_PER_SITEMAP,
         max_depth: int = 2,
+        max_docs: int = 100,
     ) -> None:
         self._fetch = fetch
         self._max_urls = max(0, max_urls)
         self._max_depth = max(0, max_depth)
+        self._max_docs = max(1, max_docs)
 
     def read(self, sitemap_url: str) -> SitemapDoc:
         """Read ``sitemap_url`` and its child sitemaps; fetch failures become ``errors``."""
@@ -106,9 +108,16 @@ class SitemapReader:
         queue: deque[tuple[str, int]] = deque([(sitemap_url, 0)])
         seen_sitemaps = {sitemap_url}
         seen_urls: set[str] = set()
+        docs_read = 0
 
         while queue:
+            if docs_read >= self._max_docs:
+                doc.errors.append("sitemap_docs_cap")
+                doc.truncated = True
+                break
             current, depth = queue.popleft()
+            # Failed fetches consume the same outbound budget as successful ones.
+            docs_read += 1
             result, failure = self._load(current)
             if failure is not None:
                 doc.errors.append(failure)
@@ -125,6 +134,10 @@ class SitemapReader:
                 doc.child_sitemaps.append(child)
                 if depth < self._max_depth:
                     queue.append((child, depth + 1))
+                else:
+                    # Depth cutoff: the child is known but was deliberately not
+                    # read, so the inventory is explicitly incomplete.
+                    doc.truncated = True
 
             for url in page.urls:
                 if url in seen_urls:
@@ -209,8 +222,11 @@ def _resolve_loc(loc: str | None, base_url: str) -> str | None:
     """Absolute http(s) URL or ``None`` for empty, non-http(s) and unresolvable locations."""
     if not loc:
         return None
-    resolved = urljoin(base_url, loc)
-    parts = urlsplit(resolved)
+    try:
+        resolved = urljoin(base_url, loc)
+        parts = urlsplit(resolved)
+    except ValueError:
+        return None
     if parts.scheme.lower() not in _HTTP_SCHEMES or not parts.netloc:
         return None
     return resolved

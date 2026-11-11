@@ -12,8 +12,15 @@ Graph semantics
 * Edges are unique, normalised ``(source -> target)`` pairs between internal
   URLs, excluding self-links. Sources are graph nodes; a target may be missing
   from the graph (a dangling edge) and is then also reported in ``broken``.
-* ``broken`` lists internal targets referenced by *any* page that are absent
-  from the 200-node set, i.e. they were not fetched successfully.
+* ``broken`` lists internal targets that were fetched and answered 4xx/5xx:
+  confirmed breakage with evidence. Redirects that land on a healthy page are
+  nodes, not findings; inconclusive fetches (timeout, block, oversize body) land
+  in ``failed``.
+* ``failed`` lists internal targets that were requested but produced no status
+  (network error, robots block, private-address refusal, oversize body).
+* ``unvisited`` lists internal targets that were never fetched (outside the crawl
+  budget, for example): unknown, not broken. An unvisited target must never be
+  reported as a confirmed broken link.
 * ``inbound`` counts distinct 200-node sources per node, so
   ``sum(inbound.values()) <= edges`` when dangling edges exist.
 * Depth is the BFS distance from ``root_url`` along graph nodes. Unreachable
@@ -27,7 +34,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urlunsplit
 
 from lv24_seo.crawl.models import PageData
@@ -46,19 +53,23 @@ class GraphStats:
     depths: dict[str, int]
     max_depth: int
     inbound: dict[str, int]
+    unvisited: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
 
 
 def normalize_url(url: str) -> str:
     """Return the canonical form of ``url`` used for graph comparisons.
 
     The scheme and host are lower-cased, the fragment is dropped, a default
-    port (``http:80`` / ``https:443``) is removed, the query string is kept and
-    a trailing slash is removed unless the URL points at the site root. A
-    scheme-relative URL (``//host/path``) and a URL without a path are treated
-    as ``https`` and ``/`` respectively, which matches browser behaviour.
+    port (``http:80`` / ``https:443``) is removed and the query string is kept.
+    The path — including a trailing slash — is preserved verbatim: ``/a`` and
+    ``/a/`` are different resources until a fetch proves otherwise, so they are
+    never merged before an HTTP check. A scheme-relative URL
+    (``//host/path``) and a URL without a path are treated as ``https`` and
+    ``/`` respectively, which matches browser behaviour.
 
-    Relative references are returned with only the fragment and trailing slash
-    removed; callers are expected to resolve them before crawling.
+    Relative references are returned with only the fragment removed; callers
+    are expected to resolve them before crawling.
     """
     raw = url.strip()
     parts = urlsplit(raw)
@@ -74,8 +85,6 @@ def normalize_url(url: str) -> str:
     if port is not None and port != _DEFAULT_PORTS.get(scheme):
         netloc = f"{netloc}:{port}"
     path = parts.path or "/"
-    if path != "/":
-        path = path.rstrip("/")
     return urlunsplit((scheme, netloc, path, parts.query, ""))
 
 
@@ -95,22 +104,45 @@ def build_graph(
     """
     host = _site_host_key(site_host)
     nodes: dict[str, PageData] = {}
+    outcomes: dict[str, set[int]] = {}
+    aliases = {
+        normalize_url(page.url): normalize_url(page.final_url or page.url)
+        for page in pages
+        if page.status == 200 and page.error is None
+    }
     for page in pages:
+        for candidate in (page.url, page.final_url):
+            if not candidate:
+                continue
+            key = normalize_url(candidate)
+            outcomes.setdefault(key, set()).add(page.status if page.error is None else 0)
         if page.status == 200 and page.error is None:
-            nodes.setdefault(normalize_url(page.url), page)
+            # A successful redirect proves an alias, not a second orphan page.
+            nodes.setdefault(aliases[normalize_url(page.url)], page)
 
     adjacency: dict[str, set[str]] = {url: set() for url in nodes}
     broken: set[str] = set()
+    failed: set[str] = set()
+    unvisited: set[str] = set()
     for page in pages:
-        source = normalize_url(page.url)
+        source = aliases.get(normalize_url(page.url), normalize_url(page.url))
         for link in page.links:
             if _host_key(link) != host:
                 continue
-            target = normalize_url(link)
+            target = aliases.get(normalize_url(link), normalize_url(link))
             if source in adjacency and target != source:
                 adjacency[source].add(target)
-            if target not in nodes:
+            if target in nodes:
+                continue
+            statuses = outcomes.get(target)
+            if statuses is None:
+                unvisited.add(target)
+            elif any(status >= 400 for status in statuses):
                 broken.add(target)
+            else:
+                # Fetched but inconclusive (timeout, block, 3xx remnant, ...):
+                # neither confirmed broken nor unknown.
+                failed.add(target)
 
     inbound: dict[str, int] = dict.fromkeys(sorted(nodes), 0)
     edges = 0
@@ -120,7 +152,8 @@ def build_graph(
             if target in inbound:
                 inbound[target] += 1
 
-    root = _pick_root(nodes, root_url)
+    resolved_root = aliases.get(normalize_url(root_url), root_url) if root_url else None
+    root = _pick_root(nodes, resolved_root)
     depths: dict[str, int] = dict.fromkeys(sorted(nodes), -1)
     if root is not None:
         seen = {root}
@@ -143,6 +176,8 @@ def build_graph(
         depths=depths,
         max_depth=max_depth,
         inbound=inbound,
+        unvisited=sorted(unvisited),
+        failed=sorted(failed),
     )
 
 
@@ -190,4 +225,4 @@ def _normalize_relative(url: str) -> str:
     without_fragment = url.split("#", 1)[0]
     if without_fragment in {"", "/"}:
         return without_fragment
-    return without_fragment.rstrip("/")
+    return without_fragment

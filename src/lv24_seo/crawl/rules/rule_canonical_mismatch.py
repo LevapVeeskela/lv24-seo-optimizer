@@ -40,10 +40,13 @@ def _check(ctx: RuleContext) -> list[Issue]:
         canonical = (page.canonical or "").strip()
         if not canonical:
             continue
+        # Compare against the fetched URL: after a redirect the canonical must
+        # point at the final address, not at the pre-redirect one.
+        identity = page.final_url or page.url
         # Relative canonicals are legal HTML; compare the URL they resolve to.
-        if _norm(urljoin(page.url, canonical)) == _norm(page.url):
+        if _norm(urljoin(identity, canonical)) == _norm(identity):
             continue
-        issues.append(_issue(page.url, {"canonical": canonical, "url": page.url}))
+        issues.append(_issue(page.url, {"canonical": canonical, "url": identity}))
     return issues
 
 
