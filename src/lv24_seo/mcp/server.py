@@ -26,13 +26,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import importlib
 import inspect
 import json
 import logging
 import sys
 from collections.abc import Callable, Sequence
-from typing import Any, Protocol, cast
+from functools import wraps
+from typing import Any, Protocol, cast, get_type_hints
 
 from mcp.types import ToolAnnotations
 
@@ -49,9 +51,13 @@ from lv24_seo.mcp.registry import TOOLS, ToolSpec, tools_as_json
 from lv24_seo.mcp.tools import TOOL_BUILDERS, ToolState, compact_json
 from lv24_seo.services import SeoService
 
-__all__ = ["create_server", "serve"]
+__all__ = ["close_workspaces", "create_server", "serve"]
 
 logger = logging.getLogger(__name__)
+
+#: Workspaces opened by :func:`create_server` (shared CLI/MCP history); closed by
+#: :func:`serve` on shutdown or explicitly via :func:`close_workspaces`.
+_OPEN_WORKSPACES: list[Any] = []
 
 SERVER_NAME = "lv24-seo"
 TRANSPORT_STDIO = "stdio"
@@ -60,8 +66,10 @@ _HTTP_ALIASES = frozenset({"http", TRANSPORT_HTTP, "streamable_http"})
 _INSTRUCTIONS = (
     "lv24-seo is a free-first SEO control plane. Start with `seo_weekly_report` for a broad "
     "review, then use the focused read tools. Every response is a JSON envelope: check `ok`, "
-    "`meta.truncated`, `meta.data_age_days` and `warnings` before drawing conclusions. The two "
-    "write tools are disabled unless the caller explicitly passes `allow_write=true`."
+    "`meta.truncated`, `meta.data_age_days` and `warnings` before drawing conclusions. "
+    "The two write tools are disabled unless the caller explicitly passes `allow_write=true`. "
+    "CLI runs and MCP sessions share one SQLite history when the workspace is initialised "
+    "(`lv24-seo init`); without it, snapshots are not saved."
 )
 _MAX_PORT = 65_535
 
@@ -149,7 +157,36 @@ def _register_tools(server: McpServer, state: ToolState) -> None:
             title=spec.title,
             description=spec.summary,
             annotations=_annotations(spec),
-        )(tool)
+        )(_owner_loop_tool(tool))
+
+
+def _owner_loop_tool(tool: Callable[..., Any]) -> Callable[..., Any]:
+    """Keep the synchronous service and SQLite connection on their owning loop.
+
+    MCP 2 dispatches synchronous handlers in worker threads (see
+    ``FuncMetadata.call_fn`` → ``anyio.to_thread.run_sync``). A ``sqlite3``
+    connection with ``check_same_thread=True`` (the project default) cannot be
+    touched from those workers, and ``check_same_thread=False`` would only trade
+    the thread error for concurrent transactions on one connection. Registering
+    an ``async`` adapter keeps every tool body on the event-loop thread: the
+    synchronous core runs serially there and blocks the loop while it runs, so
+    concurrent ``tools/call`` requests are serialised instead of racing in
+    SQLite. Resolve annotations before wrapping so SDK schema generation stays
+    exact (``include_extras=True`` preserves ``Annotated`` metadata).
+    """
+
+    @wraps(tool)
+    async def invoke(*args: Any, **kwargs: Any) -> Any:
+        return tool(*args, **kwargs)
+
+    try:
+        hints = get_type_hints(tool, include_extras=True)
+    except Exception:
+        hints = dict(getattr(tool, "__annotations__", {}))
+    invoke.__annotations__ = hints
+    with contextlib.suppress(TypeError, ValueError):
+        invoke.__signature__ = inspect.signature(tool, eval_str=True)  # type: ignore[attr-defined]
+    return invoke
 
 
 def _register_resources(
@@ -282,17 +319,38 @@ def create_server(service: SeoService | None = None) -> McpServer:
         )
 
     config: SeoConfig | None = None
+    workspace = None
     if service is None:
-        config = load_config()
-        service = SeoService(config)
+        from lv24_seo.composition import open_workspace
 
-    state = ToolState(service=service)
-    server = _SERVER_CLASS(name=SERVER_NAME, instructions=_INSTRUCTIONS)
-    _register_tools(server, state)
-    _register_resources(server, state, config)
-    _register_prompts(server)
+        workspace = open_workspace()
+        config = workspace.config
+        service = workspace.service
+
+    try:
+        state = ToolState(service=service)
+        server = _SERVER_CLASS(name=SERVER_NAME, instructions=_INSTRUCTIONS)
+        _register_tools(server, state)
+        _register_resources(server, state, config)
+        _register_prompts(server)
+    except BaseException:
+        if workspace is not None:
+            workspace.close()
+        raise
+    if workspace is not None:
+        _OPEN_WORKSPACES.append(workspace)
     logger.debug("MCP server assembled with %s (%s)", _SERVER_FLAVOR, SERVER_NAME)
     return cast(McpServer, server)
+
+
+def close_workspaces() -> None:
+    """Close every store opened by :func:`create_server` (idempotent)."""
+    while _OPEN_WORKSPACES:
+        workspace = _OPEN_WORKSPACES.pop()
+        try:
+            workspace.close()
+        except Exception:
+            logger.warning("could not close the MCP workspace store")
 
 
 def _accepts_keyword(function: Callable[..., Any], name: str) -> bool:
@@ -338,39 +396,45 @@ async def serve(transport: str = TRANSPORT_STDIO, *, port: int = 8765) -> None:
     mode = transport.strip().lower()
     if mode == TRANSPORT_STDIO:
         server = create_server()
-        runner = getattr(server, "run_stdio_async", None)
-        if not callable(runner):
-            raise SeoError(
-                code=CONFIG_INVALID,
-                message="the installed MCP SDK has no stdio async runner",
-                next_action="upgrade mcp or run the CLI instead",
-            )
-        await runner()
+        try:
+            runner = getattr(server, "run_stdio_async", None)
+            if not callable(runner):
+                raise SeoError(
+                    code=CONFIG_INVALID,
+                    message="the installed MCP SDK has no stdio async runner",
+                    next_action="upgrade mcp or run the CLI instead",
+                )
+            await runner()
+        finally:
+            close_workspaces()
         return
 
     if mode in _HTTP_ALIASES:
-        server = create_server()
-        runner = getattr(server, "run_streamable_http_async", None)
-        if not callable(runner):
-            raise SeoError(
-                code=CONFIG_INVALID,
-                message="the installed MCP SDK does not support streamable HTTP",
-                next_action="upgrade mcp (1.9+ or 2.x) or keep the stdio transport",
-            )
         http_port = _validate_port(port)
-        if _accepts_keyword(runner, "port"):
-            await runner(port=http_port)
-            return
-        # mcp 1.x reads host/port from server settings rather than the runner signature.
-        settings = getattr(server, "settings", None)
-        if settings is None or not hasattr(settings, "port"):
-            raise SeoError(
-                code=CONFIG_INVALID,
-                message="this MCP SDK cannot be given an HTTP port",
-                next_action="upgrade mcp or configure the port through the SDK settings",
-            )
-        settings.port = http_port
-        await runner()
+        server = create_server()
+        try:
+            runner = getattr(server, "run_streamable_http_async", None)
+            if not callable(runner):
+                raise SeoError(
+                    code=CONFIG_INVALID,
+                    message="the installed MCP SDK does not support streamable HTTP",
+                    next_action="upgrade mcp (1.9+ or 2.x) or keep the stdio transport",
+                )
+            if _accepts_keyword(runner, "port"):
+                await runner(port=http_port)
+                return
+            # mcp 1.x reads host/port from server settings rather than the runner signature.
+            settings = getattr(server, "settings", None)
+            if settings is None or not hasattr(settings, "port"):
+                raise SeoError(
+                    code=CONFIG_INVALID,
+                    message="this MCP SDK cannot be given an HTTP port",
+                    next_action="upgrade mcp or configure the port through the SDK settings",
+                )
+            settings.port = http_port
+            await runner()
+        finally:
+            close_workspaces()
         return
 
     raise SeoError(

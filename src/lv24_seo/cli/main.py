@@ -17,7 +17,9 @@ import html as html_module
 import json
 import os
 import platform
+import shlex
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
@@ -75,7 +77,7 @@ app.add_typer(report_app, name="report", help="Build reports.")
 app.add_typer(schedule_app, name="schedule", help="Host scheduler jobs.")
 app.add_typer(export_app, name="export", help="Export machine contracts.")
 
-_DB_FILENAME = "seo.sqlite3"
+_DB_FILENAME = "seo.sqlite3"  # canonical: lv24_seo.composition.DB_FILENAME
 _MAX_HUMAN_ROWS = 20
 _MAX_CELL = 100
 
@@ -849,7 +851,7 @@ def schedule_install(
         spec = ScheduleSpec(
             name=f"lv24-seo-{name}",
             cron=cron or _SCHEDULE_CRONS[name],
-            command=_report_command(name),
+            command=_report_command(name, config_path),
             workdir=_schedule_workdir(config_path),
             timezone=config.report.timezone,
             description=f"lv24-seo {name} SEO report",
@@ -881,7 +883,7 @@ def schedule_print(
         spec = ScheduleSpec(
             name=f"lv24-seo-{kind}",
             cron=cron,
-            command=_report_command(kind),
+            command=_report_command(kind, config_path, target=target),
             workdir=_schedule_workdir(config_path),
             timezone=config.report.timezone,
             description=f"lv24-seo {kind} SEO report",
@@ -963,6 +965,74 @@ def export_tools(
     emit(payload, as_json=as_json, lines=lines)
 
 
+@export_app.command("skills")
+def export_skills(
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Destination directory for the skill files."),
+    ] = Path("skills"),
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Accepted for uniformity; skills need no config."),
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Copy the packaged agent skills (SKILL.md + manifest) to ``--out``."""
+    del config_path
+
+    def action() -> dict[str, Any]:
+        import shutil as _shutil
+
+        import lv24_seo
+
+        source = _skills_source()
+        destination = Path(out).expanduser()
+        if source is None:
+            raise SeoError(
+                code=INTERNAL,
+                message="packaged skills not found",
+                next_action="reinstall lv24-seo from the wheel or copy skills/ from the repo",
+                detail={"package": str(lv24_seo.__file__)},
+            )
+        destination.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for skill_dir in sorted(source.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            target = destination / skill_dir.name
+            if target.exists():
+                _shutil.rmtree(target)
+            _shutil.copytree(skill_dir, target)
+            copied += 1
+        manifest = source / "manifest.json"
+        if manifest.is_file():
+            _shutil.copy2(manifest, destination / "manifest.json")
+        return ok({"path": str(destination), "skills": copied})
+
+    payload = run_envelope(action)
+    lines: list[str] = []
+    if payload.get("ok"):
+        data = payload.get("data") or {}
+        lines = [f"wrote {data.get('skills')} skills to {data.get('path')}"]
+    emit(payload, as_json=as_json, lines=lines)
+
+
+def _skills_source() -> Path | None:
+    """Locate the shipped skills: wheel data dir first, repo checkout second."""
+    import lv24_seo
+
+    package_dir = Path(str(lv24_seo.__file__)).parent
+    for candidate in (
+        package_dir.parent / "lv24_seo_skills",  # installed wheel layout
+        package_dir.parent.parent / "skills",  # source checkout layout
+    ):
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
 # -- service wiring --------------------------------------------------------------------------
 
 
@@ -988,10 +1058,9 @@ def _run(
 
 def _store_for(config: SeoConfig) -> Store | None:
     """Open the SQLite store only when ``init`` created the data directory."""
-    data_dir = Path(config.storage.data_dir).expanduser()
-    if not data_dir.is_dir():
-        return None
-    return Store(data_dir / _DB_FILENAME)
+    from lv24_seo.composition import open_store
+
+    return open_store(config)
 
 
 # -- init helpers ----------------------------------------------------------------------------
@@ -1305,12 +1374,20 @@ def _kind_from_cron(cron: str) -> str:
     return "daily" if len(fields) == 5 and fields[4] == "*" else "weekly"
 
 
-def _report_command(kind: str) -> str:
+def _report_command(kind: str, config_path: Path | None, *, target: str | None = None) -> str:
     executable = shutil.which("lv24-seo") or "lv24-seo"
-    prefix = f'"{executable}"' if " " in executable else executable
+    # The scheduled shell may run with a different cwd and several configs can
+    # share one folder, so the resolved absolute config path is embedded.
+    resolved = resolve_config_path(config_path)
+    arguments = [executable, "report", "weekly"]
     if kind == "daily":
-        return f"{prefix} report weekly --days 1 --lag-days 0 --send --json"
-    return f"{prefix} report weekly --send --json"
+        arguments.extend(["--days", "1", "--lag-days", "0"])
+    arguments.append("--send")
+    if resolved is not None:
+        arguments.extend(["--config", str(resolved)])
+    arguments.append("--json")
+    windows = target == "windows" or (target is None and _platform_family() == "windows")
+    return subprocess.list2cmdline(arguments) if windows else shlex.join(arguments)
 
 
 def _schedule_workdir(config_path: Path | None) -> str:

@@ -82,14 +82,29 @@ class ScheduleSpec:
                 "timezone must not be empty",
                 next_action="pass an IANA timezone such as 'Europe/Minsk'",
             )
+        if not timezone_available(self.timezone):
+            raise SeoError(
+                INVALID_INPUT,
+                f"unknown or unavailable timezone: {self.timezone!r}",
+                next_action="install tzdata or choose an installed IANA timezone",
+            )
+        for label, value in (("description", self.description), ("workdir", self.workdir or "")):
+            if "\n" in value or "\r" in value or "\0" in value:
+                raise SeoError(
+                    INVALID_INPUT,
+                    f"{label} must be a single line without NUL characters",
+                    next_action="remove control characters from the schedule metadata",
+                )
         _cron_fields(self.cron)
 
 
 def render_cron(spec: ScheduleSpec) -> str:
     """Render a newline-terminated crontab block.
 
-    The block carries the description and ``CRON_TZ`` as comments, followed by the schedule
-    line. ``workdir`` is applied with ``cd`` because crontab has no working-directory field.
+    ``CRON_TZ`` is an environment assignment (honoured by Vixie/ISC cron;
+    other cron daemons run on host time — see the install warnings), followed
+    by the schedule line. ``workdir`` is applied with ``cd`` because crontab
+    has no working-directory field.
     """
 
     command = spec.command.strip()
@@ -97,7 +112,7 @@ def render_cron(spec: ScheduleSpec) -> str:
         command = f"cd {shlex.quote(spec.workdir)} && {command}"
     lines = [
         f"# {spec.description}",
-        f"# CRON_TZ={spec.timezone}",
+        f"CRON_TZ={spec.timezone}",
         f"{spec.cron.strip()} {command}",
     ]
     return "\n".join(lines) + "\n"
@@ -122,7 +137,7 @@ def render_systemd(spec: ScheduleSpec) -> dict[str, str]:
         f"Description={spec.description} (timer)",
         "",
         "[Timer]",
-        f"OnCalendar={_on_calendar(minute, hour, weekday)}",
+        f"OnCalendar={_on_calendar(minute, hour, weekday)} {spec.timezone}",
         "Persistent=true",
         "",
         "[Install]",
@@ -139,8 +154,7 @@ def render_windows_xml(spec: ScheduleSpec) -> str:
 
     The declaration is UTF-16 because Task Scheduler expects a Unicode file; write the
     returned text with ``encoding="utf-16"``. ``StartBoundary`` is the next occurrence of
-    the requested weekday and time in ``spec.timezone`` (falls back to host local time when
-    the platform has no tz database).
+    the requested weekday and time in ``spec.timezone``. Unknown zones are rejected.
     """
 
     minute, hour, weekday = _simple_schedule(spec.cron, next_action=_WINDOWS_HINT)
@@ -217,6 +231,7 @@ def install(spec: ScheduleSpec, *, target: str = "auto", dry_run: bool = True) -
         "dry_run": dry_run,
         "files": files,
         "command": command,
+        "warnings": _schedule_warnings(spec, resolved),
     }
     if dry_run:
         return result
@@ -290,15 +305,26 @@ def _next_start(hour: int, minute: int, weekday: int | None, timezone: str) -> s
         candidate += timedelta(days=(py_weekday - candidate.weekday()) % 7)
         if candidate <= now:
             candidate += timedelta(days=7)
+    if candidate.tzinfo is not None:
+        # An aware boundary carries the UTC offset so Task Scheduler does not
+        # silently reinterpret the time in another zone.
+        return candidate.isoformat(timespec="seconds")
     return candidate.strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def _now(timezone: str) -> datetime:
+def timezone_available(timezone: str) -> bool:
+    """Return True when the host can resolve the IANA ``timezone``."""
+    if any(character.isspace() or character == "\0" for character in timezone):
+        return False
     try:
-        return datetime.now(ZoneInfo(timezone))
-    except (ZoneInfoNotFoundError, ValueError):
-        # Windows and slim containers often ship without tzdata; the date is all we need.
-        return datetime.now()
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return False
+    return True
+
+
+def _now(timezone: str) -> datetime:
+    return datetime.now(ZoneInfo(timezone))
 
 
 def _split_command(command: str) -> tuple[str, str]:
@@ -318,6 +344,27 @@ def _split_command(command: str) -> tuple[str, str]:
         )
     executable = parts[0].strip('"').strip("'")
     return executable, " ".join(parts[1:])
+
+
+def _schedule_warnings(spec: ScheduleSpec, target: str) -> list[str]:
+    """Honest per-backend timezone limits (F23).
+
+    Cron support for ``CRON_TZ`` varies. Systemd receives the IANA zone in
+    ``OnCalendar``. Windows calendar boundaries carry an offset, not an IANA
+    zone: schedules in zones with seasonal changes need operator review.
+    """
+    warnings: list[str] = []
+    if target == "cron":
+        warnings.append("confirm your cron daemon supports CRON_TZ; otherwise it uses host time")
+    elif target == "windows":
+        now = _now(spec.timezone)
+        offsets = {now.replace(month=month, day=1).utcoffset() for month in range(1, 13)}
+        if len(offsets) > 1:
+            warnings.append(
+                "Windows calendar XML has a fixed UTC offset, not the configured IANA zone; "
+                "review the task after daylight-saving transitions"
+            )
+    return warnings
 
 
 def _resolve_target(target: str) -> str:
