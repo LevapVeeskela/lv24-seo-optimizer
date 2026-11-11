@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.3.0).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.3.1).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -52,7 +52,7 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 
 ## Статус
 
-Бета (v0.3.0). Открытые честные ограничения: OAuth-токен GSC (service account — позже),
+Бета (v0.3.1). Открытые честные ограничения: OAuth-токен GSC (service account — позже),
 `sitemap submit` / `recrawl` отвечают `WRITE_DISABLED` (IndexNow реально отправляет),
 `crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`).
 

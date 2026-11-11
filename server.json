@@ -3,7 +3,7 @@
   "name": "io.github.LevapVeeskela/lv24-seo",
   "title": "LV24 SEO",
   "description": "Free-first SEO for agents: GSC, Yandex Webmaster/Metrika, Bing, CrUX, PSI, crawl.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "repository": {
     "url": "https://github.com/LevapVeeskela/lv24-seo-optimizer",
     "source": "github",
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "lv24-seo",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "transport": {
         "type": "stdio"
       },

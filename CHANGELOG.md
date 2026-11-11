@@ -5,6 +5,21 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-11
+
+Release notes: [`docs/releases/0.3.1.md`](docs/releases/0.3.1.md).
+
+Documentation-only patch: the npm package now carries the same current picture as the repository
+README. No code, schema or CLI/MCP contract changed.
+
+### Documentation
+
+- `packages/npm/README.md` rewritten for 0.3.x: banner and badges, 11 MCP tools including
+  `seo_report_diff`, week-over-week `report diff`, sitemap ↔ crawl coverage diff, honest
+  `complete`/`total`/`limitations` semantics, current usage examples and links to the release notes.
+- Root README (EN/RU), `docs/releases.md` and version metadata moved to `0.3.1` so PyPI, npm and
+  the MCP Registry stay aligned.
+
 ## [0.3.0] - 2026-11-11
 
 Release notes: [`docs/releases/0.3.0.md`](docs/releases/0.3.0.md).
