@@ -849,6 +849,69 @@ class SeoService:
 
     # -- reports -----------------------------------------------------------------------------
 
+    def report_diff(
+        self,
+        *,
+        base: str | None = None,
+        head: str | None = None,
+        kind: str = "weekly",
+    ) -> dict[str, Any]:
+        """Diff two stored report snapshots (default: the two newest periods). Read-only."""
+        warnings: list[str] = []
+        return self._respond(
+            "report_diff",
+            warnings,
+            lambda: self._report_diff(base, head, kind, warnings),
+        )
+
+    def _report_diff(
+        self, base: str | None, head: str | None, kind: str, warnings: list[str]
+    ) -> dict[str, Any]:
+        from lv24_seo.report.diff import diff_snapshots, render_diff_markdown
+
+        store = self._store
+        if store is None:
+            raise SeoError(
+                code=CONFIG_INVALID,
+                message="report diff needs stored snapshots, but no store is configured",
+                next_action="run `lv24-seo init`, then `lv24-seo report weekly` on two runs",
+            )
+        property_id = _report_property_id(self._config)
+        periods = store.list_snapshot_periods(kind, property_id, limit=50)
+        head_period = head or (periods[0] if periods else None)
+        base_period = base or next((p for p in periods if p != head_period), None)
+        if head_period is None or base_period is None:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=(
+                    f"need two stored {kind} snapshots for {property_id}; found {len(periods)}"
+                ),
+                next_action="run `lv24-seo report weekly` for another period or pass --base/--head",
+            )
+        snapshots: dict[str, Mapping[str, Any]] = {}
+        for label, period in (("base", base_period), ("head", head_period)):
+            loaded = store.load_snapshot(kind, property_id, period)
+            if loaded is None:
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message=f"no stored {kind} snapshot for {label} period {period}",
+                    next_action="list stored periods with `lv24-seo report diff --json`",
+                )
+            snapshots[label] = loaded
+        diff = diff_snapshots(snapshots["base"], snapshots["head"])
+        diff["markdown"] = render_diff_markdown(diff)
+        meta = {
+            "property_id": property_id,
+            "kind": kind,
+            "base_period": base_period,
+            "head_period": head_period,
+            "available_periods": periods,
+            "complete": bool(diff["comparable"]),
+            "truncated": False,
+            "limitations": list(diff["limitations"]),
+        }
+        return ok(diff, meta=meta, warnings=warnings)
+
     def weekly_report(
         self,
         *,

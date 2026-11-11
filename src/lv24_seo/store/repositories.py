@@ -641,6 +641,20 @@ class Store:
             raise ValueError("stored snapshot payload is not a JSON object")
         return cast(JsonObject, decoded)
 
+    def list_snapshot_periods(self, kind: str, property_id: str, *, limit: int = 20) -> list[str]:
+        """Stored snapshot periods for ``kind``/``property_id``, newest period first."""
+        rows = self.conn.execute(
+            """
+            SELECT period
+            FROM snapshots
+            WHERE kind = ? AND property_id = ?
+            ORDER BY period DESC
+            LIMIT ?
+            """,
+            (kind, property_id, max(0, int(limit))),
+        ).fetchall()
+        return [str(row["period"]) for row in rows]
+
     # -- delivery de-duplication --------------------------------------------------------------
 
     def record_send(

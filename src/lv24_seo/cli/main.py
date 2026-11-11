@@ -810,6 +810,49 @@ def report_weekly(
     emit(payload, as_json=as_json, lines=_report_lines(payload))
 
 
+@report_app.command("diff")
+def report_diff(
+    base: Annotated[
+        str | None,
+        typer.Option("--base", help="Older snapshot period START..END (default: second newest)."),
+    ] = None,
+    head: Annotated[
+        str | None,
+        typer.Option("--head", help="Newer snapshot period START..END (default: newest)."),
+    ] = None,
+    markdown: Annotated[
+        bool,
+        typer.Option("--markdown", help="Print only the Markdown diff (PR comment / CI summary)."),
+    ] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Diff two stored weekly report snapshots (read-only, no provider calls)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.report_diff(base=base, head=head),
+        persist=True,
+    )
+    if markdown and payload.get("ok") and not as_json:
+        data = payload.get("data") or {}
+        typer.echo(str(data.get("markdown", "")), nl=False)
+        return
+    emit(payload, as_json=as_json, lines=_diff_lines(payload))
+
+
+def _diff_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return ["report diff: no data"]
+    return str(data.get("markdown", "")).rstrip().splitlines()
+
+
 def _weekly(
     service: SeoService,
     config: SeoConfig,
