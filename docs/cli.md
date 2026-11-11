@@ -1,10 +1,10 @@
 # CLI reference
 
 Every command supports `--json` (machine output), `--config PATH` and a stable exit code.
-Output envelope:
+Output envelope (`meta.version` is the package version, e.g. `0.1.2`):
 
 ```json
-{ "ok": true, "data": {}, "meta": { "version": "0.1.0", "duration_ms": 812 }, "warnings": [] }
+{ "ok": true, "data": {}, "meta": { "version": "0.1.2", "duration_ms": 812 }, "warnings": [] }
 ```
 
 Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` partial · `1` unexpected.
@@ -40,14 +40,15 @@ lv24-seo auth logout --provider <name>
 
 ```bash
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 [--dimensions query,page] [--limit 100]
-lv24-seo gsc query --days 7 [--limit 100]        # shorthand: last N full days
 lv24-seo yandex queries [--limit 100] [--json]
 lv24-seo yandex indexing [--json]
 lv24-seo crawl [--start URL] [--max-urls 500] [--json]
 ```
 
-`crawl` respects `robots.txt`, follows same-host links breadth-first, runs all 30 rules and stores
-pages/issues in SQLite when a store is configured.
+GSC needs explicit `--start/--end` (there is no `--days` shorthand and no `--property`
+override — the property comes from `seo.toml`). `crawl` respects `robots.txt`, follows
+same-host links breadth-first, runs all rules and stores pages/issues in SQLite when a store is
+configured.
 
 ## Reports
 
@@ -90,8 +91,10 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
 ## Conventions
 
 - Dates are ISO-8601 (`2026-11-10`); durations are `7d`, `28d`, `90d` where a flag accepts them.
-- Write operations (sitemap submit, recrawl queue, IndexNow) are not exposed by the CLI yet; they land
-  in WP8.2 behind `--allow-write` with a dry-run + confirm token (ADR-0003).
+- Write operations (sitemap submit, recrawl queue, IndexNow submit) **are** exposed with gating:
+  a dry run first, then `--allow-write` plus the HMAC `confirm_token` from the plan (ADR-0003).
+  IndexNow actually submits; GSC sitemap submit and Yandex recrawl refuse with `WRITE_DISABLED`
+  when the provider path is not wired, instead of pretending.
 - No command prints a token, cookie or full `Authorization` header.
 
 ## Windows notes

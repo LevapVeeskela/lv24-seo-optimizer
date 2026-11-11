@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="330" viewBox="0 0 1200 330" role="img" aria-labelledby="title desc">
+  <title id="title">LV24 SEO workflow</title>
+  <desc id="desc">Configured provider APIs and a bounded site crawl feed comparable GSC windows and separate engine sections, then local history, CLI, MCP and optional email or Telegram delivery.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#060b27"/><stop offset="1" stop-color="#111b43"/></linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L8 5L0 10" fill="none" stroke="#7dd3fc" stroke-width="1.5"/></marker>
+  </defs>
+  <rect width="1200" height="330" rx="20" fill="url(#bg)"/>
+  <g font-family="Segoe UI,Arial,sans-serif">
+    <text x="38" y="47" fill="#f8fafc" font-size="24" font-weight="700">One workflow. Explicit sources. Local history.</text>
+    <text x="38" y="75" fill="#b7c4e0" font-size="15">Performance deltas compare GSC periods; other engines keep their own metrics and time windows.</text>
+    <g fill="#0c1636" stroke-width="1.5">
+      <rect x="38" y="111" width="250" height="150" rx="14" stroke="#22d3ee"/>
+      <rect x="330" y="111" width="250" height="150" rx="14" stroke="#c084fc"/>
+      <rect x="622" y="111" width="250" height="150" rx="14" stroke="#fbbf24"/>
+      <rect x="914" y="111" width="248" height="150" rx="14" stroke="#4ade80"/>
+    </g>
+    <g fill="none" stroke="#7dd3fc" stroke-width="2" marker-end="url(#arrow)"><path d="M294 186H322"/><path d="M586 186H614"/><path d="M878 186H906"/></g>
+    <g font-size="19" font-weight="700">
+      <text x="58" y="145" fill="#67e8f9">1. Collect</text><text x="350" y="145" fill="#d8b4fe">2. Check coverage</text>
+      <text x="642" y="145" fill="#fde68a">3. Build the report</text><text x="934" y="145" fill="#86efac">4. Use and deliver</text>
+    </g>
+    <g fill="#d8e2f5" font-size="15">
+      <text x="58" y="181">GSC / Yandex / Metrika</text><text x="58" y="207">Bing / CrUX / PSI</text><text x="58" y="233">Robots + sitemap crawl</text>
+      <text x="350" y="181">Caps, samples, failed sources</text><text x="350" y="207">Unknown is not zero</text><text x="350" y="233">Comparable periods only</text>
+      <text x="642" y="181">GSC headline + opportunities</text><text x="642" y="207">Separate engine sections</text><text x="642" y="233">SQLite / HTML / JSON</text>
+      <text x="934" y="181">CLI + MCP + agent skills</text><text x="934" y="207">SMTP / Telegram (opt-in)</text><text x="934" y="233">Host scheduler</text>
+    </g>
+    <text x="38" y="301" fill="#9caccb" font-size="14">No SERP scraping. Read tools by default. Provider credentials and reports stay under your control.</text>
+  </g>
+</svg>

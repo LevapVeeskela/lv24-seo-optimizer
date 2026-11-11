@@ -25,17 +25,15 @@ Base URL, crawl budget (`max_urls`, default 500, max 5000), template list when t
 
 ## Recipe
 
-1. `seo_crawl_site(start_url, max_urls=500, rules="all")`
+1. `seo_crawl_site(start_url, max_urls=50, include_rules=["robots-blocked","canonical-mismatch","noindex-on-200","client-error","server-error"])`
    → `{summary, issues:[{rule_id, severity, url, detail}]}`.
 2. Read results by severity, not by rule order:
-   - **critical**: `noindex_on_canonical`, `robots_blocked`, `canonical_conflict`, `5xx_to_bots`
-   - **high**: sitemap URL not 200/canonical, redirect chain > 1, soft-404, missing JSON-LD required props
+   - **critical**: `robots-blocked`, `sitemap-url-noindex`
+   - **high**: `sitemap-url-not-ok`, `broken-internal-link`, `canonical-mismatch`, redirect chains, soft-404, missing JSON-LD required props
    - **medium**: duplicate title/description, missing H1, alt coverage, hreflang reciprocity
-3. For SPA targets, run the rendering parity rule on 3–5 templates (raw HTML vs hydrated DOM).
-4. `crux origin` + `psi url` for the top 5 landing pages (field first, lab for diagnosis).
-5. Cross-check with `gsc_search_analytics(dimensions=["page"])` — pages with impressions but errors in
-   the crawl are the urgent ones.
-6. Produce a fix list grouped by owner: server/nginx, app code, content, provider settings.
+3. Compare with the source of truth: sitemap `loc` vs page canonical vs HTTP status.
+4. `yandex_indexing_state()` → check `search-urls/events` reasons and diagnostics.
+5. Produce a fix list grouped by owner: server/nginx, app code, content, provider settings.
 
 ## Decision tree
 
@@ -43,8 +41,8 @@ Base URL, crawl budget (`max_urls`, default 500, max 5000), template list when t
 critical found?
 ├─ yes → stop content work; fix indexing blockers, re-crawl, then re-check the sitemap
 └─ no
-   ├─ sitemap membership broken → fix generator, resubmit (write, confirm)
-   ├─ rendering parity broken   → prerender/bot-shell or SSR fix; re-test with Googlebot UA
+   ├─ sitemap membership broken → fix generator; IndexNow submit works today, GSC/Bing
+   │   sitemap submit is gated and currently answers WRITE_DISABLED — say which path applies
    └─ only medium issues        → batch into the weekly backlog with expected impact
 ```
 
@@ -53,12 +51,16 @@ critical found?
 1. **Verdict** — pass / pass with warnings / fail, plus the counts per severity.
 2. **Critical findings** — URL, evidence (status, header, DOM snippet), fix.
 3. **High/medium table** — rule, count, example URL, effort.
-4. **CWV** — p75 LCP/INP/CLS for the origin and the worst landing pages.
-5. **What I could not check** — paid-only signals, JS-heavy flows, authenticated pages.
+4. **CWV** — p75 LCP/INP/CLS for the origin from the weekly report's CrUX section when the
+   origin is configured (field data); lab numbers only when PSI URLs are configured.
+5. **What I could not check** — paid-only signals, JS-heavy flows (no rendered-DOM audit exists),
+   authenticated pages.
 
 ## Hard rules
 
-- Never crawl a site without respecting robots.txt unless the owner explicitly passes `--ignore-robots`
-  (and even then, never a third-party domain).
-- Severity is not negotiable: a `noindex` on a canonical URL is critical even if everything else passes.
+- Never crawl a site without respecting robots.txt unless the owner explicitly opts out
+  (there is no `--ignore-robots` flag; document the exception in the report instead) —
+  and never a third-party domain.
+- A `noindex` on a URL advertised in the sitemap (`sitemap-url-noindex`) is critical even if
+  everything else passes.
 - Every finding must include a reproducible command or URL.

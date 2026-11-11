@@ -2,43 +2,56 @@
 
 ## Supported versions
 
-Pre-alpha: only `main` is supported until the first tagged release.
+Use the latest 0.2.x release. Earlier releases contain known correctness and
+transport-safety defects; see [CHANGELOG](CHANGELOG.md) before upgrading.
 
 ## Reporting a vulnerability
 
-Open a private security advisory on GitHub (Security → Advisories → New advisory) or email
-`paulalexeev10@gmail.com`. Do not open a public issue for a vulnerability. Expect an answer within
-7 days.
+Use a private GitHub security advisory or email `paulalexeev10@gmail.com`.
+Do not publish credentials, customer queries or exploit details in public issues.
 
-## Secret handling
+## Credentials and local data
 
-* Tokens are read from, in order: CLI flags → `LV24_SEO_*` environment → OS keychain → `0600` file
-  under the data directory. Nothing is written into `seo.toml` or any tracked file.
-* `--allow-file-secrets` / `LV24_SEO_ALLOW_FILE_SECRETS=1` is only for headless hosts without a
-  keyring; it prints a warning every run.
-* Logs go through a redactor that strips `Authorization`, `access_token`, `refresh_token`, cookies
-  and any value shorter than 8 chars that looks like a token. Provider request/response bodies are
-  never logged at INFO.
-* CI runs `gitleaks` on the full history; GitHub push protection is enabled for the repository.
+* Secrets resolve from `LV24_SEO_*` environment variables, then the optional OS
+  keyring, then `data/secrets.json` only when `LV24_SEO_ALLOW_FILE_SECRETS=1` is set.
+  There are no token command-line flags; `auth set` reads stdin or a hidden prompt.
+* Install `lv24-seo[secrets]` for OS keychain support. On Windows, file fallback
+  relies on directory/file ACLs; POSIX mode 0600 cannot enforce Windows permissions.
+* No secrets belong in `seo.toml`, source control, reports or test fixtures.
+  Logging applies redaction, but callers must never log raw credentials.
+* Queries, URLs, traffic, snapshots and reports stay in the configured local
+  storage. Requested provider calls, site crawling and opt-in SMTP/Telegram
+  delivery transmit data to those destinations. No LV24 telemetry endpoint is used.
+* Back up SQLite before upgrading. Legacy rows of unknown temporal granularity
+  are retained and labelled, not silently converted or deleted.
 
-## Data handling
+## Network and delivery boundaries
 
-* Provider data (queries, pages, traffic) belongs to the property owner and stays in the local
-  database (`data/seo.sqlite3`) and report files (`reports/`). Neither directory is committed.
-* The tool sends nothing to LV24 or to any third party. The only outbound calls are the provider
-  APIs the user configured.
-* Fixtures in `tests/fixtures` are synthetic or anonymised; never real customer queries.
+* The default crawler refuses private, loopback and link-local destinations,
+  validates each redirect and pins the connection to a validated address while
+  preserving Host/SNI. Local crawling and HTTPS downgrade need explicit opt-in.
+  Injected transports are trusted embedding/test boundaries.
+* Crawl orchestration checks robots and origin scope before following a
+  destination. Robots network/5xx errors defer crawling; robots is not access control.
+* SMTP STARTTLS validates certificates before login. Telegram sends plain text
+  and treats HTTP/Bot API errors as failures.
+* Delivery uses semantic deduplication and serializes attempts through SQLite.
+  A crash after remote acceptance but before the ledger write can still duplicate
+  a message on retry: the contract is at-least-once, not exactly-once.
+* HTTP rate limiting is process-local. It cannot guarantee persistent daily or
+  account-wide quotas across separate CLI/MCP processes.
 
-## Defaults that protect users
+## Write operations
 
-* Read-only by default: `sitemap submit`, `recrawl queue`, `IndexNow submit` require
-  `--allow-write` (CLI) or a confirmed write tool (MCP) with an idempotency key.
-* Destructive provider calls are logged with a plan-first preview (`--dry-run` is the default for
-  write commands until `--apply` is passed).
-* Rate limiting is per provider and per method; the tool refuses to exceed documented quotas and
-  surfaces `Retry-After` instead of retrying blindly.
+IndexNow submission requires explicit write opt-in, a reviewed confirmation
+token and a local idempotency ledger. Sitemap submission and Yandex recrawl
+currently return `WRITE_DISABLED`. Write calls are not automatically retried.
+MCP annotations describe intent; they are not an authorization mechanism.
 
-## Dependencies
+## Supply chain
 
-Renovate/Dependabot is enabled for security updates. New runtime dependencies must be pinned,
-licensed permissively (Apache-2.0/MIT/BSD), and justified in the PR.
+CI runs offline tests, type/style checks, generated-schema drift checks and
+gitleaks. Actions are SHA-pinned and downloaded release tools have checksums.
+The release verification job checks the same commit and installs its wheel in
+an isolated environment. Repository protection and account billing settings
+must be checked separately; this file does not establish their current state.

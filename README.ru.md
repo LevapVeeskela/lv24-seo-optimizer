@@ -1,6 +1,8 @@
+![LV24 SEO — SEO insights for humans and AI agents](https://raw.githubusercontent.com/LevapVeeskela/lv24-seo-optimizer/main/.github/assets/banner.png)
+
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов.**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.2.0).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -8,29 +10,49 @@ PageSpeed Insights в одну нормализованную модель, кр
 
 Платные SEO-платформы не нужны: весь базовый путь работает на бесплатных тарифах.
 
+## Быстрый старт
+
+```bash
+uv tool install "lv24-seo[secrets]"
+lv24-seo doctor
+lv24-seo init --property https://example.com
+lv24-seo auth set --provider gsc --stdin   # нужен extra: pip install "lv24-seo[secrets]"
+lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
+lv24-seo report weekly --days 7 --out reports/
+lv24-seo export skills --out ./skills      # скиллы из wheel-пакета
+```
+
+Полный разбор на английском — в [`README.md`](README.md) и
+[`docs/guides/quickstart.md`](docs/guides/quickstart.md). Русская версия ниже —
+краткая выжимка; при расхождении точен английский текст и `lv24-seo <команда> --help`.
+
+![Источники, проверка покрытия, локальные отчёты и доставка](https://raw.githubusercontent.com/LevapVeeskela/lv24-seo-optimizer/main/docs/assets/workflow.svg)
+
 ## Что внутри
 
 | Слой | Что даёт |
 |---|---|
 | Источники | GSC, Вебмастер, Метрика, Bing/IndexNow, CrUX, PSI, собственный краул, логи nginx |
-| Отчёты | недельный дайджест с дельтами, триаж индексации, « Striking distance», деградация контента, техрегрессии |
-| MCP | 8–12 стабильных инструментов, по умолчанию только чтение |
-| CLI | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `audit`, `report`, `schedule`, `mcp serve` |
+| Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), триаж индексации, striking distance, деградация контента, техрегрессии |
+| MCP | 10 инструментов, 3 ресурса, 3 промпта; по умолчанию только чтение |
+| CLI | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `schedule`, `export`, `mcp serve` |
 | Скиллы | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
-| Автоматизация | cron / systemd timer / Планировщик Windows, GitHub Actions, приём логов nginx |
+| Автоматизация | cron / systemd timer / Планировщик Windows, рецепт GitHub Actions |
+
+## Честность данных
+
+- Заголовок недельного отчёта сравнивает только окна GSC; данные Яндекса и сессии Метрики
+  показываются отдельно и никогда не суммируются в общую дельту.
+- Ошибка одного провайдера не отменяет отчёт: ответ несёт `sources_failed` и `complete: false`.
+- Недостигнутая из-за бюджета ссылка — `unvisited`, а не «битая»; редирект в запретную зону
+  robots.txt — блокировка, а не находка.
+- Сырых архивов ответов провайдеров на диске нет; `raw_retention_days` зарезервирован.
 
 ## Статус
 
-**Pre-alpha**: репозиторий и план. План реализации —
-[`docs/plans/2026-11-10-implementation-plan.md`](docs/plans/2026-11-10-implementation-plan.md),
-обзор рынка и лимитов API — [`docs/research/`](docs/research/).
-
-## Принципы
-
-1. **Ноль расходов** — бесплатные тарифы, SQLite, SMTP/Telegram, публичный CI.
-2. **Только чтение по умолчанию** — отправка sitemap, переобход и IndexNow требуют явного `--allow-write`.
-3. **Честность данных** — в каждом ответе `truncated`, `total`, `data_age`, `limitations[]`.
-4. **Один источник правды** — реестр инструментов генерирует MCP-схемы, CLI и документацию.
+Бета (v0.2.0). Открытые честные ограничения: OAuth-токен GSC (service account — позже),
+`sitemap submit` / `recrawl` отвечают `WRITE_DISABLED` (IndexNow реально отправляет),
+`crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`).
 
 ## Для агентов
 

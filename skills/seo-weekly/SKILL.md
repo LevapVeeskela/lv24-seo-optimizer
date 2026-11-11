@@ -27,17 +27,18 @@ use defaults and **state them**.
 
 ## Recipe
 
-1. `seo_weekly_report(property, period="7d", compare="previous_period")`
-   → headline clicks/impressions/CTR/position + `data_age_days` + per-source `limitations`.
+1. `seo_weekly_report()`
+   → headline clicks/impressions/CTR/position (GSC windows only) + `data_age_days` + per-source `limitations` + `sources_failed`.
 2. If clicks dropped ≥ 10%:
-   - `gsc_search_analytics(dimensions=["device"])` → mobile vs desktop.
-   - `gsc_search_analytics(dimensions=["page"], limit=100)` → top losing pages.
-   - `seo_indexing_triage(property)` → new "not indexed" buckets.
-3. If impressions grew but CTR fell: `seo_opportunities(kind="ctr_gap")` — check title/snippet changes
-   and SERP feature shifts (no API for features; infer from `searchAppearance` in GSC).
+   - `gsc_search_analytics(property, start_date, end_date, dimensions=["device"])` → mobile vs desktop.
+   - `gsc_search_analytics(property, start_date, end_date, dimensions=["page"], limit=100)` → top losing pages.
+   - `seo_indexing_triage()` → new "not indexed" buckets.
+3. If impressions grew but CTR fell: `seo_opportunities()` returns `ctr_gap` candidates — check title/snippet changes
+   and SERP feature shifts (no API for features; infer from GSC `searchAppearance` dimensions).
 4. If Yandex shows different dynamics: `yandex_query_stats(host_id, limit=100)` and label the Yandex
    caveats (`top_3000_queries`, `no_query_page_join`).
-5. Pull 3–5 ranked actions from `seo_opportunities(kind="striking_distance"|"decay")`.
+5. Pull 3–5 ranked actions from `seo_opportunities()` and filter by `kind`
+   (`striking_distance` | `ctr_gap` | `decay`).
 
 ## Decision tree
 

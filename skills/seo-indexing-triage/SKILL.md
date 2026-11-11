@@ -20,20 +20,24 @@ requires_tools: [seo_indexing_triage, gsc_search_analytics, seo_crawl_site, yand
 
 ## Inputs
 
-Property, URL set (from the sitemap or a supplied list), engine (Google / Yandex / both).
-Cap triage at 200 URLs per run — URL Inspection allows 2,000/day/site but each call is one URL.
+Property, URL set (from the sitemap or a supplied list) and engine (Google / Yandex / both).
+Scope comes from the configured property, the stored crawl and provider data — the tools take
+no `property`/`urls`/`limit` inputs. URL Inspection allows one URL per call, so triage works off
+stored buckets, not live per-URL checks.
 
 ## Recipe
 
-1. `seo_indexing_triage(property, urls="sitemap", limit=200)`
+1. `seo_indexing_triage()`
    → buckets: `noindex`, `blocked_by_robots`, `canonical_mismatch`, `soft_404`, `redirect`,
    `discovered_not_indexed`, `crawled_not_indexed`, `duplicate`, `error_5xx`, `ok`.
 2. For every bucket, confirm with a cheap crawl before recommending a fix:
-   `seo_crawl_site(start_url, max_urls=50, rules=["robots","canonical","meta_robots","status"])`.
+   `seo_crawl_site(start_url, max_urls=50, include_rules=["robots-blocked","canonical-mismatch","noindex-on-200","client-error","server-error"])`.
 3. Compare with the source of truth: sitemap `loc` vs page canonical vs HTTP status.
-4. Yandex: `yandex_indexing_state(host_id)` → check `search-urls/events` reasons and diagnostics.
+4. Yandex: `yandex_indexing_state()` → check `search-urls/events` reasons and diagnostics (the host
+   comes from config; the tool takes no inputs).
 5. Propose fixes in priority order: `noindex`/`Disallow` → canonical → status codes → sitemap membership.
-6. After the fix ships: `seo_recrawl_request` (Yandex, quota-checked) and a sitemap re-submit (Google).
+6. After the fix ships: `seo_recrawl_request` (Yandex, quota-checked). Google has no URL-submission
+   API — say so; the GSC sitemap path is gated and currently answers `WRITE_DISABLED`.
    Both are writes — dry-run first, then confirm.
 
 ## Decision tree

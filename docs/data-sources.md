@@ -71,6 +71,8 @@ notification settings, Yandex Business card/reviews.
 2. Check `sampled` / `sample_share` before publishing a number; store the accuracy flag with the value.
 3. Organic only: `filters=ym:s:lastTrafficSource=='organic'`.
 4. Goal ids come from `GET /management/v1/counters/{id}/goals` once and are stored in config.
+5. The client uses documented `GET /stat/v1/data` with query parameters. Offline contract
+   tests check the method and parameters; live property acceptance still needs owner credentials.
 
 ## 4. Bing Webmaster + IndexNow
 
@@ -100,7 +102,13 @@ sessions and key events. Join to GSC on the URL path, not on the query. Threshol
 
 ## 7. Own crawl and logs
 
-* Crawl: `httpx` + `lxml`, respecting `robots.txt`, `Crawl-delay` and a global concurrency cap (default 4).
+* Crawl: serial `httpx` fetcher over the stdlib `html.parser` (no `lxml`), respecting
+  `robots.txt` (RFC 9309 longest-match, `Allow` wins ties, 5xx/network defers instead of failing
+  open), `Crawl-delay` pacing between requests, an outbound SSRF policy (loopback/private/link-local
+  refused unless `allow_private` is set for local audits, DNS re-resolved per redirect hop) and a
+  request budget (`1 + max_urls × (max_redirects + 1)`, reported as `request_count/request_budget`).
+  `concurrency` is reserved and has no effect today. `/a` and `/a/` stay distinct until a fetch
+  proves otherwise; unvisited link targets are reported as `unvisited`, never as broken.
 * Logs: nginx JSON access log → bot verification by **reverse DNS / published IP ranges**, never by UA
   string alone.
 
@@ -108,8 +116,8 @@ sessions and key events. Join to GSC on the URL path, not on the query. Threshol
 
 | Provider | Free tier | Entry price | What it adds | Status |
 |---|---|---|---|---|
-| DataForSEO | ~$1 trial | pay per task | SERP + backlinks + on-page | adapter in W8 |
-| SerpApi | 250 searches/mo | $25/mo | SERP snapshots, rank tracking | adapter in W8 |
+| DataForSEO | ~$1 trial | pay per task | SERP + backlinks + on-page | planned, not shipped |
+| SerpApi | 250 searches/mo | $25/mo | SERP snapshots, rank tracking | planned, not shipped |
 | Ahrefs | none | $129/mo | backlinks, keywords | documented only |
 | Semrush | none | API units | backlinks, keywords | documented only |
 | SE Ranking / Serpstat / Moz / Majestic | trial / small | $20–400/mo | rank tracking, backlinks | documented only |

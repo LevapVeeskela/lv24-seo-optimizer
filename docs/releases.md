@@ -1,19 +1,20 @@
 # Releases
 
 This page is the release runbook for `lv24-seo`. It covers the versioning contract, the tag-driven
-PyPI workflow, the manual MCP Registry step, rollback and cost.
+PyPI workflow, the quality gate on the release SHA, and rollback and cost.
 
-The pipeline is **release plumbing only**: it builds the sdist/wheel and publishes them to PyPI with
-OIDC Trusted Publishing, and publishes the thin `@lv24/seo` npm launcher when `NPM_TOKEN` is present.
-Nothing in this repository publishes automatically to the MCP Registry, GHCR or any paid service. The
-first public release is `0.1.0`.
+The pipeline is **release plumbing only**: it verifies the exact tagged commit (lint, types,
+offline tests, schema drift, installed-wheel smoke), builds the sdist/wheel, publishes them to
+PyPI with OIDC Trusted Publishing, publishes the thin `@lv24/seo` npm launcher with npm OIDC
+trusted publishing, and publishes `server.json` to the MCP Registry. No long-lived NPM_TOKEN or
+PyPI token exists. The current release is `0.2.0`.
 
 | Artifact | Built by | Published by | Cost |
 |---|---|---|---|
-| PyPI sdist + wheel (`lv24-seo`) | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | `publish-pypi` job, OIDC | $0 (public repo, standard runner) |
-| npm launcher (`@lv24/seo`) | `packages/npm` | `publish-npm` job, `NPM_TOKEN` | $0 (public npm package) |
-| `server.json` (MCP Registry) | this repository | `publish-mcp-registry` job, OIDC | $0 |
-| GHCR image (optional) | disabled job in `release.yml` | not enabled | public package storage/egress free; build minutes still count |
+| PyPI sdist + wheel (`lv24-seo`) | [release workflow](../.github/workflows/release.yml) `build` job | `publish-pypi` job, OIDC, after the `verify` job passes on the same SHA | $0 (public repo, standard runner) |
+| npm launcher (`@lv24/seo`) | `packages/npm` | `publish-npm` job, npm OIDC trusted publishing | $0 (public npm package) |
+| `server.json` (MCP Registry) | this repository | `publish-mcp-registry` job, OIDC, automatic after PyPI | $0 |
+| GHCR image (optional) | disabled job in `release.yml` | not enabled | public container package storage/egress free; build minutes still count |
 
 ## Versioning policy
 
@@ -150,9 +151,8 @@ Notes:
 * `package.json` → `repository.url` must match the GitHub repository exactly (it does).
 * Provenance is generated automatically by trusted publishing on a public repo.
 
-Fallback if `npm trust` cannot target a package that does not exist yet: create a **Granular Access
-Token** (read/write on `@lv24`, 2FA bypass) and store it as the repository secret `NPM_TOKEN`, then
-publish the first version locally:
+Fallback if `npm trust` cannot target a package that does not exist yet: publish the first
+version locally with a short-lived Granular Access Token (read/write on `@lv24`, 2FA bypass):
 
 ```bash
 cd packages/npm
@@ -161,6 +161,7 @@ npm publish --access public
 ```
 
 After the first publish, configure the trusted publisher for future releases and revoke the token.
+The first publish **must** complete within 2 days of creating the trust relationship.
 
 npm versions are immutable: publish a new patch version if `0.1.0` already exists. An npm-only fix does
 not require a new PyPI release or a new tag — bump `packages/npm/package.json` and publish manually.
@@ -176,9 +177,10 @@ git ls-files --error-unmatch uv.lock
 grep -F 'mcp-name: io.github.LevapVeeskela/lv24-seo' README.md
 ```
 
-The latest `ci` run on `main` must be green (lint, typecheck, tests, schemas, gitleaks). The release
-workflow builds but does **not** run tests, and `ci.yml` runs on branches/PRs, not on tags. Tag the
-exact commit whose CI run is green.
+The latest `ci` run on `main` must be green (lint, typecheck, tests, schemas, gitleaks). The tag
+workflow does **not** rely on that alone: the `verify` job re-runs lint, types, offline tests,
+schema drift and an installed-wheel smoke test on the **exact tagged commit**, and every publish
+job needs it. Tag the exact commit whose CI run is green.
 
 ### 1. Bump the version and changelog
 
@@ -211,7 +213,7 @@ write UTF-16 and corrupt the file. The diff must contain only intended MCP surfa
 ### 3. Quality gate
 
 ```bash
-uv sync --extra dev
+uv sync --locked --extra dev
 uv run pytest -q -m "not live and not network"
 uv run ruff check .
 uv run ruff format --check .
@@ -226,16 +228,21 @@ part of a release gate unless you own the provider accounts.
 ```bash
 uv build
 ls -lh dist/
-uvx --from ./dist/lv24_seo-X.Y.Z-py3-none-any.whl lv24-seo version
+rm -rf /tmp/wheel-smoke && python3 -m venv /tmp/wheel-smoke
+/tmp/wheel-smoke/bin/pip install --quiet dist/lv24_seo-X.Y.Z-py3-none-any.whl
+/tmp/wheel-smoke/bin/lv24-seo --help >/dev/null
+/tmp/wheel-smoke/bin/lv24-seo export skills --out /tmp/skills-check
 ```
 
-Expected output: `lv24-seo X.Y.Z`. This proves the wheel contains the entry point before anything is
-uploaded.
+The isolated venv proves the wheel is whole without the source checkout: entry
+point, imports and the packaged skills (`lv24_seo_skills/`). Never validate a
+release against the editable install — it hides missing files such as an
+unlisted `py.typed`.
 
 ### 5. Commit, wait for CI, tag
 
 ```bash
-git add pyproject.toml src/lv24_seo/__init__.py server.json schemas/tools.json CHANGELOG.md README.md
+git add pyproject.toml uv.lock src/lv24_seo/__init__.py server.json packages/npm/package.json schemas/tools.json CHANGELOG.md README.md README.ru.md
 git commit -m "[SEO](release) - vX.Y.Z"
 git push origin main
 # Wait for the ci workflow on this commit to pass.
@@ -243,10 +250,10 @@ git tag -a "vX.Y.Z" -m "vX.Y.Z"
 git push origin "vX.Y.Z"
 ```
 
-Pushing the tag triggers `release.yml`. The build job re-checks that the tag, `pyproject.toml`,
-`__version__` and `server.json` agree, then builds and uploads an artifact for 7 days. The `publish-pypi` job downloads
-it and uploads to PyPI. A manual `workflow_dispatch` is a build-only dry run unless it is run on a
-`v*` tag ref.
+Pushing the tag triggers `release.yml`. The build job checks the lockfile, tag and version
+alignment, then builds and uploads an artifact for 7 days. The `verify` job checks the same SHA;
+only then do the `publish-pypi` / `publish-npm` / `publish-mcp-registry` jobs run. A manual
+`workflow_dispatch` is a build-only dry run unless it is run on a `v*` tag ref.
 
 ### 6. Watch the workflow
 
@@ -364,7 +371,8 @@ The policy is **zero spend**:
   retention. A private repository consumes included minutes and then bills per minute; artifact
   storage beyond the quota is billed too. Check the repository plan before making it private.
 * **PyPI:** free. No paid plan, no token secret, OIDC only.
-* **MCP Registry:** free. Publishing is manual, so it consumes no Actions minutes.
+* **MCP Registry:** free. Publishing is automatic after PyPI, so it consumes the same two
+  release jobs and no extra minutes beyond them.
 * **GHCR (disabled):** public container packages are free to store and pull, but building and pushing
   still consumes Actions minutes. The optional job in `release.yml` stays commented until a Dockerfile
   exists and the first PyPI release is green.

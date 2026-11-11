@@ -17,7 +17,7 @@ default_property = "sc-domain:example.com"
 
 [providers.gsc]
 property = "sc-domain:example.com"
-# auth: keychain by default; alternatives: env var name, or a 0600 file outside the repo
+# Reserved auth label; credentials resolve from env, optional keyring, then opt-in file fallback.
 auth = "keychain"
 
 [providers.yandex_webmaster]
@@ -60,32 +60,32 @@ severity = "critical"   # critical | all
 
 [crawl]
 max_urls = 500
-concurrency = 4
+concurrency = 4   # reserved for a future bounded worker pool; the crawler is serial today
 respect_robots = true
 user_agent = "lv24-seo/0.1 (+https://example.com/bot)"
 
 [storage]
 data_dir = "./data"
-raw_retention_days = 90
+raw_retention_days = 90   # reserved: no raw archives are written yet, pruning is a logged no-op
 ```
 
 > Telemetry is not configurable: the tool sends nothing anywhere. There is no `[privacy]` section and
-> no multi-site block yet — one `seo.toml` describes one project (multi-site lands in WP8.4).
+> One `seo.toml` describes one project; a multi-site block is not implemented.
 
 ## Secrets
 
 | Source | How |
 |---|---|
-| OS keychain (default) | `lv24-seo auth login` stores the token; read back with `keyring` |
+| OS keychain | `lv24-seo auth set --provider … --stdin` stores the token through the optional `secrets` extra; `auth login` prints instructions only |
+| Optional `secrets` extra | `pip install "lv24-seo[secrets]"` — without it, keychain calls fail and env/file fallbacks apply |
 | Environment | `LV24_SEO_YANDEX_WEBMASTER_TOKEN=…` |
-| File | `--secrets-file /run/secrets/seo.json` (`0600`, outside the repo) |
 | Headless fallback | `LV24_SEO_ALLOW_FILE_SECRETS=1` + `data/secrets.json` (0600, warning on every run) |
 
-Token lifetimes: Yandex Webmaster ~6 months, Metrika ~1 year, GSC refresh token until revoked (OAuth app
-must be in production mode, otherwise refresh tokens expire in 7 days). Google service accounts do not
-expire but must be added to the property as Full/Owner.
+Credentials currently use manually supplied access tokens/API keys. There is no built-in refresh-token
+or service-account flow. Expiry depends on the provider and grant; presence does not prove validity.
 
-`lv24-seo auth status` prints provider, scope, expiry and `verified: true|false` — never the token.
+`lv24-seo auth status` reports provider, secret presence and storage source, never the token.
+It does not verify permissions or perform an API call.
 
 ## Environment variables
 

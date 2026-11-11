@@ -13,7 +13,15 @@ skills/
   manifest.json          # name, version, schema_hash, tool list
 ```
 
-Mirrors (thin, generated): `.claude/skills/<name>`, `.opencode/skills/<name>`. Never edit mirrors by hand.
+Mirrors (`.claude/skills/<name>`, `.opencode/skills/<name>`) are **planned, not shipped**:
+there is no generator and no copy in this repo today. Install the canonical skills from any
+distribution with the CLI — this works from the wheel, not just from a checkout:
+
+```bash
+lv24-seo export skills --out ./skills                 # canonical set + manifest.json
+lv24-seo export skills --out ~/.claude/skills         # Claude Code
+lv24-seo export skills --out .opencode/skills         # OpenCode
+```
 
 ## Frontmatter
 

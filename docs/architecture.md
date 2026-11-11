@@ -35,7 +35,9 @@ Every adapter returns the same envelope — this is what makes multi-engine fusi
 ```python
 @dataclass(frozen=True)
 class ProviderResult[T]:
-    source: str  # "gsc" | "yandex_webmaster" | "yandex_metrika" | "bing" | "crux" | "psi" | "crawl"
+    source: (
+        str  # canonical id: "gsc" | "yandex_webmaster" | "yandex_metrika" | "bing" | "crux" | "psi"
+    )
     property_id: str  # provider property id (GSC "sc-domain:x", Yandex host_id)
     fetched_at: datetime  # UTC
     data_age_days: int  # provider lag at fetch time
@@ -58,24 +60,35 @@ Rules:
 | Table | Purpose | Key columns |
 |---|---|---|
 | `properties` | configured sites | `provider`, `property_id`, `display_name`, `host_id`, `counter_id`, `verified` |
-| `metric_daily` | long-format aggregates | `property_id`, `source`, `date`, `scope` (`total`/`query`/`page`/`device`/`country`), `key`, `metric`, `value`, `accuracy` |
-| `pages` | URL inventory | `property_id`, `url`, `status_code`, `index_state`, `canonical`, `title_hash`, `last_seen`, `first_seen` |
-| `crawl_runs` | crawl metadata | `id`, `start_url`, `started_at`, `finished_at`, `urls`, `errors`, `status` |
+| `metric_daily` | true per-day rows only (queries with a `date` dimension) | `property_id`, `source`, `date`, `scope` (`total`/`query`/`page`/`device`/`country`), `key`, `metric`, `value`, `accuracy` |
+| `metric_windows` | window aggregates with their real `[start, end]` (weekly GSC totals, Metrika visits) | `property_id`, `source`, `start`, `end`, `scope`, `key`, `metric`, `value`, `accuracy` |
+| `schema_migrations` | applied migration ledger (append-only) | `version`, `description`, `applied_at` |
+| `pages` | URL inventory | `property_id`, `url`, `status`, `index_state`, `canonical`, `title_hash`, `last_seen`, `first_seen` |
+| `crawl_runs` | legacy crawl metadata (superseded by `runs kind=crawl`) | `id`, `start_url`, `started_at`, `finished_at`, `urls`, `errors`, `status` |
 | `issues` | crawl + provider findings | `rule_id`, `severity`, `property_id`, `url`, `detail_json`, `first_seen`, `last_seen`, `state` (`open`/`fixed`/`ignored`) |
-| `snapshots` | diff base for reports | `kind`, `property_id`, `period`, `payload_hash`, `payload_gz` |
+| `snapshots` | diff base for reports | `kind`, `property_id`, `period`, `content_hash`, `payload_gz` |
 | `sends` | delivery ledger | `kind`, `property_id`, `period`, `content_hash`, `channel`, `sent_at`, `status` |
 | `bot_daily` | nginx log rollup | `property_id`, `date`, `bot`, `status`, `hits`, `bytes`, `p95_ms` |
 | `runs` | everything executed | `id`, `kind`, `property_id`, `started_at`, `finished_at`, `status`, `stats_json` |
 
-Raw provider payloads are written to `data/raw/<source>/<date>/<sha>.json.gz` and pruned after 90 days;
-aggregates stay forever (they are tiny). `data/seo.sqlite3` is git-ignored.
+Daily rows and window aggregates live in different tables by construction: a request with a
+`date` dimension lands in `metric_daily` keyed by that date; anything else lands in
+`metric_windows` keyed by its real window, so overlapping windows never overwrite each other.
+Migration 2 marks pre-migration daily rows with `accuracy=legacy_unknown_granularity`; their
+original window cannot be recovered. Normal daily reads exclude them. Repository callers may
+explicitly use `include_legacy=True` to inspect retained data; no historical rows are deleted.
+
+There are no on-disk raw provider archives: snapshots are gzipped canonical JSON inside the
+`snapshots` table, and `raw_retention_days` is currently a reserved setting (pruning logs that it
+has no effect). `data/seo.sqlite3` is git-ignored. Schema changes ship as numbered migrations in
+`store/db.py` recorded in `schema_migrations`; user data is never deleted by an upgrade.
 
 ## 4. Analysis layer
 
 | Module | Input | Output |
 |---|---|---|
 | `analysis/delta.py` | two `metric_daily` windows | headline deltas with significance thresholds |
-| `analysis/opportunities.py` | GSC/Yandex query rows + positions | striking distance (pos 8–20, impressions ≥ N), CTR gaps, decayed pages |
+| `analysis/opportunities.py` | current + previous GSC `query`/`page` rows | striking distance (pos 8–20, impressions ≥ N), CTR gaps, decayed pages (vanished rows count as zero only with complete, untruncated coverage) |
 | `analysis/indexing.py` | URL Inspection + Yandex indexing + crawl | reason buckets + next action |
 | `analysis/rules/` | crawl results | one module per rule, `RULE_ID`, `SEVERITY`, `check(ctx)` |
 | `analysis/fusion.py` | per-provider query rows | joined view with explicit provider caveats (no fake query×page join) |
@@ -85,27 +98,41 @@ query level (clicks/impressions) separately, and the report labels which engine 
 
 ## 5. Report layer
 
-* `report/builders/*` produce a `Report` dataclass (JSON-serialisable).
-* `report/render/{text,html,md}.py` render the same object; no business logic in renderers.
-* `report/delivery/{smtp,resend,telegram}.py` implement `deliver(report, channels)` with idempotency
-  (`sends` ledger + `content_hash`).
-* Every report carries `data_age`, per-source `limitations`, and a "what changed since last time" block.
+* `report/builders.py` produce a `Report` dataclass (JSON-serialisable).
+* `report/render.py` render the same object; no business logic in renderers.
+* `report/delivery.py` implements `deliver(report, …)` for SMTP email and Telegram with a
+  verifying TLS context, a normalized transport result (an HTTP 400/429 is `failed`, never
+  `sent`), a semantic content hash (volatile envelope fields excluded) and an at-least-once
+  retry policy documented on the function.
+* Every report carries `data_age`, per-source `limitations`, and per-engine coverage: the weekly
+  headline compares GSC windows only, `sources_failed` names isolated provider failures, and
+  `meta.complete` also accounts for capped, sampled, empty and comparison inputs. GSC query rows
+  carry an explicit top-rows limitation even below the caller cap; they do not prove exhaustive coverage.
 
 ## 6. Surfaces
 
-* **CLI** parses args → calls the same service functions as MCP → prints `{ok,data,meta,warnings}`.
-* **MCP** tools call the same services; schemas are generated from `mcp/registry.py`.
+* **CLI** parses args → builds one `composition.Workspace` (config + shared SQLite history) →
+  runs one service operation → closes storage afterwards.
+* **MCP** tools call the same services through the same composition root, so CLI and MCP share
+  one history; the store closes when the transport stops. Without `init`, both run store-less
+  with an explicit warning.
 * **Skills** are documentation + recipes over the MCP tools; they contain no code paths of their own.
 * **Automation** only composes CLI/service calls; no business logic.
 
 ## 7. Concurrency and failure model
 
-* One `httpx.AsyncClient` per provider with `limits(max_connections=4)`, per-provider semaphore, and a
-  shared token-bucket limiter (`core/ratelimit.py`).
-* Retries: idempotent GETs only, exponential backoff with jitter, respect `Retry-After`, cap 3 attempts.
-* Partial failure is normal: a weekly report with 4 of 5 sources produces a report plus a
-  `sources_failed` block; it never fails the whole run.
-* Every run writes a `runs` row, including failures, so the next run can explain "no data since".
+* Synchronous provider clients share a process-local token-bucket limiter keyed by provider/method.
+  Every retry acquires capacity. This limits request frequency, not persistent daily or cross-process
+  quotas. The crawler separately pins validated destination IPs while retaining the original Host/SNI.
+* Retries: idempotent GET/HEAD plus explicitly opted-in safe *read* POSTs (GSC searchAnalytics,
+  CrUX queryRecord) with `Retry-After` support, capped at 3 attempts. Write POSTs never retry.
+* Partial failure is normal: a weekly report with failing sources still produces available sections
+  plus `sources_failed` and `complete: false`; it never cancels the whole run for one engine's
+  401/403/429/timeout. A total outage yields an explicit no-data report.
+* Crawl persistence is one transaction per sync (`Store.atomic`); a crash mid-window cannot leave a
+  half-synced period. Crawl and provider operations record `runs` rows with stats.
+* The crawler is serial with `Crawl-delay` pacing; `concurrency` stays reserved. Read POST retry
+  opt-in changes retry safety, not concurrency.
 
 ## 8. Security boundaries
 

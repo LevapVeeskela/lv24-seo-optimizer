@@ -6,8 +6,10 @@ Yandex Metrika, Bing/IndexNow, CrUX, PageSpeed Insights, a 30-rule technical cra
 email/Telegram reports, an MCP server and agent skills).
 
 This npm package contains **no SEO logic**. It forwards every argument to
-`uvx --from lv24-seo lv24-seo …` (or to a `lv24-seo` binary already on `PATH`), so the CLI, its
-`--json` envelope and the documented exit codes behave exactly as in the Python package.
+`uvx --from lv24-seo==<this-version> lv24-seo …` (or to a `lv24-seo` binary already on `PATH`),
+so the CLI, its `--json` envelope and the documented exit codes behave exactly as in the Python
+package. The version is pinned to this package's own version; set `LV24_SEO_PIN=0` to opt back
+into the unpinned (`latest`) lookup.
 
 ## Requirements
 
@@ -32,10 +34,26 @@ The first run may take a few seconds while uv resolves and caches the Python pac
 Tokens are read from the keychain (set them with `lv24-seo auth set`) or from `LV24_SEO_*`
 environment variables. Nothing is written by this wrapper.
 
-If auto-detection picks the wrong binary, point it explicitly:
+If auto-detection picks the wrong binary, point it explicitly (must be absolute):
 
 ```bash
 LV24_SEO_BIN=/usr/local/bin/lv24-seo npx @lv24/seo doctor
+```
+
+Guards: the fallback resolves `lv24-seo` through `PATH` but never execs the launcher's own
+file (or an npm wrapper pointing back at it) — a recursion attempt exits loudly instead of
+spawning itself. A relative `LV24_SEO_BIN` is rejected with exit code 2. Exit code, stdout
+and stderr pass through unchanged.
+
+## Files
+
+`bin/lv24-seo.js`, `README.md` and `LICENSE` (copied from the repo root by the `prepack`
+script, so the published tarball carries the licence text).
+
+## Tests
+
+```bash
+npm test   # node --test test/launcher.test.js, offline: pinning, guards, exit codes
 ```
 
 ## Links

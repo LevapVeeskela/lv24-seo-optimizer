@@ -6,61 +6,79 @@ There is **no daemon**. Scheduling is delegated to the host scheduler; the tool 
 a `--print` mode so nothing is written without consent.
 
 ```bash
-lv24-seo schedule install --kind weekly --cron "0 6 * * 1" --print
-lv24-seo schedule install --kind daily  --cron "0 6 * * *"
-lv24-seo schedule status
+lv24-seo schedule install --kind weekly --cron "0 6 * * 1" --config ./seo.toml --print
+lv24-seo schedule install --kind daily  --cron "0 6 * * *" --config ./seo.toml
 ```
 
-Three targets, detected from the OS (override with `--target`):
+The generated command embeds the **absolute `--config` path**, so a custom
+filename, a path with spaces, or several configs in one folder keep working.
+`schedule print --cron … --target …` renders without touching the host. There is
+no `schedule status` command — inspect the host scheduler (`crontab -l`,
+`systemctl --user list-timers`, Task Scheduler).
 
-| Target | Artefact | Notes |
+Timezone honesty: the configured zone is applied where the backend supports it
+and reported as a warning where it does not.
+
+| Target | Artefact | Timezone behaviour |
 |---|---|---|
-| `cron` | one crontab line | Linux/macOS; logs to `data/logs/schedule.log` |
-| `systemd` | `<name>.service` + `<name>.timer` (user units) | `Persistent=true` catches missed runs after reboot |
-| `windows` | Task Scheduler XML via `schtasks /Create /XML` | runs whether or not the user is logged in (`--run-as-service`) |
+| `cron` | one crontab line + `CRON_TZ=<zone>` assignment | confirm that the installed cron daemon supports `CRON_TZ`; otherwise it uses host time |
+| `systemd` | `<name>.service` + `<name>.timer` (user units) | `OnCalendar` includes the configured IANA zone explicitly |
+| `windows` | Task Scheduler XML via `schtasks /Create /XML` | aware `StartBoundary` carries the resolved UTC offset; seasonal IANA zones produce a DST warning |
 
-Generated commands always use absolute paths, `--json`, and a lock file so an overlapping manual run is
-skipped instead of double-sending.
+Only simple daily/weekly cron shapes convert to systemd/Windows; anything else
+is rejected instead of silently rescheduled. An unknown/unavailable timezone is rejected
+before installation. Windows needs `tzdata` (included on Windows); fixed-offset XML does not
+encode an IANA zone's future DST rules, so review such tasks after seasonal transitions.
+
+The install result always carries a `warnings` list with the backend limits above.
 
 ## Recommended cadence
 
 | Job | When | Why |
 |---|---|---|
-| `report daily` (indexing + errors) | 06:00 local | catch index regressions within a day |
-| `report weekly` (performance + opportunities) | Monday 06:00 | GSC data has 2–3 days of lag, Monday is stable |
-| `crawl audit` | weekly, after the report | keep crawl close to the reporting window |
-| `auth status` check | weekly | warn 14 days before a Yandex token expires |
-| `crux origin` | weekly | 28-day rolling window, daily polling adds nothing |
+| `report weekly --send` (performance + opportunities) | Monday 06:00 | GSC data has 2–3 days of lag, Monday is stable |
+| `crawl --start URL` | weekly, after the report | keep crawl close to the reporting window |
+| `auth status` check | weekly | presence + source of every provider token |
+| CrUX field data (in the weekly report) | weekly | 28-day rolling window, daily polling adds nothing |
 
 ## Email
 
-* Default transport: SMTP (`587 STARTTLS`), because it works on a VPS and needs no vendor.
-* Optional: Resend (3k emails/month free) for delivery events and idempotency; Brevo (300/day) as a
-  second option. Adapters implement the same `deliver()` interface.
+* Default transport: SMTP (`587 STARTTLS`) with a verifying TLS context — the
+  server certificate is checked and the login never runs after a TLS failure.
 * Message is `multipart/alternative` with HTML + plain text; no remote pixels, no tracking.
-* SPF + DKIM + DMARC must be aligned on the sending domain; the tool checks the DNS records in
-  `doctor` and warns.
-* Attachments only under 1 MB; larger artefacts are written to `reports/` and linked from the email if
-  `report.public_url` is configured.
-* Idempotency: `sends` ledger unique on `(kind, property, period, content_hash)`; `only_on_change`
-  skips the send when the diff is below thresholds and prints `"skipped": "no_material_change"`.
+* Only email and Telegram channels exist. There are no Resend/Brevo adapters and no
+  `--channel github` — provider-sent GitHub issues are not implemented.
 
 ## Telegram
 
-Critical-only by default (indexing drop > 20%, sitemap errors, TLS expiry < 14 days, 5xx to bots).
-Same `sends` ledger; message text is a shortened report with a link/command to get the full one.
+The plain-text report goes through the Bot API `sendMessage` method. HTTP 4xx/5xx,
+transport timeouts and malformed Bot API answers are reported as `failed` and
+never recorded as sent.
+
+## Idempotency and retries
+
+* `sends` ledger unique on `(kind, property, period, content_hash)`; the hash
+  covers headline + sections only (`generated_at` and diagnostics excluded), so
+  rebuilding the same period does not resend.
+* `only_on_change` skips the send when the content hash was already delivered
+  (`already_sent`), and the material gate skips it when no change field reaches
+  the configured `report.thresholds` (`no_material_change`).
+* Delivery is **at-least-once per channel**: an ambiguous transport result
+  (accepted remotely, failed locally) is reported `failed` and never recorded,
+  so the next run may deliver a duplicate. Concurrent runs de-duplicate
+  through the SQLite transaction around check/send/journal; SMTP and the Bot API offer no
+  exactly-once primitive after a process crash. Keep one schedule per period; no host lock
+  file is installed. The database serializes delivery attempts and may block other writers
+  up to the transport timeout.
 
 ## Other channels
 
-* **GitHub issue** — `--channel github` opens an issue with the crawl defects (useful for a dev backlog
-  even when the SEO owner is not a developer). Requires `gh` in the PATH and a repo slug.
-* **Static HTML** — `reports/latest/index.html`, deployable to GitHub Pages or any static host.
-* **JSON artefact** — `reports/latest/report.json`, for other agents or dashboards.
+* **Static HTML/JSON** — `report weekly --out reports/` writes `report.json`
+  and `report.html` for hosting or other agents. There is no `reports/latest/`
+  symlink and no `--channel github`.
 
 ## Failure handling
 
 * A failed provider does not fail the report: the email says which source is missing and why.
-* Delivery failures retry with backoff (3 attempts) and then mark `failed` in `sends`; the next run
-  reports `last_delivery_failed`.
-* If the scheduler did not run for N days, the next report shows a `gap` banner instead of silently
-  comparing non-adjacent periods.
+  The envelope reports `sources_failed` and `complete: false`; only a total
+  outage still returns an explicit no-data report instead of an exception.

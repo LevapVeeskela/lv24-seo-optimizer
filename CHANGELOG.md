@@ -5,6 +5,70 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-11
+
+### Fixed
+
+- Follow-up review: preserve Yandex diagnostic codes from mapping keys, use explicit query
+  windows and documented Metrika GET requests; rate-limit every retry. Unknown legacy daily
+  rows are marked and excluded from normal reads.
+- Pin crawler connections to validated addresses with original Host/SNI, check robots before
+  redirect requests, count failed sitemap requests against budgets and pace every hop.
+- Preserve incomplete/baseline metadata and source warnings in delivered reports; serialize
+  delivery attempts through SQLite and send Telegram as plain text.
+- Scheduler commands use target-specific quoting; systemd carries an explicit IANA timezone,
+  unavailable zones fail before installation and Windows seasonal zones warn about fixed offsets.
+- Explicit npm wrapper overrides cannot bypass recursion guards. Release verification also
+  checks the npm launcher and packaged skills; manual registry publishing requires verification.
+
+- Weekly headline compares GSC windows only: the Yandex query window (no previous
+  window for a delta) and Metrika sessions are shown per-engine and never merged
+  into a cross-engine total (no phantom growth or CTR).
+- Collector/builder source ids unified (`gsc`, `yandex_webmaster`, `yandex_metrika`): Yandex and
+  Metrika rows reach the traffic section again.
+- One failing provider no longer cancels the weekly report: per-source isolation with
+  `sources_failed` and `complete` in the envelope; a total outage yields an explicit no-data
+  report instead of an exception.
+- Yandex popular queries read `query_text` and list-shaped `indicators`, honour `count` and
+  paginate with `offset`; diagnostics expand the `problems` object (code/state/severity).
+- GSC sends `dimensionFilterGroups`; Bing `SubmitUrlbatch` authenticates with `apikey`.
+- CrUX reads `cumulative_layout_shift`, `histogram[].density` and string p75 CLS; unknown metrics
+  stay unknown instead of zero-filled.
+- SMTP uses a verifying TLS context (no login after a TLS failure); Telegram HTTP 400/429 and Bot
+  API error dicts report `failed`, never `sent`; delivery hash excludes `generated_at`/diagnostics;
+  configured thresholds gate sends; concurrent claims surface `duplicate_race` (at-least-once).
+- Crawler: outbound SSRF policy (private/loopback/link-local refused per hop, DNS re-resolved,
+  explicit local opt-in, HTTPS downgrade flagged); sitemap discovery wired into the walk with
+  budgets and truncation; confirmed-broken vs unvisited vs failed separated (`/a` ≠ `/a/`);
+  robots 5xx/network defers instead of failing open; longest-match `Allow` semantics; `Crawl-delay`
+  pacing; request budget with honest truncation; `<base href>` honoured; canonical compared to the
+  final URL; decay matches vanished queries/pages as zero only with complete coverage.
+- Store: `metric_daily` holds true daily rows, window aggregates go to `metric_windows`
+  (pre-migration GSC daily rows are marked `legacy_unknown_granularity` and excluded
+  from normal daily reads; `include_legacy=True` preserves access, no history deleted);
+  GSC sightings no longer overwrite crawl truth;
+  multi-write syncs are atomic; `schema_migrations` ledger added.
+- MCP tools are registered as async owner-loop adapters: the synchronous service and
+  SQLite connection stay on the event-loop thread (no `check_same_thread=False`),
+  the core runs serially and blocks the loop while it runs.
+- MCP and CLI share one SQLite history through `lv24_seo.composition` with lifecycle close.
+- Scheduler embeds the absolute `--config`; cron carries a real `CRON_TZ` assignment; Windows
+  boundaries carry UTC offsets when the zone resolves; every backend reports its timezone limits
+  (Windows needs the new `tzdata` dependency).
+- npm launcher pins `uvx --from lv24-seo==<version>`, validates `LV24_SEO_BIN`, refuses to exec
+  its own shim (content + depth guards) and ships `LICENSE` via `prepack`.
+- Docs reflect the real CLI/MCP surface (flags, inputs, resources, transports), the automatic
+  OIDC release pipeline with a same-SHA verify gate, checksum-verified binary downloads, narrowed
+  gitleaks allowlists and skill installation from the wheel (`lv24-seo export skills`).
+
+### Added
+
+- `lv24-seo export skills` copies the packaged skills (+ `manifest.json`) anywhere.
+- `py.typed` ships in the wheel (the `Typing :: Typed` classifier is now true).
+- Neon README banner and an editable workflow diagram in English and Russian READMEs.
+- SHA-pinned Actions, `uv sync --locked`, Python 3.12 in the CI matrix, functional npm launcher
+  tests, installed-wheel smoke test in the release `verify` job.
+
 ## [0.1.2] - 2026-11-10
 
 ### Changed

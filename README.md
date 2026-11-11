@@ -1,3 +1,5 @@
+![LV24 SEO — SEO insights for humans and AI agents](https://raw.githubusercontent.com/LevapVeeskela/lv24-seo-optimizer/main/.github/assets/banner.png)
+
 # lv24-seo-optimizer
 
 <!-- mcp-name: io.github.LevapVeeskela/lv24-seo -->
@@ -35,39 +37,43 @@ No paid SEO platform required. Everything in the default path has a free tier.
                                                       └──────────────────┘
 ```
 
+![From provider APIs and bounded crawl to reports, CLI, MCP and opt-in delivery](https://raw.githubusercontent.com/LevapVeeskela/lv24-seo-optimizer/main/docs/assets/workflow.svg)
+
 ## Why another SEO tool
 
 * **Free-first fusion.** Existing MCP servers wrap one vendor each and hand raw vendor shapes to
   the model. We join GSC + Bing + Yandex + Metrika per property, and we *say out loud* what the
   APIs cannot give you (Yandex has no query×page join, GSC caps at 50k rows/day, data lags 2–3 days).
-  Every response carries `truncated`, `total`, `data_age` and `limitations[]`.
-* **Diffs, not dashboards.** Reports compare against the last stored snapshot and only email you when
-  something material changed (traffic drop, new indexing errors, sitemap regressions, TLS expiry).
+  Bounded provider responses expose coverage, freshness and limitations; unknown totals stay unknown.
+* **Comparable periods.** The headline compares current and previous GSC windows. Yandex,
+  Metrika, Bing, CrUX field data and PSI lab data keep separate sections. Opt-in delivery
+  applies the configured significance thresholds and skips content already sent for the period.
 * **Agent-native.** A small, stable MCP tool surface (read-only by default), a JSON envelope on every
   CLI command, and skills that encode *audit → plan → fix → verify* against a real repository.
 * **Zero spend.** Public-repo CI, SQLite storage, SMTP/Telegram delivery, no SaaS in the default path.
-  Paid providers (Ahrefs, Semrush, DataForSEO, SerpApi) are optional adapters that use *your* key.
+  Paid-provider integrations are research/planned work, not dependencies or shipped adapters.
 
 ## Status
 
-**Alpha (v0.1.0 in progress).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
+**Beta (v0.2.0).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
 Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule crawler, SQLite history, analysis (deltas, opportunities,
 indexing triage, multi-engine fusion, nginx log stats), report builders + HTML/text/Markdown renderers,
 SMTP/Telegram delivery with idempotency, the full CLI, the MCP server (10 tools, 3 resources,
-3 prompts) and scheduler generators.
+3 prompts) and scheduler generators. Canonical source ids, GSC-only headline deltas, partial
+provider isolation and window/daily storage separation are enforced with regression tests.
 
-Still missing before `v0.1.0` is declared stable: GSC service-account auth (OAuth token only today),
-write operations for sitemap/recrawl (IndexNow is wired; the others return an honest
-`WRITE_DISABLED`), and an end-to-end run against a live property. See
-[`docs/plans/2026-11-10-implementation-plan.md`](docs/plans/2026-11-10-implementation-plan.md) for the
-wave status.
+Still honest gaps before `v1.0`: GSC service-account auth (OAuth token only today),
+sitemap submit / Yandex recrawl return an explicit `WRITE_DISABLED` (IndexNow really submits),
+and `raw_retention_days` is reserved (no raw archives are written yet). See
+[`docs/plans/2026-11-10-implementation-plan.md`](docs/plans/2026-11-10-implementation-plan.md) for
+the wave status.
 
 ## Install
 
 ```bash
 # Python (recommended)
 uvx --from lv24-seo lv24-seo doctor
-pipx install lv24-seo                 # or: uv tool install lv24-seo
+pipx install "lv24-seo[secrets]"       # or: uv tool install "lv24-seo[secrets]"
 
 # Node users: thin launcher over the same CLI
 npx @lv24/seo doctor --json
@@ -75,8 +81,10 @@ npx @lv24/seo doctor --json
 
 ```bash
 lv24-seo init --property https://example.com   # writes seo.toml + data/
-lv24-seo auth set --provider gsc --stdin       # token in the OS keychain
-lv24-seo report weekly --json --out reports/
+lv24-seo auth set --provider gsc --stdin       # token to the OS keychain (needs lv24-seo[secrets])
+lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
+lv24-seo report weekly --days 7 --out reports/
+lv24-seo export skills --out ./skills          # packaged agent skills from the wheel
 lv24-seo mcp serve                             # stdio MCP server
 lv24-seo install --client claude|opencode|vscode|cursor
 ```
@@ -96,14 +104,17 @@ $ lv24-seo doctor
 [FAIL] tokens: not configured yet (gsc / yandex / metrika / bing / crux)
 ```
 
+`doctor` checks the runtime, config, data dir and token presence only — no network calls.
+
 ```text
 $ lv24-seo report weekly --days 7 --json --out reports/
 
-# headline   clicks +18.2%, impressions +6.4%, position -1.1
-# traffic    gsc 1 240 clicks · yandex 310 · metrika 92 sessions
-# indexing   3 new "crawled - not indexed" URLs, 0 regressions
-# actions    5 opportunities, expected +41 clicks/week
-# honesty    data_age_days=2, yandex: top_3000_queries, no_query_page_join
+# Writes report.json and report.html; the JSON envelope carries:
+# meta.sources          successful providers
+# meta.sources_failed   isolated source failures
+# meta.complete         false for missing, capped or sampled inputs
+# meta.limitations      caveats to read before interpreting the numbers
+# No configured tokens: an explicit no-data report, with complete=false.
 ```
 
 The same data is available as MCP tools (`seo_weekly_report`, `gsc_search_analytics`,
@@ -115,23 +126,23 @@ audit → plan → fix → verify.
 | Surface | Examples |
 |---|---|
 | **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions |
-| **MCP tools** | `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `crawl_site`, `seo_weekly_report`, `seo_indexing_triage`, `seo_opportunities`, `seo_recrawl_request` (gated) |
-| **CLI** | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `audit`, `report`, `schedule`, `mcp serve` |
-| **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts |
-| **Automation** | cron / systemd timer / Windows Task Scheduler generators, GitHub Actions recipe, nginx log ingest |
+| **MCP tools** | `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_crawl_site`, `seo_weekly_report`, `seo_indexing_triage`, `seo_opportunities`, `seo_recrawl_request` (gated), `seo_sitemap_submit` (gated) |
+| **CLI** | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `schedule`, `export`, `mcp serve` |
+| **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
+| **Automation** | cron / systemd timer / Windows Task Scheduler generators and a GitHub Actions recipe |
 
 ## Supported sources
 
 | Source | Free tier | Used for | Write operations |
 |---|---|---|---|
-| Google Search Console | yes (OAuth or service account) | queries, pages, countries, devices, URL inspection, sitemaps | sitemap submit (gated) |
-| Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics, sitemaps, recrawl | recrawl queue (quota-gated) |
-| Yandex Metrika | yes | organic sessions, landing pages, goals | — |
+| Google Search Console | yes (access token; service-account flow planned) | queries, pages, countries, devices; URL Inspection adapter | sitemap submit disabled |
+| Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics | recrawl disabled |
+| Yandex Metrika | yes | sessions and users; filtered reports through adapter | — |
 | Bing Webmaster + IndexNow | yes | queries, crawl issues, instant URL ping | IndexNow submit |
 | Chrome UX Report | yes (API key) | origin-level field CWV | — |
 | PageSpeed Insights | yes | lab audits per URL | — |
 | Your site | — | crawl, robots, sitemap, JSON-LD, hreflang, links | — |
-| nginx access logs | — | bot crawl budget, 5xx to bots | — |
+| nginx access logs | — | Python analysis helpers; no log-ingest CLI command yet | — |
 
 ## Documents
 
