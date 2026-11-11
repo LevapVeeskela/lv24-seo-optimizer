@@ -823,6 +823,11 @@ def test_crawl_and_store_persists_pages_issues_and_run(
     assert "noindex-on-200" in rule_ids
     assert response["meta"]["pages_stored"] == 2
     assert response["meta"]["issues_stored"] == len(response["data"]["issues"])
+    coverage = response["data"]["sitemap_coverage"]
+    assert set(coverage) >= {"buckets", "counts", "complete", "limitations", "truncated"}
+    if coverage["sitemap_urls"] == 0:
+        assert coverage["complete"] is False
+        assert "empty, not clean" in coverage["limitations"][0]
 
     pages = store.list_pages(PROPERTY)
     assert {page["url"] for page in pages} == {

@@ -1585,6 +1585,15 @@ def _crawl_lines(payload: Mapping[str, Any]) -> list[str]:
             f"broken {graph.get('broken', 0)}"
         ),
     ]
+    coverage = data.get("sitemap_coverage")
+    if isinstance(coverage, Mapping):
+        counts = coverage.get("counts") or {}
+        if isinstance(counts, Mapping):
+            parts = ", ".join(f"{name} {counts.get(name, 0)}" for name in sorted(counts))
+            lines.append(
+                f"sitemap coverage ({coverage.get('sitemap_urls', 0)} advertised, "
+                f"complete: {_yes_no(coverage.get('complete'))}): {parts}"
+            )
     issues = [issue for issue in data.get("issues") or [] if isinstance(issue, Mapping)]
     if issues:
         lines.append("issues:")

@@ -32,6 +32,7 @@ from datetime import date, datetime
 from typing import Any, cast
 from urllib.parse import urlsplit
 
+from lv24_seo.analysis.coverage import sitemap_crawl_diff
 from lv24_seo.analysis.delta import DeltaThresholds, compute_delta
 from lv24_seo.analysis.delta import headline as delta_headline
 from lv24_seo.core.config import SeoConfig
@@ -523,12 +524,20 @@ class SeoService:
             "unvisited": outcome.graph.unvisited,
             "failed": outcome.graph.failed,
         }
+        coverage = sitemap_crawl_diff(
+            outcome.pages,
+            outcome.sitemap_urls,
+            crawl_truncated=outcome.truncated,
+            sitemap_truncated=outcome.sitemap_truncated,
+            sitemap_errors=outcome.sitemap_errors,
+        )
         data = {
             "summary": summary,
             "issues": issues,
             "graph": graph,
             "errors": outcome.errors,
             "blocked": outcome.blocked,
+            "sitemap_coverage": coverage.to_dict(),
         }
 
         if outcome.errors:
