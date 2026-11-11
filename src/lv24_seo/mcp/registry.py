@@ -89,6 +89,24 @@ TOOLS: tuple[ToolSpec, ...] = (
         returns="{period, headline, deltas, issues, opportunities, limitations}",
     ),
     ToolSpec(
+        name="seo_report_diff",
+        title="Report diff",
+        summary="Diff two stored weekly report snapshots (metrics, issues, opportunity churn).",
+        providers=("store",),
+        inputs={
+            "base": "older period START..END (default: second newest snapshot)",
+            "head": "newer period START..END (default: newest snapshot)",
+        },
+        returns=(
+            "{headline:[{metric,base,head,abs_delta,pct_delta}], unknown_metrics, issues, "
+            "opportunities:{added,resolved,unchanged}, limitations_changed, comparable, markdown}"
+        ),
+        limitations=(
+            "needs two stored weekly snapshots (`lv24-seo init` + two report runs)",
+            "metrics present in one snapshot only are unknown, not zero",
+        ),
+    ),
+    ToolSpec(
         name="seo_indexing_triage",
         title="Indexing triage",
         summary="Group not-indexed URLs by reason and propose the cheapest fix.",

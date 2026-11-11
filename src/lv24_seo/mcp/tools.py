@@ -24,6 +24,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -637,6 +638,35 @@ def build_weekly_report(state: ToolState) -> Callable[..., CallToolResult]:
     return seo_weekly_report
 
 
+_PERIOD_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$")
+
+
+def build_report_diff(state: ToolState) -> Callable[..., CallToolResult]:
+    """``seo_report_diff``: diff two stored weekly snapshots (no provider calls)."""
+
+    def seo_report_diff(base: str = "", head: str = "") -> CallToolResult:
+        def _run() -> Envelope:
+            periods = {"base": base.strip(), "head": head.strip()}
+            for name, value in periods.items():
+                if value and not _PERIOD_PATTERN.match(value):
+                    raise SeoError(
+                        code=INVALID_INPUT,
+                        message=f"{name} must be a stored period START..END",
+                        next_action="pass e.g. 2026-11-02..2026-11-08, or leave it empty",
+                    )
+            payload, ignored = invoke(
+                state.service,
+                "report_diff",
+                arguments={},
+                optional=periods,
+            )
+            return merge_warnings(payload, ignored)
+
+        return respond("seo_report_diff", _run)
+
+    return seo_report_diff
+
+
 def _report_from_payload(payload: Mapping[str, Any]) -> Report | None:
     """Rebuild a :class:`Report` from the ``Report.to_dict`` payload the service returns."""
     raw_sections = payload.get("sections")
@@ -1044,6 +1074,7 @@ TOOL_BUILDERS: dict[str, ToolBuilder] = {
     "yandex_indexing_state": build_yandex_indexing_state,
     "seo_crawl_site": build_crawl_site,
     "seo_weekly_report": build_weekly_report,
+    "seo_report_diff": build_report_diff,
     "seo_indexing_triage": build_indexing_triage,
     "seo_opportunities": build_opportunities,
     "seo_recrawl_request": build_recrawl_request,

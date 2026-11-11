@@ -464,7 +464,7 @@ def test_export_tools_writes_valid_json(tmp_path: Path) -> None:
 
     document = json.loads(destination.read_text(encoding="utf-8"))
     assert document["schema_version"] == 1
-    assert len(document["tools"]) == payload["data"]["tools"] == 10
+    assert len(document["tools"]) == payload["data"]["tools"] == 11
     names = {tool["name"] for tool in document["tools"]}
     assert "seo_properties" in names
     assert "seo_weekly_report" in names

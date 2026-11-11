@@ -228,3 +228,39 @@ def test_cli_markdown_and_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     envelope = json.loads(js.stdout)
     assert set(envelope) == {"ok", "data", "meta", "warnings"}
     assert envelope["meta"]["complete"] is True
+
+
+def test_mcp_tool_diffs_stored_snapshots_on_the_owner_loop(tmp_path: Path) -> None:
+    """Real create_server + real Store + real call_tool (SQLite touched on the loop thread)."""
+    import asyncio
+
+    from lv24_seo.mcp.server import create_server
+
+    with Store(tmp_path / "seo.db") as store:
+        store.save_snapshot(
+            "weekly",
+            PROPERTY,
+            "2026-10-26..2026-11-01",
+            _snapshot("2026-10-26", "2026-11-01", clicks=40.0),
+        )
+        store.save_snapshot(
+            "weekly",
+            PROPERTY,
+            "2026-11-02..2026-11-08",
+            _snapshot("2026-11-02", "2026-11-08", clicks=60.0),
+        )
+        server = create_server(
+            SeoService(_config(tmp_path), store=store, secrets=SecretStore(env={}))
+        )
+
+        result = asyncio.run(server.call_tool("seo_report_diff", {}))
+        envelope = json.loads(result.content[0].text)
+        bad = asyncio.run(server.call_tool("seo_report_diff", {"base": "last week"}))
+        bad_envelope = json.loads(bad.content[0].text)
+
+    assert envelope["ok"] is True
+    assert envelope["meta"]["head_period"] == "2026-11-02..2026-11-08"
+    clicks = next(row for row in envelope["data"]["headline"] if row["metric"] == "clicks")
+    assert clicks["pct_delta"] == 50.0
+    assert bad_envelope["ok"] is False
+    assert bad_envelope["error"]["code"] == "INVALID_INPUT"

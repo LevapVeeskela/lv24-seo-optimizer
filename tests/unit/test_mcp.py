@@ -228,9 +228,9 @@ def test_create_server_lists_exactly_the_registry_tools() -> None:
     server = create_server(None)
     tools = _tools(server)
 
-    assert len(tools) == len(TOOLS) == 10
+    assert len(tools) == len(TOOLS) == 11
     assert [tool.name for tool in tools] == [spec.name for spec in TOOLS]
-    assert len({tool.name for tool in tools}) == 10
+    assert len({tool.name for tool in tools}) == 11
 
 
 def test_tool_metadata_and_annotations_match_registry() -> None:
