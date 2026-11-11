@@ -2,7 +2,7 @@
 
 Design rules:
 
-* **10 tools, not 50.** Agents pick better from a small, opinionated surface; the API shape stays
+* **11 tools, not 50.** Agents pick better from a small, opinionated surface; the API shape stays
   behind the adapter.
 * Names `{source}_{verb}_{object}` for primitives, `seo_{task}` for composed workflows.
 * Read-only by default. Write tools carry `destructiveHint: true` and require a confirm token.
@@ -65,6 +65,16 @@ stored crawl issues for the period. Returns
 `{period, previous_period, headline, sources, sources_failed, complete, issues, opportunities, limitations}`.
 The headline compares GSC windows only; CrUX is field data, PSI is lab data, and the two are never merged.
 
+### `seo_report_diff`
+
+Inputs: optional `base` and `head` periods (`START..END`); empty means the two newest stored weekly
+snapshots. Read-only, no provider calls: diffs headline metrics, issue counts per severity,
+opportunities added/resolved and limitations added/lifted, plus a deterministic `markdown` field.
+A metric present in only one snapshot is listed in `unknown_metrics` (never zero); `comparable` and
+`meta.complete` are `false` when either snapshot lacks a headline comparison or the period lengths
+differ. Needs `lv24-seo init` and two `report weekly` runs; otherwise `INVALID_INPUT` /
+`CONFIG_INVALID` with a `next_action`. Same data as `lv24-seo report diff`.
+
 ### `seo_indexing_triage`
 
 Inputs: none. Buckets not-indexed URLs (GSC coverage, Yandex `search-urls/events`, crawl states)
@@ -107,7 +117,7 @@ Exactly three resources — there is no `seo://property/{id}/baseline`.
 | `indexing_triage` | triage only, output as a fix plan |
 | `content_opportunities` | opportunities → prioritised backlog |
 
-Total: 10 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
+Total: 11 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
 `lv24_seo/mcp/registry.py` — never edit it by hand.
 
 ## Prompts

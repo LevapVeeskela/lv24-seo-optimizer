@@ -36,7 +36,7 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 |---|---|
 | Источники | GSC, Вебмастер, Метрика, Bing/IndexNow, CrUX, PSI, собственный краул, логи nginx |
 | Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), триаж индексации, striking distance, деградация контента, техрегрессии |
-| MCP | 10 инструментов, 3 ресурса, 3 промпта; по умолчанию только чтение |
+| MCP | 11 инструментов, 3 ресурса, 3 промпта; по умолчанию только чтение |
 | CLI | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `schedule`, `export`, `mcp serve` |
 | Скиллы | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
 | Автоматизация | cron / systemd timer / Планировщик Windows, рецепт GitHub Actions |

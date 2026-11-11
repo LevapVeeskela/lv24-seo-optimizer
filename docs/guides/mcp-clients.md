@@ -318,7 +318,7 @@ in [Agent skills](../skills.md). Without a skill, call `seo_weekly_report` direc
 
 ## Security notes
 
-* Eight of the ten tools are read-only (`readOnlyHint: true`). `seo_recrawl_request` and
+* Nine of the eleven tools are read-only (`readOnlyHint: true`). `seo_recrawl_request` and
   `seo_sitemap_submit` are the two write tools (`destructiveHint: true`) and are disabled unless
   the call passes `allow_write=true`.
 * Even with `allow_write=true`, the MCP write tools return `WRITE_DISABLED`

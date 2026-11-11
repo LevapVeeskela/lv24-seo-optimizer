@@ -15,6 +15,8 @@ All notable changes to this project are documented here. Format follows
   snapshots (headline metrics, issue counts, opportunity churn, limitation changes) for PR
   comments and CI summaries. Read-only, no provider calls; metrics missing on one side are
   unknown, not zero. `Store.list_snapshot_periods()` backs it.
+- MCP tool `seo_report_diff` (11th tool, read-only): the same snapshot diff for agents, with
+  optional `base`/`head` periods validated as `START..END`.
 
 ### Fixed
 

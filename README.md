@@ -58,7 +58,7 @@ No paid SEO platform required. Everything in the default path has a free tier.
 **Beta (v0.2.0).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
 Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule crawler, SQLite history, analysis (deltas, opportunities,
 indexing triage, multi-engine fusion, nginx log stats), report builders + HTML/text/Markdown renderers,
-SMTP/Telegram delivery with idempotency, the full CLI, the MCP server (10 tools, 3 resources,
+SMTP/Telegram delivery with idempotency, the full CLI, the MCP server (11 tools, 3 resources,
 3 prompts) and scheduler generators. Canonical source ids, GSC-only headline deltas, partial
 provider isolation and window/daily storage separation are enforced with regression tests.
 
@@ -128,7 +128,7 @@ audit → plan → fix → verify.
 | Surface | Examples |
 |---|---|
 | **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions |
-| **MCP tools** | `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_crawl_site`, `seo_weekly_report`, `seo_indexing_triage`, `seo_opportunities`, `seo_recrawl_request` (gated), `seo_sitemap_submit` (gated) |
+| **MCP tools** | `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_crawl_site`, `seo_weekly_report`, `seo_report_diff`, `seo_indexing_triage`, `seo_opportunities`, `seo_recrawl_request` (gated), `seo_sitemap_submit` (gated) |
 | **CLI** | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `schedule`, `export`, `mcp serve` |
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
 | **Automation** | cron / systemd timer / Windows Task Scheduler generators and a GitHub Actions recipe |
