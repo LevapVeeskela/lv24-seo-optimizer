@@ -109,6 +109,12 @@ sessions and key events. Join to GSC on the URL path, not on the query. Threshol
   request budget (`1 + max_urls × (max_redirects + 1)`, reported as `request_count/request_budget`).
   `concurrency` is reserved and has no effect today. `/a` and `/a/` stay distinct until a fetch
   proves otherwise; unvisited link targets are reported as `unvisited`, never as broken.
+* Crawl scope: the seed and every redirect hop are checked against the start origin
+  (scheme + host + port) and `robots.txt` **before** the request is sent; an off-origin or
+  disallowed hop is never requested and is reported as `robots_blocked` with a coverage note.
+  Sitemap discovery applies the same origin check to `Sitemap:` lines, index children and
+  sitemap redirects. The single exception is `robots.txt` itself, whose redirects are followed
+  as RFC 9309 §2.3.1.2 requires (still under the SSRF policy and the redirect cap).
 * Logs: nginx JSON access log → bot verification by **reverse DNS / published IP ranges**, never by UA
   string alone.
 

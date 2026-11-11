@@ -84,6 +84,8 @@ lv24-seo init --property https://example.com   # writes seo.toml + data/
 lv24-seo auth set --provider gsc --stdin       # token to the OS keychain (needs lv24-seo[secrets])
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
 lv24-seo report weekly --days 7 --out reports/
+lv24-seo report diff --markdown                 # week-over-week diff of stored snapshots
+lv24-seo crawl --json                           # issues + sitemap↔crawl coverage diff
 lv24-seo export skills --out ./skills          # packaged agent skills from the wheel
 lv24-seo mcp serve                             # stdio MCP server
 lv24-seo install --client claude|opencode|vscode|cursor

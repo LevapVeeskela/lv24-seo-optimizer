@@ -50,6 +50,15 @@ override — the property comes from `seo.toml`). `crawl` respects `robots.txt`,
 same-host links breadth-first, runs all rules and stores pages/issues in SQLite when a store is
 configured.
 
+`crawl` also returns `data.sitemap_coverage`: the sitemap (what the site advertises) compared
+with what the crawl saw, in six buckets — `unlinked` (in the sitemap, OK, but no crawled page
+links to it), `missing_from_sitemap` (indexable 200 HTML the sitemap omits), `not_ok`
+(non-200 or redirected), `noindex`, `blocked` (robots/off-origin) and `unvisited` (never
+fetched: status **unknown**, not broken). `complete` is `false` and `limitations[]` says which
+buckets are only candidates when the crawl or sitemap inventory was truncated, a sitemap failed
+to load, or URLs went unvisited. No sitemap means an empty diff that says "empty, not clean".
+Lists are capped at 50 per bucket; `counts` are exact.
+
 ## Reports
 
 ```bash
@@ -62,6 +71,18 @@ lv24-seo report weekly [--days 7] [--lag-days 2] [--send] [--out reports/] [--js
 - `--out DIR` writes `report.json` and `report.html`.
 - Reports are idempotent: a second run for the same period and content is skipped
   (`already_sent`), and `only_on_change` skips a send when nothing material changed.
+
+```bash
+lv24-seo report diff [--base START..END] [--head START..END] [--markdown] [--json]
+```
+
+Diffs two **stored** weekly snapshots (default: the two newest periods) without calling any
+provider: headline metric changes, issue counts per severity, opportunities added/resolved and
+limitations added/lifted. A metric present in only one snapshot is listed as unknown (never
+zero), and `comparable`/`meta.complete` is `false` when either snapshot had no headline
+comparison or the period lengths differ. `--markdown` prints only GitHub-flavoured Markdown for a
+PR comment or CI summary; output is deterministic so it diffs cleanly between runs. Needs `init`
+and at least two `report weekly` runs for different periods.
 
 Planned for the next wave: `report indexing`, `report opportunities`, `report history`
 (see `docs/plans/2026-11-10-implementation-plan.md`, WP5.5).

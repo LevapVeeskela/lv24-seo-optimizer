@@ -19,6 +19,8 @@ lv24-seo init --property https://example.com
 lv24-seo auth set --provider gsc --stdin   # нужен extra: pip install "lv24-seo[secrets]"
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
 lv24-seo report weekly --days 7 --out reports/
+lv24-seo report diff --markdown            # разница двух сохранённых недельных снапшотов
+lv24-seo crawl --json                      # проблемы + сверка sitemap ↔ краул
 lv24-seo export skills --out ./skills      # скиллы из wheel-пакета
 ```
 

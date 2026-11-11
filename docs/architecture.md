@@ -74,7 +74,7 @@ Rules:
 Daily rows and window aggregates live in different tables by construction: a request with a
 `date` dimension lands in `metric_daily` keyed by that date; anything else lands in
 `metric_windows` keyed by its real window, so overlapping windows never overwrite each other.
-Migration 2 marks pre-migration daily rows with `accuracy=legacy_unknown_granularity`; their
+Migration 2 marks pre-migration **GSC** daily rows (other sources are untouched) with `accuracy=legacy_unknown_granularity`; their
 original window cannot be recovered. Normal daily reads exclude them. Repository callers may
 explicitly use `include_legacy=True` to inspect retained data; no historical rows are deleted.
 
@@ -128,7 +128,21 @@ query level (clicks/impressions) separately, and the report labels which engine 
   CrUX queryRecord) with `Retry-After` support, capped at 3 attempts. Write POSTs never retry.
 * Partial failure is normal: a weekly report with failing sources still produces available sections
   plus `sources_failed` and `complete: false`; it never cancels the whole run for one engine's
-  401/403/429/timeout. A total outage yields an explicit no-data report.
+  401/403/429/timeout. A total outage yields an explicit no-data report. `complete` is `true`
+  only when every configured source answered with rows, nothing was truncated and the two GSC
+  date windows are comparable; otherwise `sources_failed` / `sources_missing` /
+  `sources_incomplete` name the reason. A combined `total` is `null` (unknown) unless every
+  dataset reported one, and GSC query/page rows that vanish between windows are unknown, not zero.
+* MCP threading: the SDK (2.x) runs synchronous handlers in `anyio` worker threads, while the
+  `sqlite3` connection is bound to its creating thread. Every tool is registered through an
+  `async` adapter, so the synchronous core runs on the event-loop thread, one call at a time
+  (blocking the loop while it runs). Concurrent `tools/call` requests are therefore serial, not
+  parallel; `tests/unit/test_mcp_threading.py` proves both the failure without the adapter and
+  the serial behaviour with it.
+* Delivery is at-least-once: the sends-ledger claim and the send run inside `Store.atomic`; a
+  journal failure after the message left is reported as `sent` with
+  `reason=delivery_journal_failed`, never as `failed`. Telegram gets plain text (no `parse_mode`),
+  with an explicit truncation marker when the report exceeds the message limit.
 * Crawl persistence is one transaction per sync (`Store.atomic`); a crash mid-window cannot leave a
   half-synced period. Crawl and provider operations record `runs` rows with stats.
 * The crawler is serial with `Crawl-delay` pacing; `concurrency` stays reserved. Read POST retry

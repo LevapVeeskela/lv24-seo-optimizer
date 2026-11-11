@@ -5,6 +5,43 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- `crawl` / `seo_crawl_site` return `sitemap_coverage`: a sitemap ↔ crawl diff in six buckets
+  (`unlinked`, `missing_from_sitemap`, `not_ok`, `noindex`, `blocked`, `unvisited`) with exact
+  counts, capped lists, `complete` and `limitations[]`. Unvisited sitemap URLs are unknown, never
+  broken; a missing sitemap is "empty, not clean".
+- `lv24-seo report diff [--base] [--head] [--markdown]`: deterministic diff of two stored weekly
+  snapshots (headline metrics, issue counts, opportunity churn, limitation changes) for PR
+  comments and CI summaries. Read-only, no provider calls; metrics missing on one side are
+  unknown, not zero. `Store.list_snapshot_periods()` backs it.
+
+### Fixed
+
+- Weekly GSC source `meta.total` no longer becomes a known `0` when a dataset reports no total;
+  it is `null` (unknown) unless every dataset reported one.
+- Delivery: a journal COMMIT failure after the message already left is reported as `sent` with
+  `reason=delivery_journal_failed`, not `failed`.
+- Telegram text cut at the message limit now ends with an explicit truncation marker instead of
+  being shortened silently.
+
+### Documentation
+
+- Architecture §7 now states the MCP threading model, the exact `complete` conditions, the
+  unknown-total rule and delivery semantics; crawl-scope docs describe the pre-request origin and
+  robots checks (and the RFC 9309 `robots.txt` redirect exception); paid adapters are no longer
+  described as shipped in the GitHub Actions guide; Migration 2 is documented as GSC-only.
+
+### Tests
+
+- MCP threading: negative control proving MCP 2.x runs raw sync tools off the loop thread,
+  serialisation under concurrent `call_tool`, and the default-workspace lifecycle through
+  `create_server()` / `close_workspaces()` with a durable re-open.
+- Redirect scope: second-hop off-origin redirect, disallowed seed, and sitemap discovery
+  (`Sitemap:` line, index child, sitemap redirect) all asserted by the absence of the request.
+- Store: Migration 2 marks only GSC rows, `include_legacy` opt-in, failed migration rolls back
+  DDL and ledger; weekly `complete=false` for truncated, empty, missing and incomparable sources.
+
 ## [0.2.0] - 2026-11-11
 
 ### Fixed

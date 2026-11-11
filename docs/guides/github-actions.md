@@ -157,6 +157,13 @@ jobs:
           fi
           exit "$status"
 
+      # Optional, PRIVATE repositories only: a week-over-week diff of the stored snapshots.
+      # The Markdown contains query/page strings, and a job summary is visible to everyone who
+      # can see the run, so never enable this on a public repository.
+      # - name: Week-over-week diff
+      #   if: always()
+      #   run: uvx --from lv24-seo lv24-seo report diff --markdown >> "$GITHUB_STEP_SUMMARY" || true
+
       - name: Save the SQLite state
         # Runs even after a partial or failed report: the snapshot and sends ledger are
         # still valid and must not be thrown away.
@@ -366,8 +373,8 @@ Exit codes are documented in [docs/cli.md](../cli.md): `0` ok, `2` usage, `3` au
 
 * **No rank scraping.** It does not scrape Google/Yandex SERPs, bypass CAPTCHA, or track positions
   outside the official GSC/Yandex APIs.
-* **No paid APIs by default.** DataForSEO/SerpApi adapters are BYO-key and disabled unless you
-  configure them; this workflow configures none.
+* **No paid APIs.** No paid adapter ships today (DataForSEO/SerpApi are planned BYO-key adapters,
+  see `docs/data-sources.md` §8); this workflow configures none.
 * **No provider writes.** It never submits sitemaps, queues recrawls or calls IndexNow: those need
   `--allow-write` (and a human decision), which the workflow does not pass.
 * **No Google Indexing API submissions.** The Indexing API only accepts `JobPosting`/

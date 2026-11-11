@@ -54,7 +54,8 @@ Returns indexing history buckets, in-search page counts, diagnostics with severi
 Crawls a site (default 500 URLs, max 5000), respects robots.txt, returns a summary plus rule violations
 grouped by `rule_id` and severity. Optional `include_rules` filter (real rule ids such as
 `robots-blocked`, `broken-internal-link`, `canonical-mismatch`); no `rules` parameter and no
-`--ignore-robots` flag exist. Serial crawl with polite `Crawl-delay` pacing.
+`--ignore-robots` flag exist. Serial crawl with polite `Crawl-delay` pacing. The payload also
+carries `sitemap_coverage` (sitemap ↔ crawl diff with `complete`/`limitations`; see `docs/cli.md`).
 
 ### `seo_weekly_report`
 
