@@ -182,6 +182,13 @@ class YandexWebmasterClient:
         if missing or _is_host_not_loaded(payload):
             return _degraded(scope, fetched_at)
 
+        body = _mapping(payload)
+        problems = body.get("problems", body.get("diagnostics"))
+        if not isinstance(problems, (Mapping, list)):
+            raise _unexpected_payload("diagnostics/")
+        values = problems.values() if isinstance(problems, Mapping) else problems
+        if any(not isinstance(value, Mapping) for value in values):
+            raise _unexpected_payload("diagnostics/")
         rows = [_diagnostic_row(item) for item in _rows_from(payload, "problems", "diagnostics")]
         limitations = (
             (NO_PER_URL_SITEMAP_ERRORS,) if any(_is_sitemap_problem(row) for row in rows) else ()
@@ -199,6 +206,8 @@ class YandexWebmasterClient:
         *,
         limit: int = 500,
         order_by: str = "TOTAL_SHOWS",
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> ProviderResult[Row]:
         """Top queries for the host, ordered by ``order_by``.
 
@@ -208,27 +217,61 @@ class YandexWebmasterClient:
         scope = _require_host_id(host_id)
         page_limit = _require_limit(limit)
         ordering = _require_order_by(order_by)
+        if date_from is not None and not isinstance(date_from, date):
+            raise SeoError(code=INVALID_INPUT, message="date_from must be a date")
+        if date_to is not None and not isinstance(date_to, date):
+            raise SeoError(code=INVALID_INPUT, message="date_to must be a date")
+        if date_from is not None and date_to is not None and date_from > date_to:
+            raise SeoError(code=INVALID_INPUT, message="date_from must not be after date_to")
         fetched_at = now_utc()
-        params: dict[str, Any] = {
-            "order_by": ordering,
-            "query_indicator": list(_QUERY_INDICATORS),
-            "limit": page_limit,
-        }
-        payload, missing = self._get_host_scoped(
-            _host_path(self._ensure_user_id(), scope, "search-queries/popular/"),
-            params=params,
-        )
-        if missing or _is_host_not_loaded(payload):
-            return _degraded(scope, fetched_at)
 
-        total = _reported_total(payload)
+        rows: list[Row] = []
+        total: int | None = None
+        offset = 0
+        # The report covers at most the top 3,000 queries: bound the page walk
+        # even if the server keeps returning full batches.
+        max_rows = 3000
+        while len(rows) < max_rows:
+            request_limit = min(page_limit, max_rows - len(rows))
+            params: dict[str, Any] = {
+                "order_by": ordering,
+                "query_indicator": list(_QUERY_INDICATORS),
+                "limit": request_limit,
+                "offset": offset,
+            }
+            if date_from is not None:
+                params["date_from"] = date_from.isoformat()
+            if date_to is not None:
+                params["date_to"] = date_to.isoformat()
+            payload, missing = self._get_host_scoped(
+                _host_path(self._ensure_user_id(), scope, "search-queries/popular/"),
+                params=params,
+            )
+            if missing or _is_host_not_loaded(payload):
+                return _degraded(scope, fetched_at)
+
+            if total is None:
+                total = _reported_total(payload)
+            batch = [_query_row(item) for item in _rows_from(payload, "queries")]
+            if not batch:
+                break
+            rows.extend(batch[:request_limit])
+            if len(batch) < request_limit:
+                break
+            offset += request_limit
+            if total is not None and len(rows) >= total:
+                rows = rows[:total]
+                break
+
+        reported = total
         return _result(
             property_id=scope,
-            rows=[_query_row(item) for item in _rows_from(payload, "queries")],
+            rows=rows,
             fetched_at=fetched_at,
             data_age=_query_report_age(payload, fetched_at),
-            total=total,
-            truncated=total is not None and total > page_limit,
+            total=reported,
+            truncated=(reported is not None and reported > len(rows))
+            or (reported is None and len(rows) >= max_rows),
             limitations=(TOP_3000_QUERIES, NO_QUERY_PAGE_JOIN),
         )
 
@@ -265,6 +308,7 @@ class YandexWebmasterClient:
             f"{self._base_url}{path}",
             params=params,
             headers=self._headers,
+            rate_limit_key="yandex_webmaster",
         )
         return payload
 
@@ -335,21 +379,21 @@ def _require_host_id(host_id: object) -> str:
 
 
 def _require_limit(limit: object) -> int:
-    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
         raise SeoError(
             code=INVALID_INPUT,
-            message="limit must be a positive integer",
+            message="limit must be an integer between 1 and 500",
             next_action="use a limit between 1 and 500",
         )
     return limit
 
 
 def _require_order_by(order_by: object) -> str:
-    if not isinstance(order_by, str) or not order_by.strip():
+    if not isinstance(order_by, str) or order_by.strip() not in {"TOTAL_SHOWS", "TOTAL_CLICKS"}:
         raise SeoError(
             code=INVALID_INPUT,
-            message="order_by must be a non-empty string",
-            next_action="use TOTAL_SHOWS, TOTAL_CLICKS or AVG_SHOW_POSITION",
+            message="order_by must be TOTAL_SHOWS or TOTAL_CLICKS",
+            next_action="use TOTAL_SHOWS or TOTAL_CLICKS",
         )
     return order_by.strip()
 
@@ -363,12 +407,24 @@ def _mapping(value: object) -> Mapping[str, Any]:
 
 
 def _rows_from(payload: object, *container_keys: str) -> list[Mapping[str, Any]]:
-    """Return object rows from a JSON array or from the first known container key."""
+    """Return object rows from a JSON array or from the first known container key.
+
+    The ``diagnostics`` endpoint returns ``problems`` as an *object* whose keys
+    are problem codes (``{"NO_SITEMAPS": {...}, ...}``), not a list, so a
+    mapping container is expanded to its values. An empty object means no
+    reported problems, not a degraded host.
+    """
     if isinstance(payload, list):
         candidates: object = payload
     else:
         body = _mapping(payload)
         candidates = next((body[key] for key in container_keys if key in body), None)
+    if isinstance(candidates, Mapping):
+        candidates = [
+            {**value, "code": str(key)}
+            for key, value in candidates.items()
+            if isinstance(value, Mapping)
+        ]
     if not isinstance(candidates, list):
         return []
     return [
@@ -470,13 +526,32 @@ def _is_sitemap_problem(row: Row) -> bool:
 
 
 def _query_row(item: Mapping[str, Any]) -> Row:
-    indicators = _mapping(item.get("indicators"))
+    indicators = _indicator_map(item.get("indicators"))
     return {
-        "query": _text(item.get("query")),
+        "query": _text(item.get("query_text", item.get("query"))),
         "shows": _indicator(indicators, item, "TOTAL_SHOWS", "shows"),
         "clicks": _indicator(indicators, item, "TOTAL_CLICKS", "clicks"),
         "position": _indicator(indicators, item, "AVG_SHOW_POSITION", "position"),
     }
+
+
+def _indicator_map(raw: object) -> Mapping[str, Any]:
+    """Normalize ``indicators`` to a name→value mapping.
+
+    The documented API uses a mapping; accept name/value lists for compatibility.
+    """
+    if isinstance(raw, Mapping):
+        return raw
+    if isinstance(raw, list):
+        merged: dict[str, Any] = {}
+        for entry in raw:
+            if not isinstance(entry, Mapping):
+                continue
+            name = entry.get("name")
+            if isinstance(name, str) and "value" in entry:
+                merged[name] = entry["value"]
+        return merged
+    return {}
 
 
 def _indicator(
@@ -493,7 +568,7 @@ def _indicator(
 
 def _reported_total(payload: object) -> int | None:
     body = _mapping(payload)
-    for key in ("total", "total_queries", "total_count"):
+    for key in ("total", "total_queries", "total_count", "count"):
         total = _as_int(body.get(key))
         if total is not None:
             return total

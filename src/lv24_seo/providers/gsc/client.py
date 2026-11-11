@@ -70,7 +70,9 @@ class GscClient:
     def list_sites(self) -> ProviderResult[Row]:
         """Return every property the token can access."""
         fetched_at = now_utc()
-        payload = self._http.get_json(f"{self._base_url}/sites", headers=self._auth_headers())
+        payload = self._http.get_json(
+            f"{self._base_url}/sites", headers=self._auth_headers(), rate_limit_key="gsc"
+        )
         rows = [_map_site(entry) for entry in _entries(payload, "siteEntry")]
         return ProviderResult(
             source=GSC_SOURCE,
@@ -85,7 +87,9 @@ class GscClient:
         """Return the sitemaps registered for ``site_url`` (defaults to ``property_id``)."""
         site = self._require_property(site_url)
         fetched_at = now_utc()
-        payload = self._http.get_json(self._sitemaps_url(site), headers=self._auth_headers())
+        payload = self._http.get_json(
+            self._sitemaps_url(site), headers=self._auth_headers(), rate_limit_key="gsc"
+        )
         rows = [_map_sitemap(entry) for entry in _entries(payload, "sitemap")]
         return ProviderResult(
             source=GSC_SOURCE,
@@ -127,12 +131,14 @@ class GscClient:
                 "startRow": start_row,
             }
             if filters:
-                body["filters"] = list(filters)
+                body["dimensionFilterGroups"] = [{"groupType": "and", "filters": list(filters)}]
 
             payload = self._http.post_json(
                 self._search_analytics_url(site),
                 json=body,
                 headers=self._auth_headers(),
+                retry=True,
+                rate_limit_key="gsc",
             )
             batch = _entries(payload, "rows")
             if not batch:
@@ -179,6 +185,8 @@ class GscClient:
             self._inspection_url,
             json={"inspectionUrl": url, "siteUrl": site},
             headers=self._auth_headers(),
+            retry=True,
+            rate_limit_key="gsc.url_inspection",
         )
         row = _map_inspection(url, payload)
         return ProviderResult(

@@ -137,10 +137,11 @@ class YandexMetrikaClient:
         if filters is not None and filters.strip():
             form["filters"] = filters.strip()
 
-        payload = self._http.post_json(
+        payload = self._http.get_json(
             self._url("/stat/v1/data"),
-            data=form,
+            params=form,
             headers=self._auth_headers(),
+            rate_limit_key="yandex_metrika",
         )
         table = _require_mapping(payload)
         rows = _stat_rows(
@@ -167,7 +168,9 @@ class YandexMetrikaClient:
         )
 
     def _get(self, path: str) -> Mapping[str, Any]:
-        payload = self._http.get_json(self._url(path), headers=self._auth_headers())
+        payload = self._http.get_json(
+            self._url(path), headers=self._auth_headers(), rate_limit_key="yandex_metrika"
+        )
         return _require_mapping(payload)
 
     def _auth_headers(self) -> dict[str, str]:

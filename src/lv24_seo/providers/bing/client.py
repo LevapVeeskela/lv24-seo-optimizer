@@ -142,6 +142,8 @@ class BingClient:
         self._http.post_json(
             f"{self._base_url}/SubmitUrlbatch",
             json={"siteUrl": self._site_url, "urlList": batch},
+            params={"apikey": self._api_key},
+            rate_limit_key="bing",
         )
         row: Row = {"submitted": len(batch), "site_url": self._site_url}
         return ProviderResult(
@@ -156,6 +158,7 @@ class BingClient:
         payload = self._http.get_json(
             f"{self._base_url}/{path}",
             params={"apikey": self._api_key, "siteUrl": self._site_url},
+            rate_limit_key="bing",
         )
         items, warnings = _unwrap_items(payload)
         rows: list[Mapping[str, Any]] = []
@@ -211,7 +214,9 @@ def indexnow_submit(
 
     client = http if http is not None else HttpClient()
     try:
-        response = client.request("POST", target, json=payload, follow_redirects=True)
+        response = client.request(
+            "POST", target, json=payload, follow_redirects=True, rate_limit_key="bing"
+        )
     except SeoError as exc:
         if exc.code == INVALID_INPUT and exc.detail.get("status_code") == 422:
             # 422 means the engine could not match the key to the key file at the host.

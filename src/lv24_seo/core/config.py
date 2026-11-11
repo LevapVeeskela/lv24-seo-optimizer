@@ -173,7 +173,12 @@ class ReportConfig(_StrictModel):
 
 
 class CrawlConfig(_StrictModel):
-    """Crawler limits. ``respect_robots`` stays on unless a user opts out explicitly."""
+    """Crawler limits. ``respect_robots`` stays on unless a user opts out explicitly.
+
+    Crawling is serial with polite pacing (robots ``Crawl-delay`` between
+    requests); ``concurrency`` is reserved for a future bounded worker pool and
+    currently has no effect on execution.
+    """
 
     max_urls: int = Field(default=500, ge=1)
     concurrency: int = Field(default=4, ge=1)

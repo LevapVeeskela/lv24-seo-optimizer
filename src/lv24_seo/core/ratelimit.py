@@ -57,8 +57,8 @@ class BucketSpec:
 # * ``gsc``                - 1,200 queries/min per site and per user -> 20 rps, capacity = 1 min.
 # * ``gsc.url_inspection`` - 600 inspections/min                    -> 10 rps, capacity = 1 min.
 # * ``yandex_webmaster``   - no published rps; 5 rps conservative default, capacity 100.
-# * ``yandex_metrika``     - ``/stat/v1/data`` 200 req / 5 min -> 0.7 rps (exact ratio 0.667),
-#                            capacity 200 = the whole 5-minute window.
+# * ``yandex_metrika``     - ``/stat/v1/data`` 200 req / 5 min -> 0.65 rps (exact ratio 0.667
+#                            with a safety margin), capacity 200 = the whole 5-minute window.
 # * ``bing``               - no published rps; 5 rps conservative default, capacity 100.
 # * ``crux``               - 150 queries/min                       -> 2.5 rps, capacity 150.
 # * ``psi``                - 25 queries/s                          -> 25 rps, capacity 1000.
@@ -71,7 +71,7 @@ DEFAULT_LIMITS: Mapping[str, BucketSpec] = MappingProxyType(
         "gsc": BucketSpec(rate_per_second=20.0, capacity=1200.0),
         "gsc.url_inspection": BucketSpec(rate_per_second=10.0, capacity=600.0),
         "yandex_webmaster": BucketSpec(rate_per_second=5.0, capacity=100.0),
-        "yandex_metrika": BucketSpec(rate_per_second=0.7, capacity=200.0),
+        "yandex_metrika": BucketSpec(rate_per_second=0.65, capacity=200.0),
         "bing": BucketSpec(rate_per_second=5.0, capacity=100.0),
         "crux": BucketSpec(rate_per_second=2.5, capacity=150.0),
         "psi": BucketSpec(rate_per_second=25.0, capacity=1000.0),

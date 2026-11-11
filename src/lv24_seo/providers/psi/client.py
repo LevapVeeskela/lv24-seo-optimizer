@@ -69,7 +69,9 @@ class PsiClient:
             params["key"] = self._api_key
 
         try:
-            payload: object = self._http.get_json(self._endpoint(), params=params)
+            payload: object = self._http.get_json(
+                self._endpoint(), params=params, rate_limit_key="psi"
+            )
         except SeoError as error:
             if error.code == INVALID_INPUT:
                 raise _invalid_url(error) from error

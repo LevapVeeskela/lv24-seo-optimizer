@@ -13,8 +13,8 @@ Design notes
   no IPv6 route: for a host that publishes both ``A`` and ``AAAA`` records the resolver may
   pick the unreachable ``AAAA`` first and fail with ``ENETUNREACH``. Binding to the IPv4 any
   address makes httpx/httpcore use IPv4 only.
-* Only ``GET``/``HEAD`` are retried. Retrying a write could duplicate a submission and burn
-  provider quota (see ``core/write_gate.py``); a non-idempotent failure is surfaced at once.
+* ``GET``/``HEAD`` and explicitly marked read POSTs are retried. Retrying a write could
+  duplicate a submission and burn provider quota (see ``core/write_gate.py``).
 * Error messages contain ``host + path`` only. Query strings often carry API keys
   (``?key=...``) and headers carry bearer tokens, so neither ever reaches an error message.
 """
@@ -40,6 +40,7 @@ from lv24_seo.core.errors import (
     UPSTREAM_UNAVAILABLE,
     SeoError,
 )
+from lv24_seo.core.ratelimit import Limiter
 
 DEFAULT_USER_AGENT = "lv24-seo/0.1 (+https://github.com/LevapVeeskela/lv24-seo-optimizer)"
 
@@ -52,6 +53,7 @@ _BACKOFF_BASE_SECONDS = 0.5
 _MAX_RETRY_AFTER_SECONDS = 30.0
 _JITTER_RATIO = 0.2
 _RETRYABLE_STATUSES = frozenset({429})
+_DEFAULT_LIMITER = Limiter()
 
 
 class HttpClient:
@@ -67,6 +69,7 @@ class HttpClient:
         transport: httpx.BaseTransport | None = None,
         headers: Mapping[str, str] | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        limiter: Limiter | None = None,
     ) -> None:
         if max_retries < 0:
             raise ValueError("max_retries must be >= 0")
@@ -77,6 +80,7 @@ class HttpClient:
         self._max_attempts = max(1, min(max_retries, _MAX_ATTEMPTS - 1) + 1)
         self._timeout_seconds = timeout
         self._sleep = sleep
+        self._limiter = limiter if limiter is not None else _DEFAULT_LIMITER
         self._base_url = httpx.URL(base_url) if base_url else None
 
         merged_headers: dict[str, str] = {"User-Agent": user_agent}
@@ -94,13 +98,31 @@ class HttpClient:
             transport=transport,
         )
 
-    def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
-        """Perform a request, retrying transient failures for idempotent methods."""
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        retry_post: bool = False,
+        rate_limit_key: str | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Perform a request, retrying transient failures for idempotent methods.
+
+        ``retry_post`` opts a *safe read* POST (GSC ``searchAnalytics/query``,
+        CrUX ``queryRecord``) into the same 429/5xx + ``Retry-After`` retry path
+        as ``GET``/``HEAD``. Write POSTs (submit, recrawl)
+        must keep ``retry_post=False`` so one call can never become two side
+        effects. ``rate_limit_key`` acquires one token from the attached
+        limiter (see :mod:`lv24_seo.core.ratelimit`) before every attempt.
+        """
         verb = method.upper()
-        idempotent = verb in _IDEMPOTENT_METHODS
+        idempotent = verb in _IDEMPOTENT_METHODS or (verb == "POST" and retry_post)
         attempt = 1
 
         while True:
+            if rate_limit_key is not None:
+                self._limiter.acquire(rate_limit_key)
             try:
                 response = self._client.request(verb, url, **kwargs)
             except httpx.InvalidURL as exc:
@@ -145,9 +167,12 @@ class HttpClient:
         *,
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        rate_limit_key: str | None = None,
     ) -> Any:
         """GET ``url`` and decode the body as JSON."""
-        response = self.request("GET", url, params=params, headers=headers)
+        response = self.request(
+            "GET", url, params=params, headers=headers, rate_limit_key=rate_limit_key
+        )
         return _decode_json(response)
 
     def post_json(
@@ -156,10 +181,27 @@ class HttpClient:
         *,
         json: Any = None,
         data: Any = None,
+        params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        retry: bool = False,
+        rate_limit_key: str | None = None,
     ) -> Any:
-        """POST to ``url`` (no retries) and decode the body as JSON."""
-        response = self.request("POST", url, json=json, data=data, headers=headers)
+        """POST to ``url`` and decode the body as JSON.
+
+        Retries are opt-in via ``retry=True`` for safe *read* POSTs only
+        (GSC searchAnalytics, CrUX queryRecord). Write POSTs keep the default
+        ``retry=False`` so a submission is never duplicated by the transport.
+        """
+        response = self.request(
+            "POST",
+            url,
+            json=json,
+            data=data,
+            params=params,
+            headers=headers,
+            retry_post=retry,
+            rate_limit_key=rate_limit_key,
+        )
         return _decode_json(response)
 
     def close(self) -> None:

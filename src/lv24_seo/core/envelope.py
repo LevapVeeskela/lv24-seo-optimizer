@@ -18,16 +18,27 @@ from typing import Any
 from lv24_seo.core.errors import SeoError, exit_code_for
 
 
+def _tool_version() -> str:
+    """Package version for the envelope; never raises, even on odd installs."""
+    try:
+        from lv24_seo import __version__
+    except Exception:
+        return "0.0.0"
+    return __version__ if isinstance(__version__, str) else "0.0.0"
+
+
 def ok(
     data: Any = None,
     *,
     meta: Mapping[str, Any] | None = None,
     warnings: Sequence[str] | None = None,
 ) -> dict[str, Any]:
+    merged = {"version": _tool_version()}
+    merged.update(dict(meta or {}))
     return {
         "ok": True,
         "data": data if data is not None else {},
-        "meta": dict(meta or {}),
+        "meta": merged,
         "warnings": list(warnings or []),
     }
 
@@ -38,10 +49,12 @@ def fail(
     meta: Mapping[str, Any] | None = None,
     warnings: Sequence[str] | None = None,
 ) -> dict[str, Any]:
+    merged = {"version": _tool_version()}
+    merged.update(dict(meta or {}))
     return {
         "ok": False,
         "error": error.to_dict(),
-        "meta": dict(meta or {}),
+        "meta": merged,
         "warnings": list(warnings or []),
     }
 

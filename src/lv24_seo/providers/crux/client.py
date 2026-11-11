@@ -27,13 +27,13 @@ _DATA_AGE_DAYS = 2
 _NO_FIELD_DATA_WARNING = "no field data"
 
 # Timing metrics are milliseconds; layout shift is a unitless 0..1 score.
-_SCORE_METRICS = frozenset({"cumulative_layout_adjustment"})
+_SCORE_METRICS = frozenset({"cumulative_layout_shift"})
 
 # Core Web Vitals first, then the supporting timings; unknown metrics sort alphabetically.
 _METRIC_ORDER = (
     "largest_contentful_paint",
     "interaction_to_next_paint",
-    "cumulative_layout_adjustment",
+    "cumulative_layout_shift",
     "first_contentful_paint",
     "experimental_time_to_first_byte",
     "first_input_delay",
@@ -73,7 +73,9 @@ class CruxClient:
             )
 
         try:
-            payload: object = self._http.post_json(self._endpoint(), json={field: target})
+            payload: object = self._http.post_json(
+                self._endpoint(), json={field: target}, retry=True, rate_limit_key="crux"
+            )
         except SeoError as error:
             if error.code == PROPERTY_NOT_FOUND:
                 return _empty_result(target)
@@ -171,7 +173,15 @@ def _ordered_names(metrics: dict[str, Any]) -> list[str]:
 def _p75(metric: object) -> float | None:
     percentiles = _mapping(metric, "percentiles")
     value = percentiles.get("p75")
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        # CLS percentiles are doubles encoded as strings ("0.06").
+        try:
+            value = float(value.strip())
+        except ValueError:
+            return None
+    if not isinstance(value, (int, float)):
         return None
     return float(value)
 
@@ -179,6 +189,17 @@ def _p75(metric: object) -> float | None:
 def _proportion(metric: object, index: int) -> float:
     if not isinstance(metric, dict):
         return 0.0
+    # Real CrUX API shape: ``histogram: [{start, end, density}]``.
+    # ``distributions[].proportion`` is kept as a legacy fallback.
+    histogram = metric.get("histogram")
+    if isinstance(histogram, list) and index < len(histogram):
+        bucket = histogram[index]
+        if isinstance(bucket, dict):
+            density = bucket.get("density")
+            if isinstance(density, bool):
+                return 0.0
+            if isinstance(density, (int, float)):
+                return float(density)
     distributions = metric.get("distributions")
     if not isinstance(distributions, list) or index >= len(distributions):
         return 0.0

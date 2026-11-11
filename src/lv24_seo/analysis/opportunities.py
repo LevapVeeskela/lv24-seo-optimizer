@@ -46,8 +46,12 @@ Matching, dedupe and honesty
   with ``position <= 0`` (unknown rank) is skipped by both of them.
 * Decay needs at least 10 previous clicks. A current row with a page matches
   the previous row for that page, falling back to a query-level previous row
-  (``page is None``); a current query-level row matches a query-level previous
-  row, otherwise the previous per-page rows are summed into a rollup.
+  (``page is None``) and then to a summed per-page rollup for the query; a
+  current query-level row matches a query-level previous row, otherwise the
+  previous per-page rows are summed into a rollup. A previous query/page with
+  no current counterpart is modelled as zero clicks only when the caller proves
+  complete coverage (same cap, no truncation on either window); otherwise the
+  absence is sampling, not evidence, and yields no decay candidate.
 * At most one opportunity per ``(kind, query, page)`` is returned. Different
   kinds may describe the same query/page because they answer different
   questions.
@@ -114,6 +118,7 @@ def find_opportunities(
     rows: Sequence[Mapping[str, float | str | None]],
     *,
     previous: Sequence[Mapping[str, float | str | None]] | None = None,
+    previous_complete: bool = False,
     min_impressions: float = 100,
     position_band: tuple[float, float] = (8.0, 20.0),
     ctr_lift: float = 0.03,
@@ -127,6 +132,12 @@ def find_opportunities(
     ``previous`` is required for ``decay`` and ignored otherwise. A raise
     happens only for invalid configuration; bad rows are skipped silently so
     one malformed provider row cannot hide the rest of the report.
+
+    ``previous_complete`` must be True only when both windows were fetched with
+    the same row cap and neither was truncated: only then is a query/page that
+    vanished from the current window evidence of loss (modelled as zero current
+    clicks) rather than of sampling. When coverage is partial, vanished rows
+    are reported as ``unknown`` by the caller, never as zero.
     """
     _validate(min_impressions, position_band, ctr_lift, decay_ratio)
     current = _parse_rows(rows)
@@ -134,7 +145,9 @@ def find_opportunities(
     found.extend(_striking_distance(current, min_impressions, position_band, ctr_lift))
     found.extend(_ctr_gap(current, min_impressions))
     if previous is not None:
-        found.extend(_decay(current, _parse_rows(previous), decay_ratio))
+        found.extend(
+            _decay(current, _parse_rows(previous), decay_ratio, complete=previous_complete)
+        )
     unique = _dedupe(found)
     unique.sort(key=_sort_key)
     return unique[:limit] if limit > 0 else []
@@ -307,8 +320,17 @@ def _decay(
     rows: Sequence[_Metrics],
     previous_rows: Sequence[_Metrics],
     decay_ratio: float,
+    *,
+    complete: bool = False,
 ) -> list[Opportunity]:
-    """Find queries that lost clicks versus the previous period."""
+    """Find queries that lost clicks versus the previous period.
+
+    Rows present in both windows are matched narrowest-first (exact
+    ``query+page``, then query level, then a summed per-page rollup). Rows that
+    vanished from the current window are modelled as zero clicks — but only
+    when ``complete`` proves both windows share the same cap without
+    truncation; otherwise absence is sampling, not evidence.
+    """
     exact: dict[tuple[str, str], _Previous] = {}
     query_level: dict[str, _Previous] = {}
     by_query: dict[str, list[_Previous]] = {}
@@ -323,7 +345,13 @@ def _decay(
             exact.setdefault((row.query, row.page), previous)
 
     found: list[Opportunity] = []
+    current_exact: set[tuple[str, str]] = set()
+    current_queries: set[str] = set()
     for row in rows:
+        if row.query:
+            current_queries.add(row.query)
+        if row.page is not None:
+            current_exact.add((row.query, row.page))
         if row.clicks is None:
             continue
         match = _match_previous(row, exact, query_level, by_query)
@@ -346,6 +374,86 @@ def _decay(
         if previous_impressions is not None:
             evidence["previous_impressions"] = previous_impressions
         found.append(_make_opportunity("decay", row, expected, evidence))
+
+    if complete:
+        emitted_queries: set[str] = set()
+        for (query, page), previous in exact.items():
+            if (query, page) in current_exact or previous.clicks < _MIN_DECAY_CLICKS:
+                continue
+            emitted_queries.add(query)
+            found.append(
+                _make_opportunity(
+                    "decay",
+                    _Metrics(
+                        query=query,
+                        page=page,
+                        clicks=0.0,
+                        impressions=None,
+                        ctr=None,
+                        position=None,
+                    ),
+                    round(previous.clicks, 1),
+                    {
+                        "previous_clicks": previous.clicks,
+                        "clicks": 0.0,
+                        "decay_ratio": decay_ratio,
+                        "match": "vanished",
+                    },
+                )
+            )
+        for query, previous in query_level.items():
+            if query in current_queries or previous.clicks < _MIN_DECAY_CLICKS:
+                continue
+            found.append(
+                _make_opportunity(
+                    "decay",
+                    _Metrics(
+                        query=query,
+                        page=None,
+                        clicks=0.0,
+                        impressions=None,
+                        ctr=None,
+                        position=None,
+                    ),
+                    round(previous.clicks, 1),
+                    {
+                        "previous_clicks": previous.clicks,
+                        "clicks": 0.0,
+                        "decay_ratio": decay_ratio,
+                        "match": "vanished",
+                    },
+                )
+            )
+        for query, candidates in by_query.items():
+            if query in current_queries or query in query_level:
+                continue
+            if query in emitted_queries:
+                # A vanished page of this query was already reported; the rollup
+                # would double-count the same loss.
+                continue
+            total = sum(candidate.clicks for candidate in candidates)
+            if total < _MIN_DECAY_CLICKS:
+                continue
+            found.append(
+                _make_opportunity(
+                    "decay",
+                    _Metrics(
+                        query=query,
+                        page=None,
+                        clicks=0.0,
+                        impressions=None,
+                        ctr=None,
+                        position=None,
+                    ),
+                    round(total, 1),
+                    {
+                        "previous_clicks": total,
+                        "clicks": 0.0,
+                        "decay_ratio": decay_ratio,
+                        "match": "vanished_rollup",
+                    },
+                )
+            )
     return found
 
 
@@ -363,6 +471,10 @@ def _match_previous(
         query_match = query_level.get(row.query)
         if query_match is not None:
             return query_match.clicks, query_match.impressions, "query"
+        candidates = by_query.get(row.query)
+        if candidates:
+            clicks = sum(candidate.clicks for candidate in candidates)
+            return clicks, _sum_impressions(candidates), "query_rollup"
         return None
 
     query_match = query_level.get(row.query)

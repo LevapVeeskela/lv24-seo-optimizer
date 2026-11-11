@@ -27,6 +27,17 @@ TOKEN_EXPIRING = "token_expiring"  # noqa: S105 - a limitation code, not a secre
 PAID_PROVIDER = "paid_provider"
 PARTIAL_RESPONSE = "partial_response"
 
+# Canonical source identifiers. Collectors key ``sources`` by these, the store
+# persists them verbatim, and the report layer maps them to engine sections.
+# A provider's ``SOURCE`` constant must equal one of these; anything else is a
+# wiring bug, not a new engine.
+SOURCE_GSC = "gsc"
+SOURCE_YANDEX_WEBMASTER = "yandex_webmaster"
+SOURCE_YANDEX_METRIKA = "yandex_metrika"
+SOURCE_BING = "bing"
+SOURCE_CRUX = "crux"
+SOURCE_PSI = "psi"
+
 
 def now_utc() -> datetime:
     return datetime.now(UTC)
