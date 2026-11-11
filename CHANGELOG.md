@@ -5,6 +5,10 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-11
+
+Release notes: [`docs/releases/0.3.0.md`](docs/releases/0.3.0.md).
+
 ### Added
 
 - `crawl` / `seo_crawl_site` return `sitemap_coverage`: a sitemap ↔ crawl diff in six buckets
