@@ -11,7 +11,7 @@ Cursor, Gemini, Aider). `CLAUDE.md` is a pointer to this file — never let the 
 |---|---|---|
 | CLI | `src/lv24_seo/cli/` | every command supports `--json`, returns `{ok,data,meta,warnings}`, stable exit codes |
 | MCP server | `src/lv24_seo/mcp/` | 8–12 stable tools, read-only by default, `structuredContent` + text fallback |
-| Skills | `skills/*/SKILL.md` | canonical skill + thin mirrors (`.claude/skills`, `.opencode/skills`) |
+| Skills | `skills/*/SKILL.md` | canonical skill, installed anywhere via `lv24-seo export skills` (editor mirrors planned) |
 | Automation | `src/lv24_seo/automation/` | cron / systemd / Task Scheduler generators, email + Telegram delivery |
 
 Single source of truth for tool metadata: `src/lv24_seo/mcp/registry.py`. CLI help, MCP schemas,

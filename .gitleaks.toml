@@ -1,16 +1,19 @@
 # Gitleaks configuration.
-# The default rule set is kept; we only allowlist the documentation template whose values are
-# intentionally empty placeholders (a key *name* without a secret still matches generic-api-key).
+# The default rule set is kept. Allowlists are narrow and documented:
+# * synthetic fixture declarations carry an explicit inline `gitleaks:allow`;
+# * no test files or environment templates are excluded wholesale;
+# * the bare-name regex covers env-var NAMES referenced in source
+#   (`BING_API_KEY_ENV = "LV24_SEO_BING_API_KEY"`); it is anchored, so an
+#   assignment with a value (`NAME=<value>`) still fires.
 
 [extend]
 useDefault = true
 
 [allowlist]
-description = "Template files contain empty placeholders only; env var NAMES are not secrets"
-paths = [
-  '''^\.env\.example$''',
-  '''^tests/''',
-]
+description = "Bare variable names and exact historical synthetic fixture values only"
 regexes = [
-  '''LV24_SEO_[A-Z0-9_]+''',
+  '''^\s*LV24_SEO_[A-Z0-9_]+=?\s*$''',
+  # Historical public fixtures: fixed fake IndexNow key and a parsed keyword name.
+  '''^abc123def456$''',
+  '''^idempotency_key=$''',
 ]

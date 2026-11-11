@@ -1,6 +1,6 @@
 {
   "name": "@lv24/seo",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "SEO audits and diff reports from Search Console, Yandex, Bing, CrUX and PSI - npx CLI + MCP.",
   "keywords": [
     "seo",
@@ -27,9 +27,14 @@
   "bin": {
     "lv24-seo": "bin/lv24-seo.js"
   },
+  "scripts": {
+    "prepack": "node -e \"require('node:fs').copyFileSync('../../LICENSE', 'LICENSE')\"",
+    "test": "node --test test/launcher.test.js"
+  },
   "files": [
     "bin/lv24-seo.js",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"

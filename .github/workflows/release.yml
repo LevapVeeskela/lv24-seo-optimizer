@@ -8,9 +8,9 @@ name: release
 # There is deliberately no pull_request trigger, so releases never run for PRs.
 #
 # Zero-spend policy (same as ci.yml):
-#   * public repository + standard ubuntu-latest runners only = $0;
+#   * use standard ubuntu-latest runners within verified free usage and $0 hard budgets;
 #   * no matrix, no larger runners, no paid services;
-#   * two short jobs, artifacts kept for 7 days;
+#   * bounded jobs, artifacts kept for 7 days;
 #   * PyPI uses OIDC Trusted Publishing, so no long-lived API token secret exists.
 on:
   push:
@@ -37,12 +37,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install uv and Python
-        uses: astral-sh/setup-uv@v10.3.3
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
           python-version: "3.13"
@@ -78,26 +78,98 @@ jobs:
           print(f"versions aligned at {tag}")
           PY
 
+      - name: Require the committed lockfile
+        run: git ls-files --error-unmatch uv.lock
+
       - name: Build sdist and wheel
         # hatchling is the build backend declared in pyproject.toml.
-        # uv.lock must be committed: CI and the local release checks use it for
-        # reproducible installs, so the tagged commit has a tested dependency set.
+        # uv.lock must be committed: the release candidate is only reproducible
+        # when the tagged commit carries the tested dependency set, so the gate
+        # below fails the release when the lockfile is missing.
         run: uv build
 
       - name: List distributions
         run: ls -lh dist/
 
       - name: Upload distributions
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dist
           path: dist/
           retention-days: 7
           if-no-files-found: error
 
+  verify:
+    # F26: publishing a tag must depend on checks of the same SHA. Tag releases
+    # and CI runs are different chains, so this job re-runs lint, types, offline
+    # tests, schema drift and an installed-wheel smoke test on the exact tagged
+    # commit; every publish job needs it.
+    name: verify release candidate
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Reproducible install from the lockfile
+        run: uv sync --locked --extra dev
+
+      - name: Ruff lint and format
+        run: |
+          uv run --locked ruff check .
+          uv run --locked ruff format --check .
+
+      - name: Mypy
+        run: uv run --locked mypy src
+
+      - name: Offline tests
+        run: uv run --locked pytest -q -m "not live and not network"
+
+      - name: MCP schema drift
+        run: diff -u schemas/tools.json <(uv run --locked python -m lv24_seo.mcp.registry)
+
+      - name: Install Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Verify npm launcher and package
+        working-directory: packages/npm
+        run: |
+          node --check bin/lv24-seo.js
+          node --test test/launcher.test.js
+          npm pack --dry-run
+
+      - name: Download distributions
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dist
+          path: dist/
+
+      - name: Installed-wheel smoke test in a clean environment
+        # Editable checkouts hide missing files (e.g. an unlisted py.typed);
+        # the wheel installed into an isolated venv proves the artefact is whole.
+        run: |
+          python3 -m venv /tmp/wheel-smoke
+          /tmp/wheel-smoke/bin/pip install --quiet "dist/"*.whl
+          /tmp/wheel-smoke/bin/lv24-seo --help >/dev/null
+          /tmp/wheel-smoke/bin/python -c "import lv24_seo, lv24_seo.report.builders, lv24_seo.crawl.sitemap"
+          cd /tmp
+          /tmp/wheel-smoke/bin/lv24-seo export skills --out /tmp/skills-check
+          /tmp/wheel-smoke/bin/python -c "from importlib.resources import files; assert files('lv24_seo').joinpath('py.typed').is_file(); assert files('lv24_seo').joinpath('store/schema.sql').is_file(); from lv24_seo.store import Store; store = Store(':memory:'); store.close()"
+
   publish-pypi:
     name: publish to PyPI
-    needs: build
+    needs: [build, verify]
     # A manual dispatch is a build-only dry run unless it targets a v* tag.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -111,7 +183,7 @@ jobs:
       id-token: write
     steps:
       - name: Download distributions
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dist
           path: dist/
@@ -135,13 +207,13 @@ jobs:
         # publisher with owner LevapVeeskela, repository lv24-seo-optimizer,
         # workflow release.yml and environment pypi. Without it this step fails.
         # PyPI files are immutable: a version can never be uploaded twice.
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: dist/
 
   publish-npm:
     name: publish @lv24/seo to npm
-    needs: build
+    needs: [build, verify]
     # A manual dispatch is a build-only dry run unless it targets a v* tag.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -155,7 +227,7 @@ jobs:
         working-directory: packages/npm
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -163,7 +235,7 @@ jobs:
         # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14; Node 24 ships npm 11.
         # No registry-url on purpose: setup-node would write a placeholder NODE_AUTH_TOKEN
         # and npm would send it instead of the OIDC token.
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 
@@ -202,14 +274,14 @@ jobs:
 
   publish-mcp-registry:
     name: publish to MCP Registry
-    needs: [build, publish-pypi]
+    needs: [build, verify, publish-pypi]
     # Tag releases publish after PyPI accepted the version. A manual dispatch with
     # publish_registry=true can publish the current server.json from any ref (useful to
     # repair the registry without a new release).
     if: |
       always() && (
-        (startsWith(github.ref, 'refs/tags/v') && needs.publish-pypi.result == 'success') ||
-        (github.event_name == 'workflow_dispatch' && inputs.publish_registry)
+        (startsWith(github.ref, 'refs/tags/v') && needs.publish-pypi.result == 'success' && needs.verify.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish_registry && needs.verify.result == 'success' && needs.build.result == 'success')
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -220,16 +292,19 @@ jobs:
       id-token: write
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install mcp-publisher
         env:
           PUBLISHER_VERSION: v1.8.9
+          PUBLISHER_SHA256: 4d527ca8f1ced0394c962dc925c2a4a4addef441cbefd62501c875e9481823a8
         run: |
           curl -sSfL "https://github.com/modelcontextprotocol/registry/releases/download/${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
-            | tar -xz -C /usr/local/bin mcp-publisher
+            -o /tmp/mcp-publisher.tar.gz
+          echo "${PUBLISHER_SHA256}  /tmp/mcp-publisher.tar.gz" | sha256sum -c -
+          tar -xz -C /usr/local/bin -f /tmp/mcp-publisher.tar.gz mcp-publisher
           mcp-publisher --help >/dev/null
 
       - name: Validate server.json

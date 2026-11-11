@@ -8,7 +8,7 @@ on:
     paths-ignore: ["docs/**", "**/*.md", "LICENSE"]
   workflow_dispatch:
 
-# Zero-spend policy: public repo + standard ubuntu runners only, no matrix explosion,
+# Zero-spend policy: standard Ubuntu runners, verified free usage and $0 hard budgets,
 # no larger runners, no artifacts beyond 7 days, concurrency cancels stale runs.
 permissions:
   contents: read
@@ -22,24 +22,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
       - name: Install
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
       - name: Ruff lint
-        run: uv run ruff check .
+        run: uv run --locked ruff check .
       - name: Ruff format
-        run: uv run ruff format --check .
+        run: uv run --locked ruff format --check .
       - name: Mypy
-        run: uv run mypy src
+        run: uv run --locked mypy src
       - name: Gitleaks
+        env:
+          GITLEAKS_VERSION: v8.24.3
+          GITLEAKS_SHA256: 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
-            | tar -xz -C /usr/local/bin gitleaks
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz" \
+            -o /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xz -C /usr/local/bin -f /tmp/gitleaks.tar.gz gitleaks
           gitleaks detect --source . --redact --verbose --exit-code 2 --log-opts="--all"
 
   test:
@@ -48,49 +53,50 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.13"]
+        python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
           python-version: ${{ matrix.python }}
       - name: Install
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
       - name: Tests (offline only)
-        run: uv run pytest -q -m "not live and not network"
+        run: uv run --locked pytest -q -m "not live and not network"
 
   schemas:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
       - name: Install
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
       - name: Regenerate tool schemas
-        run: uv run python -m lv24_seo.mcp.registry > /tmp/tools.json
+        run: uv run --locked python -m lv24_seo.mcp.registry > /tmp/tools.json
       - name: Fail on drift
         run: diff -u schemas/tools.json /tmp/tools.json
 
   npm:
-    # The npm package is a thin launcher; this job only proves it is syntactically valid and
-    # packages the intended files. Publishing happens in release.yml on a v* tag.
+    # The npm package is a thin launcher; this job proves it parses, its unit and
+    # functional tests pass offline, and it packs the intended files (incl. LICENSE
+    # via the prepack copy). Publishing happens in release.yml on a v* tag.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
       run:
         working-directory: packages/npm
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
       - name: Syntax check
         run: node --check bin/lv24-seo.js
+      - name: Launcher tests (offline)
+        run: node --test test/launcher.test.js
       - name: Package contents
         run: npm pack --dry-run
-
-
