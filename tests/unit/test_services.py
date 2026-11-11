@@ -859,3 +859,22 @@ def test_crawl_and_store_without_store_still_returns_results(
     assert response["ok"] is True
     assert response["meta"]["pages_stored"] == 0
     assert "store: not configured; crawl results were not persisted" in response["warnings"]
+
+
+def test_combined_meta_total_is_unknown_unless_every_dataset_reports_one() -> None:
+    from lv24_seo.services import _combined_result_meta
+
+    def result(total: int | None) -> ProviderResult[dict[str, Any]]:
+        return ProviderResult(
+            source="gsc",
+            property_id="sc-domain:example.com",
+            fetched_at=utc_now(),
+            data_age_days=2,
+            rows=[],
+            total=total,
+        )
+
+    assert _combined_result_meta([result(None), result(None)], source="gsc")["total"] is None
+    assert _combined_result_meta([result(5), result(None)], source="gsc")["total"] is None
+    assert _combined_result_meta([result(5), result(0)], source="gsc")["total"] == 5
+    assert _combined_result_meta([], source="gsc")["total"] is None

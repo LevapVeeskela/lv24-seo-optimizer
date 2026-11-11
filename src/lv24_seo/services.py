@@ -1743,10 +1743,16 @@ def _combined_result_meta(results: Sequence[object], *, source: str) -> dict[str
     metadata = [
         _result_meta(result, source=source, rows=_result_rows(result)) for result in results
     ]
+    totals = [meta.get("total") for meta in metadata]
+    # A dataset without a reported total is unknown, never zero: summing it as 0
+    # would turn "provider did not say" into a known count.
+    known = bool(totals) and all(
+        isinstance(value, int) and not isinstance(value, bool) for value in totals
+    )
     return {
         "source": source,
         "truncated": any(meta.get("truncated") for meta in metadata),
-        "total": sum(_int_of(meta.get("total")) for meta in metadata),
+        "total": sum(_int_of(value) for value in totals) if known else None,
         "data_age_days": max((_result_data_age(result) for result in results), default=0),
         "limitations": _unique(
             [item for result in results for item in _result_limitations(result)]
