@@ -22,17 +22,19 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import re
 import smtplib
 import ssl
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from email.message import EmailMessage
 from functools import partial
 from typing import Any, Protocol
 
 from lv24_seo.core.errors import INVALID_INPUT, UPSTREAM_UNAVAILABLE, SeoError
+from lv24_seo.report.i18n import DEFAULT_LOCALE, normalize_locale, translator
 from lv24_seo.report.models import Report
 
 __all__ = [
@@ -60,12 +62,14 @@ STATUS_FAILED = "failed"
 _REASON_ALREADY_SENT = "already_sent"
 _REASON_MATERIAL = "no_material_change"
 
-_SUBJECT_PREFIX = "[SEO] "
-_SUBJECT_LIMIT = 120
 _TELEGRAM_LIMIT = 4000
 _TELEGRAM_TRUNCATED = "\n... [truncated: see the email/HTML report for the full text]"
+_TELEGRAM_TRUNCATED_KEYS = ("telegram.truncated", "email.truncated", "truncated")
+_SUBJECT_FALLBACK = "SEO report"
+_HEADER_WHITESPACE = re.compile(r"[ \t\r\n\f\v]+")
 _SMTP_TIMEOUT = 30.0
 _HTTP_TIMEOUT = 15.0
+_MISSING = object()
 
 SmtpFactory = Callable[[str, int], Any]
 HttpPost = Callable[[str, dict[str, Any]], Any]
@@ -74,9 +78,13 @@ HttpPost = Callable[[str, dict[str, Any]], Any]
 class _Renderers(Protocol):
     """The slice of :mod:`lv24_seo.report.render` that delivery depends on."""
 
-    def render_text(self, report: Report) -> str: ...
+    def render_email_text(self, report: Report, *, locale: str = "en") -> str: ...
 
-    def render_html(self, report: Report) -> str: ...
+    def render_html(
+        self, report: Report, *, title: str | None = None, locale: str = "en"
+    ) -> str: ...
+
+    def render_subject(self, report: Report, *, locale: str = "en") -> str: ...
 
     def render_markdown(self, report: Report) -> str: ...
 
@@ -92,12 +100,14 @@ class EmailConfig:
     sender: str = ""
     use_tls: bool = True
     recipients: tuple[str, ...] = ()
+    locale: str = "en"
 
 
 @dataclass(frozen=True, slots=True)
 class TelegramConfig:
     bot_token: str
     chat_id: str
+    locale: str = "en"
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,21 +120,30 @@ class DeliveryResult:
     content_hash: str = ""
 
 
-def content_hash(report: Report) -> str:
+def content_hash(report: Report, locale: str = "en") -> str:
     """SHA-256 of the semantic report content used for delivery de-duplication.
 
     Volatile envelope fields (``generated_at``) and derived diagnostics
     (``limitations``, ``warnings``) are excluded: two builds of the same period
     with the same headline and sections share a hash even when rebuilt later.
+
+    The normalized locale is part of the payload for every language except
+    English. English deliberately omits the key so its digest stays identical to
+    the pre-localization hash stored in existing ``sends`` ledgers: an English
+    user upgrading the tool is not sent the same period twice. Switching to
+    ``ru`` or ``zh`` produces a new digest and re-sends that period once.
     """
     payload = report.to_dict()
-    semantic = {
+    semantic: dict[str, Any] = {
         "kind": payload.get("kind"),
         "property_id": payload.get("property_id"),
         "period": payload.get("period"),
         "headline": payload.get("headline"),
         "sections": payload.get("sections"),
     }
+    normalized = normalize_locale(locale)
+    if normalized != DEFAULT_LOCALE:
+        semantic["locale"] = normalized
     canonical = json.dumps(
         semantic,
         sort_keys=True,
@@ -150,7 +169,7 @@ def send_email(
     recipient list yields ``no_recipients``, and transport errors are reported by exception
     class name only, because SMTP exceptions may embed the host or credentials in their text.
     """
-    digest = content_hash(report)
+    digest = content_hash(report, cfg.locale)
     if not cfg.sender or not cfg.recipients:
         return DeliveryResult(
             channel=CHANNEL_EMAIL,
@@ -203,7 +222,7 @@ def send_telegram(
     an object with ``status_code``, or an object with ``raise_for_status()``. Missing token or
     chat id yields ``not_configured``; transport and HTTP failures yield ``failed``.
     """
-    digest = content_hash(report)
+    digest = content_hash(report, cfg.locale)
     if not cfg.bot_token or not cfg.chat_id:
         return DeliveryResult(
             channel=CHANNEL_TELEGRAM,
@@ -214,7 +233,7 @@ def send_telegram(
 
     payload: dict[str, Any] = {
         "chat_id": cfg.chat_id,
-        "text": _telegram_text(report),
+        "text": _telegram_text(report, cfg.locale),
         "disable_web_page_preview": True,
     }
     url = f"https://api.telegram.org/bot{cfg.bot_token}/sendMessage"
@@ -252,6 +271,7 @@ def deliver(
     only_on_change: bool = True,
     material_threshold: float = 0.0,
     material_thresholds: Mapping[str, float] | None = None,
+    locale: str = "en",
 ) -> list[DeliveryResult]:
     """Deliver a report over every configured channel.
 
@@ -261,12 +281,19 @@ def deliver(
     implementation is :class:`lv24_seo.store.repositories.Store`. Without a store every call
     sends, because there is nowhere to remember previous deliveries.
 
+    Each channel renders and hashes with its own ``EmailConfig.locale`` /
+    ``TelegramConfig.locale``; the ``locale`` argument is only a fallback for a
+    channel config that carries no locale. This keeps ``was_sent`` /
+    ``record_send`` aligned with the digest the sender actually produced.
+
     ``material_threshold`` (percent) or ``material_thresholds`` (per-metric mapping
     with keys ``clicks_pct`` / ``impressions_pct`` / ``position_abs``) suppresses
     delivery unless at least one section row carries a numeric change field at or
     above the gate, or a truthy ``significant`` flag set by the analysis layer.
     A row without any change field never opens the gate: silence means
-    "no evidence of movement", not "movement of zero".
+    "no evidence of movement", not "movement of zero". Because the gate runs
+    before the locale hash is consulted, ``only_on_change`` can still suppress a
+    locale switch when the period has no material change.
 
     Retry policy: delivery is **at-least-once** per channel. A transport error
     after the remote side accepted the message is indistinguishable from "not
@@ -284,14 +311,17 @@ def deliver(
             next_action="Pass material_threshold=0 to disable the material-change gate.",
         )
 
-    digest = content_hash(report)
     period = _period(report)
 
-    channels: list[tuple[str, Callable[[], DeliveryResult]]] = []
+    channels: list[tuple[str, str, Callable[[], DeliveryResult]]] = []
     if email is not None:
-        channels.append((CHANNEL_EMAIL, partial(send_email, report, email)))
+        email_digest = content_hash(report, _channel_locale(email, locale))
+        channels.append((CHANNEL_EMAIL, email_digest, partial(send_email, report, email)))
     if telegram is not None:
-        channels.append((CHANNEL_TELEGRAM, partial(send_telegram, report, telegram)))
+        telegram_digest = content_hash(report, _channel_locale(telegram, locale))
+        channels.append(
+            (CHANNEL_TELEGRAM, telegram_digest, partial(send_telegram, report, telegram))
+        )
 
     if (
         only_on_change
@@ -303,20 +333,20 @@ def deliver(
                 channel=channel,
                 status=STATUS_SKIPPED,
                 reason=_REASON_MATERIAL,
-                content_hash=digest,
+                content_hash=channel_digest,
             )
-            for channel, _ in channels
+            for channel, channel_digest, _ in channels
         ]
 
     results: list[DeliveryResult] = []
-    for channel, send in channels:
+    for channel, channel_digest, send in channels:
         atomic = getattr(store, "atomic", None)
         guard = atomic() if callable(atomic) else contextlib.nullcontext()
         result: DeliveryResult | None = None
         try:
             with guard:
                 result = _deliver_channel(
-                    report, store, only_on_change, period, digest, channel, send
+                    report, store, only_on_change, period, channel_digest, channel, send
                 )
         except Exception:
             # A journal COMMIT can fail after the message already left: that is
@@ -326,10 +356,23 @@ def deliver(
                 channel=channel,
                 status=STATUS_SENT if sent else STATUS_FAILED,
                 reason="delivery_journal_failed",
-                content_hash=digest,
+                content_hash=channel_digest,
             )
         results.append(result)
     return results
+
+
+def _channel_locale(config: object, fallback: str) -> str:
+    """Locale for one channel: its config wins, ``deliver(locale=...)`` is the fallback.
+
+    A config that defines ``locale`` (even as an empty string) is authoritative,
+    because :func:`send_email` / :func:`send_telegram` normalize that same value.
+    The fallback only applies to duck-typed configs that predate the field.
+    """
+    configured = getattr(config, "locale", _MISSING)
+    if configured is _MISSING:
+        return normalize_locale(fallback)
+    return normalize_locale(configured if isinstance(configured, str) else None)
 
 
 def _deliver_channel(
@@ -354,6 +397,10 @@ def _deliver_channel(
             content_hash=digest,
         )
     result = send()
+    if result.content_hash != digest:
+        # Keep the returned digest identical to the ledger key even when a
+        # custom transport or an older sender computes its own.
+        result = replace(result, content_hash=digest)
     if store is not None and result.status == STATUS_SENT:
         try:
             recorded = store.record_send(report.kind, report.property_id, period, digest, channel)
@@ -376,29 +423,45 @@ def _deliver_channel(
 
 def _build_email(report: Report, cfg: EmailConfig) -> EmailMessage:
     render = _renderers()
+    locale = normalize_locale(cfg.locale)
     message = EmailMessage()
-    message["Subject"] = _subject(report)
+    message["Subject"] = _header_value(render.render_subject(report, locale=locale))
     message["From"] = cfg.sender
     message["To"] = ", ".join(cfg.recipients)
-    message.set_content(render.render_text(report))
-    message.add_alternative(render.render_html(report), subtype="html")
+    message.set_content(render.render_email_text(report, locale=locale))
+    message.add_alternative(render.render_html(report, locale=locale), subtype="html")
+    # set_content/add_alternative rebuild content headers; set this last so it survives.
+    message["Content-Language"] = locale
     return message
 
 
-def _subject(report: Report) -> str:
-    # Collapse whitespace: a newline in a header would make EmailMessage raise.
-    headline = " ".join(report.headline.split())[:_SUBJECT_LIMIT]
-    if not headline:
-        headline = f"{report.kind} report"
-    return f"{_SUBJECT_PREFIX}{headline}"
+def _header_value(value: object) -> str:
+    """Collapse ASCII whitespace: a newline in a header would make EmailMessage raise.
+
+    Non-breaking spaces (used by the RU number format) are preserved.
+    """
+    header = _HEADER_WHITESPACE.sub(" ", str(value or "")).strip()
+    return header or _SUBJECT_FALLBACK
 
 
-def _telegram_text(report: Report) -> str:
-    text = _renderers().render_text(report)
+def _telegram_text(report: Report, locale: str = "en") -> str:
+    normalized = normalize_locale(locale)
+    text = _renderers().render_email_text(report, locale=normalized)
     if len(text) <= _TELEGRAM_LIMIT:
         return text
     # Say so when the message is cut: a silently shortened report reads as complete.
-    return text[: _TELEGRAM_LIMIT - len(_TELEGRAM_TRUNCATED)] + _TELEGRAM_TRUNCATED
+    marker = _truncation_marker(normalized)
+    return text[: _TELEGRAM_LIMIT - len(marker)] + marker
+
+
+def _truncation_marker(locale: str) -> str:
+    """Localized truncation note, falling back to English when no catalog key is present."""
+    translate = translator(locale)
+    for key in _TELEGRAM_TRUNCATED_KEYS:
+        localized = translate.t(key)
+        if localized and localized != key:
+            return f"\n{localized}"
+    return _TELEGRAM_TRUNCATED
 
 
 def _renderers() -> _Renderers:

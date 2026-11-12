@@ -41,6 +41,7 @@ from lv24_seo.core.secrets import SecretStore
 from lv24_seo.core.write_gate import WRITE_SECRET_ENV, WriteGate, WritePlan
 from lv24_seo.mcp.registry import tools_as_json
 from lv24_seo.providers.bing import indexnow_submit
+from lv24_seo.report.i18n import normalize_locale
 from lv24_seo.report.models import Report, ReportSection
 from lv24_seo.report.render import render_html, render_text
 from lv24_seo.services import SeoService
@@ -1202,7 +1203,7 @@ def _write_report(
         except (AttributeError, KeyError, TypeError, ValueError):
             document = ""
     if not document:
-        document = _fallback_html(data)
+        document = _fallback_html(data, locale=config.report.locale)
     _write_text(html_path, document)
     return {"json": str(json_path), "html": str(html_path)}
 
@@ -1256,11 +1257,13 @@ def _report_from_payload(data: Mapping[str, Any]) -> Report:
     )
 
 
-def _fallback_html(data: Any) -> str:
+def _fallback_html(data: Any, *, locale: str = "en") -> str:
     rendered = html_module.escape(json.dumps(data, ensure_ascii=False, indent=2))
+    language = html_module.escape(normalize_locale(locale), quote=True)
     return (
         "<!DOCTYPE html>\n"
-        '<html lang="en">\n<head><meta charset="utf-8"><title>SEO report</title></head>\n'
+        f'<html lang="{language}">\n'
+        "<head><meta charset='utf-8'><title>SEO report</title></head>\n"
         "<body><h1>SEO report</h1><pre>"
         f"{rendered}"
         "</pre></body></html>\n"
@@ -1661,8 +1664,10 @@ def _report_lines(payload: Mapping[str, Any]) -> list[str]:
     data = payload.get("data")
     lines: list[str] = []
     if isinstance(data, Mapping):
+        meta = payload.get("meta") or {}
+        locale = str(meta.get("locale") or "en") if isinstance(meta, Mapping) else "en"
         try:
-            lines = render_text(_report_from_payload(data)).splitlines()
+            lines = render_text(_report_from_payload(data), locale=locale).splitlines()
         except (AttributeError, KeyError, TypeError, ValueError):
             lines = []
     if not lines:

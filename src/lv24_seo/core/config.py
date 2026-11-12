@@ -164,7 +164,7 @@ class TelegramConfig(_StrictModel):
 class ReportConfig(_StrictModel):
     """Report locale, schedule and delivery channels."""
 
-    locale: Literal["ru", "en"] = "ru"
+    locale: Literal["ru", "en", "zh"] = "ru"
     timezone: str = "Europe/Minsk"
     week_start: Literal["monday", "sunday"] = "monday"
     thresholds: ThresholdsConfig = Field(default_factory=ThresholdsConfig)

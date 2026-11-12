@@ -30,6 +30,7 @@ __all__ = ["build_indexing", "build_opportunities", "build_weekly"]
 _ENGINES: tuple[str, ...] = ("gsc", "yandex", "metrika")
 _SEVERITIES: tuple[str, ...] = ("critical", "high", "medium", "low")
 _UNKNOWN_SEVERITY = "unknown"
+_HEADLINE_METRICS: tuple[str, ...] = ("clicks", "impressions", "ctr", "position")
 
 _WEEKLY_OPPORTUNITIES = 5
 _INDEXING_EXAMPLES = 5
@@ -63,7 +64,11 @@ def build_weekly(
     """Build the weekly review: deltas, traffic, opportunities, issues and sources.
 
     ``current``/``previous`` carry one engine's comparable window totals (GSC):
-    the headline never merges engines with different sampling or windows.
+    the headline never merges engines with different sampling or windows. When
+    only ``current`` exists, the headline keeps the current values with
+    ``previous``/``abs_delta``/``pct_delta``/``good`` set to ``None`` and
+    ``direction="flat"``: a missing baseline is reported as no comparison, never
+    as a zero baseline with an invented delta.
     ``gsc_rows`` are the current-window ``query``/``page`` rows for fusion and
     opportunities; ``gsc_previous_rows`` enables decay matching, and
     ``gsc_previous_complete`` must be True only when both windows share the same
@@ -76,6 +81,7 @@ def build_weekly(
     delta_rows = (
         compute_delta(current, previous, thresholds=thresholds) if current and previous else []
     )
+    current_only_rows = _current_only_rows(current) if current and not previous else []
     fusion = fuse_engines(gsc=gsc_rows, yandex=yandex_rows, metrika=metrika_rows)
     opportunities = find_opportunities(
         gsc_rows,
@@ -88,7 +94,7 @@ def build_weekly(
         _weekly_headline(delta_rows)
         if delta_rows
         else "GSC comparison unavailable"
-        if has_source_data
+        if current_only_rows or has_source_data
         else "No provider data available"
     )
 
@@ -99,7 +105,7 @@ def build_weekly(
         period_end=_iso_date(period_end),
         headline=headline_text,
         sections=[
-            _headline_section(delta_rows),
+            _headline_section(delta_rows, current_only_rows),
             _traffic_section(fusion),
             _opportunities_section(opportunities, has_rows=bool(gsc_rows)),
             _issues_section(issues),
@@ -185,25 +191,51 @@ def build_opportunities(
     )
 
 
-def _headline_section(rows: Sequence[DeltaRow]) -> ReportSection:
+def _headline_section(
+    rows: Sequence[DeltaRow],
+    current_only: Sequence[Mapping[str, Any]] = (),
+) -> ReportSection:
     return ReportSection(
         key="headline",
         title="Headline",
         summary=_delta_summary_text(rows),
-        rows=[
-            {
-                "metric": row.metric,
-                "current": row.current,
-                "previous": row.previous,
-                "abs_delta": row.abs_delta,
-                "pct_delta": row.pct_delta,
-                "significant": row.significant,
-                "direction": row.direction,
-                "good": row.good,
-            }
-            for row in rows
-        ],
+        rows=([_delta_row(row) for row in rows] if rows else [dict(row) for row in current_only]),
     )
+
+
+def _delta_row(row: DeltaRow) -> dict[str, Any]:
+    return {
+        "metric": row.metric,
+        "current": row.current,
+        "previous": row.previous,
+        "abs_delta": row.abs_delta,
+        "pct_delta": row.pct_delta,
+        "significant": row.significant,
+        "direction": row.direction,
+        "good": row.good,
+    }
+
+
+def _current_only_rows(current: Mapping[str, float]) -> list[dict[str, Any]]:
+    """One row per metric with the current value and no comparison fields.
+
+    ``previous`` stays ``None`` (not ``0``) so the renderer can say "no
+    comparison" instead of inventing ``Previous 0`` and a false delta/verdict.
+    A metric absent from ``current`` also stays ``None``: unknown is not zero.
+    """
+    return [
+        {
+            "metric": metric,
+            "current": float(current[metric]) if metric in current else None,
+            "previous": None,
+            "abs_delta": None,
+            "pct_delta": None,
+            "significant": False,
+            "direction": "flat",
+            "good": None,
+        }
+        for metric in _HEADLINE_METRICS
+    ]
 
 
 def _traffic_section(fusion: FusionReport) -> ReportSection:

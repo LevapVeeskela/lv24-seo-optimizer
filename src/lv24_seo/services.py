@@ -109,6 +109,7 @@ _YANDEX_MAX_LIMIT = 500
 _HTTP_SCHEMES = frozenset({"http", "https"})
 # PSI works keyless; a key only raises the quota, so it never blocks client construction.
 _KEYLESS_CLIENTS = frozenset({"psi"})
+_HEADLINE_METRICS: tuple[str, ...] = ("clicks", "impressions", "ctr", "position")
 _DELIVERY_UNAVAILABLE = "delivery: unavailable; report was not sent"
 _BUILDERS_UNAVAILABLE = "report builders: unavailable; using a minimal fallback report"
 
@@ -1044,7 +1045,11 @@ class SeoService:
             and bool(sources[SOURCE_GSC].get("comparable"))
         )
         if not gsc_complete:
-            headline_current = {}
+            # Keep the current totals: they are real even when no comparable
+            # previous window exists, so the report shows values with
+            # ``previous=None`` instead of an empty KPI card. A previous window
+            # is only used when it is comparable; otherwise the builder would
+            # invent a baseline and a false verdict.
             headline_previous = {}
             limitations.append(
                 "headline delta unavailable: no comparable GSC windows; "
@@ -1074,6 +1079,21 @@ class SeoService:
 
         stored_issues = self._stored_issue_rows(property_id)
 
+        # Current GSC totals are real even without a comparable previous window;
+        # only the previous side is gated on comparability. The fallback gets the
+        # same rule so it cannot compare a truncated/missing window either.
+        gsc_current_totals = (
+            _flatten_totals(headline_current) if headline_current.get(SOURCE_GSC) else {}
+        )
+        gsc_previous_totals = (
+            _flatten_totals(headline_previous)
+            if gsc_complete and headline_previous.get(SOURCE_GSC)
+            else {}
+        )
+        fallback_previous = dict(previous)
+        if not gsc_complete:
+            fallback_previous.pop(SOURCE_GSC, None)
+
         builder = _load_weekly_builder()
         report_obj: Report
         if builder is None:
@@ -1084,7 +1104,7 @@ class SeoService:
                 start=start,
                 end=current_end,
                 current=current,
-                previous=previous,
+                previous=fallback_previous,
                 limitations=limitations,
                 warnings=all_warnings,
             )
@@ -1094,8 +1114,8 @@ class SeoService:
                     property_id=property_id,
                     period_start=start,
                     period_end=current_end,
-                    current=_flatten_totals(headline_current) if gsc_complete else {},
-                    previous=_flatten_totals(headline_previous) if gsc_complete else {},
+                    current=gsc_current_totals,
+                    previous=gsc_previous_totals,
                     gsc_rows=gsc_query_current,
                     gsc_previous_rows=gsc_query_previous,
                     gsc_previous_complete=query_complete,
@@ -1119,7 +1139,7 @@ class SeoService:
                     start=start,
                     end=current_end,
                     current=current,
-                    previous=previous,
+                    previous=fallback_previous,
                     limitations=limitations,
                     warnings=all_warnings,
                 )
@@ -1169,6 +1189,7 @@ class SeoService:
             "sources_incomplete": incomplete,
             "complete": complete,
             "data_age_days": data_age,
+            "locale": self._config.report.locale,
             "truncated": any(
                 bool(source["meta"].get("truncated"))
                 for source in sources.values()
@@ -1219,12 +1240,14 @@ class SeoService:
                 password=self._secrets.get("smtp_password") or "",
                 sender=cfg.email.email_from,
                 recipients=tuple(cfg.email.to),
+                locale=cfg.locale,
             )
         telegram = None
         if cfg.telegram.enabled and cfg.telegram.chat_id:
             telegram = TelegramConfig(
                 bot_token=self._secrets.get("telegram_bot_token") or "",
                 chat_id=cfg.telegram.chat_id,
+                locale=cfg.locale,
             )
         if email is None and telegram is None:
             warnings.append("delivery: no channel configured")
@@ -1241,6 +1264,7 @@ class SeoService:
                 "impressions_pct": cfg.thresholds.impressions_pct,
                 "position_abs": cfg.thresholds.position_abs,
             },
+            locale=cfg.locale,
         )
         for result in results:
             if result.status == "failed":
@@ -1526,27 +1550,36 @@ class SeoService:
             position_abs=self._config.report.thresholds.position_abs,
         )
 
-        gsc_current = current.get(SOURCE_GSC)
-        gsc_previous = previous.get(SOURCE_GSC)
-        if gsc_current or gsc_previous:
-            deltas = compute_delta(gsc_current or {}, gsc_previous or {}, thresholds=thresholds)
+        gsc_current = current.get(SOURCE_GSC) or {}
+        gsc_previous = previous.get(SOURCE_GSC) or {}
+        if gsc_current:
+            # A delta needs both sides. With only the current window, emit the
+            # same current-only rows as the builder: previous/abs/pct stay None
+            # so no zero baseline, false delta or verdict is produced.
+            if gsc_previous:
+                deltas = compute_delta(gsc_current, gsc_previous, thresholds=thresholds)
+                gsc_rows: list[dict[str, Any]] = [
+                    {
+                        "metric": row.metric,
+                        "current": row.current,
+                        "previous": row.previous,
+                        "abs_delta": row.abs_delta,
+                        "pct_delta": row.pct_delta,
+                        "significant": row.significant,
+                        "good": row.good,
+                    }
+                    for row in deltas
+                ]
+                gsc_summary = delta_headline(deltas) or "no change"
+            else:
+                gsc_rows = _current_only_gsc_rows(gsc_current)
+                gsc_summary = "Comparison unavailable: no previous GSC window"
             sections.append(
                 ReportSection(
                     key="gsc",
                     title="Google Search Console",
-                    summary=delta_headline(deltas) or "no change",
-                    rows=[
-                        {
-                            "metric": row.metric,
-                            "current": row.current,
-                            "previous": row.previous,
-                            "abs_delta": row.abs_delta,
-                            "pct_delta": row.pct_delta,
-                            "significant": row.significant,
-                            "good": row.good,
-                        }
-                        for row in deltas
-                    ],
+                    summary=gsc_summary,
+                    rows=gsc_rows,
                 )
             )
 
@@ -1898,6 +1931,28 @@ def _gsc_totals(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
         "ctr": (clicks / impressions) if impressions > 0 else 0.0,
         "position": (weighted / impressions) if impressions > 0 else 0.0,
     }
+
+
+def _current_only_gsc_rows(current: Mapping[str, float]) -> list[dict[str, Any]]:
+    """Current GSC totals with no baseline; every comparison field is ``None``.
+
+    Mirrors the ``report.builders`` current-only headline rows. The builders
+    module is imported lazily and may be unavailable on this fallback path, so
+    the shape is kept here instead of imported.
+    """
+    return [
+        {
+            "metric": metric,
+            "current": float(current[metric]) if metric in current else None,
+            "previous": None,
+            "abs_delta": None,
+            "pct_delta": None,
+            "significant": False,
+            "direction": "flat",
+            "good": None,
+        }
+        for metric in _HEADLINE_METRICS
+    ]
 
 
 def _yandex_totals(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
