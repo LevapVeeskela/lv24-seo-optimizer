@@ -55,7 +55,7 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.3.1).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
+**Beta (v0.4.0).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
 Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule crawler, SQLite history, analysis (deltas, opportunities,
 indexing triage, multi-engine fusion, nginx log stats), report builders + HTML/text/Markdown renderers,
 SMTP/Telegram delivery with idempotency, the full CLI, the MCP server (11 tools, 3 resources,

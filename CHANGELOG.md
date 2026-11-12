@@ -3,21 +3,41 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-13
+
+Release notes: [`docs/releases/0.4.0.md`](docs/releases/0.4.0.md).
 
 ### Added
 
 - Product-grade weekly email: localized subject, HTML and 78-column plain text for `ru`, `en`
   and `zh` — a 600px inline-CSS card with KPI cards, top-3 opportunities, issue severities,
   merged sources, data notes/warnings and a property/UTC footer. No external images, stylesheets,
-  scripts or tracking pixels; unknown values stay unknown and Metrica is reported as sessions.
+  scripts or tracking pixels; unknown values stay unknown and Metrica is labelled as sessions,
+  never clicks.
 - `report.locale` accepts `zh` (default remains `ru`). Locale is presentation-only: JSON
   snapshots, `report diff`, MCP payloads and machine codes stay canonical English.
+- Current-only KPI rows when a current GSC window exists without a comparable previous window:
+  the email shows real current values plus "No comparison" instead of "No data".
 
 ### Changed
 
 - Delivery de-duplication includes the normalized render locale in `content_hash`, so switching
-  language re-sends the same period once; `generated_at` and diagnostics remain excluded.
+  language re-sends the same period once; the English digest stays compatible with existing
+  `sends` ledgers, `generated_at` and diagnostics remain excluded.
+- CTR movement is shown in percentage points (`pp` / `п.п.` / `个百分点`), not relative percent.
+- Email layout is responsive (`width:100%;max-width:600px`), preserves RU NBSP formatting and
+  wraps CJK text by display width.
+
+### Fixed
+
+- Raw limitation codes (`rows_cap_50000`, `top_3000_queries`, `no_query_page_join`,
+  `sessions_not_clicks`, `sampled`, ...) are mapped to localized sentences; unknown codes are
+  labelled as "Other limitation (code)".
+- No invented `Previous 0` / `Worse` / "stable" verdict when the previous window is missing.
+- No false "No opportunities found" when only metric totals exist without query/page rows.
+- Non-weekly reports no longer show the weekly "No previous period to compare" verdict.
+- Unknown metric rows no longer dump raw schema fields into the email.
+- RU severity labels, ZH source units and the estimate footnote are grammatically correct.
 
 ## [0.3.1] - 2026-11-11
 
