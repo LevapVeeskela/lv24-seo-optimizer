@@ -20,9 +20,16 @@ into the unpinned (`latest`) lookup.
 
 ## Status
 
-Beta (0.3.x). The current Python/NPM line ships 11 read-only-by-default MCP tools, 3 resources,
-3 prompts, the full CLI and scheduler generators. Recent additions:
+Beta. The current Python/NPM line ships 11 read-only-by-default MCP tools, 3 resources,
+3 prompts, the full CLI, scheduler generators and a product-grade weekly email. Recent
+additions:
 
+* **Localized product email** — `report weekly --send` renders a 600px inline-CSS digest in
+  `ru`, `en` or `zh`: KPI cards for clicks/impressions/CTR/position, top-3 opportunities,
+  issue severities, merged sources, data notes and a property/UTC footer. Plain-text fallback
+  and subject are localized too; JSON/MCP payloads stay canonical English. Unknown values stay
+  unknown, CTR changes are shown in percentage points, and Metrica is labelled as sessions,
+  never as clicks. Set the language once with `report.locale`.
 * **Week-over-week report diff** — `report diff` and the `seo_report_diff` MCP tool compare two
   stored weekly snapshots without provider calls. Metrics present on one side only stay unknown,
   not zero; differing period lengths make the pair not comparable. `--markdown` is deterministic
@@ -48,6 +55,7 @@ npx @lv24/seo init --property https://example.com
 npx @lv24/seo auth set --provider gsc --stdin
 npx @lv24/seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
 npx @lv24/seo report weekly --json --out reports/
+npx @lv24/seo report weekly --send              # product email/Telegram digest
 npx @lv24/seo report diff --markdown          # diff of two stored weekly snapshots
 npx @lv24/seo crawl --json                    # issues + sitemap↔crawl coverage diff
 npx @lv24/seo mcp serve                       # stdio MCP server for Claude/OpenCode/Cursor
@@ -55,6 +63,36 @@ npx @lv24/seo export skills --out ./skills    # packaged agent skills
 ```
 
 The first run may take a few seconds while uv resolves and caches the Python package.
+
+## Email reports
+
+`report weekly --send` builds the digest and delivers it over the configured SMTP/Telegram
+channels. The email is a product template, not a raw data dump: dark branded header/footer,
+KPI cards, top-3 opportunities, issue severities, merged sources, data notes/warnings and a
+footer with the exact property id. It contains no external images, stylesheets, scripts or
+tracking pixels; unknown values stay unknown and CTR changes are shown in percentage points.
+
+Language is selected once for all human-readable output:
+
+```toml
+[report]
+locale = "ru"                  # ru | en | zh; JSON/MCP payloads stay canonical English
+
+[report.email]
+enabled = true
+to = ["owner@example.com"]
+from = "seo@example.com"
+smtp_host = "smtp.example.com"
+smtp_port = 587
+smtp_user = "seo@example.com"
+only_on_change = true          # set false for an email every run, even without material change
+```
+
+Store the SMTP password in the keychain with `npx @lv24/seo auth set --provider smtp --stdin`
+(or set `LV24_SEO_SMTP_PASSWORD`). `schedule install` adds `--send` to the generated job, so a
+weekly/daily schedule delivers automatically. `only_on_change` and the configured
+`report.thresholds` can suppress a send when nothing material moved; switching `report.locale`
+re-sends the same period once because the delivery hash includes the language.
 
 ## MCP surface
 
@@ -94,7 +132,8 @@ npm test   # node --test test/launcher.test.js, offline: pinning, guards, exit c
 ## Links
 
 * Repository and full docs: <https://github.com/LevapVeeskela/lv24-seo-optimizer>
-* CLI, MCP tools and limits: `docs/cli.md`, `docs/mcp.md`, `docs/data-sources.md`
+* CLI, MCP tools, email scheduling and limits: `docs/cli.md`, `docs/mcp.md`,
+  `docs/scheduling.md`, `docs/data-sources.md`
 * Release notes: <https://github.com/LevapVeeskela/lv24-seo-optimizer/tree/main/docs/releases>
 * Issues: <https://github.com/LevapVeeskela/lv24-seo-optimizer/issues>
 
