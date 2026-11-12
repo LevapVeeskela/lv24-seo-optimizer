@@ -41,7 +41,7 @@ strategy = "mobile"
 urls = ["https://example.com/", "https://example.com/pricing"]
 
 [report]
-locale = "ru"                 # ru | en
+locale = "ru"                 # ru | en | zh; human/email text only, JSON stays English
 timezone = "Europe/Minsk"     # IANA name; all report dates and "today" use it
 week_start = "monday"
 # Deltas below these thresholds are treated as noise, not as a material change.

@@ -74,7 +74,11 @@ directory, so pass the site selectors explicitly:
 | `LV24_SEO_YANDEX_HOST_ID` | Yandex host id, for example `https:example.com:443` |
 | `LV24_SEO_YANDEX_METRIKA_COUNTER` | Metrika counter id |
 | `LV24_SEO_DATA_DIR` | Data directory (SQLite, `secrets.json` fallback) |
-| `LV24_SEO_REPORT_LOCALE`, `LV24_SEO_REPORT_TIMEZONE` | Report defaults (`ru`/`en`, IANA zone) |
+| `LV24_SEO_REPORT_LOCALE`, `LV24_SEO_REPORT_TIMEZONE` | Report defaults (`ru`/`en`/`zh`, IANA zone) |
+
+Locale affects rendered human text only: the CLI summary and email/Telegram messages. MCP tool
+payloads remain canonical English and machine codes (`metric`, `severity`, `engine`, `kind`,
+`status`) are never translated, so client parsing is locale-independent.
 
 Run `lv24-seo config show --json` to see the file in effect (`data.path` is `null` when no file was
 found).

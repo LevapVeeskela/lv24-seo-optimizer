@@ -38,7 +38,7 @@ strategy = "mobile"
 urls = ["https://example.com/", "https://example.com/pricing"]
 
 [report]
-locale = "ru"           # ru | en
+locale = "ru"           # ru | en | zh; rendered text only
 timezone = "Europe/Minsk"
 week_start = "monday"
 thresholds = { clicks_pct = 10, impressions_pct = 15, position_abs = 1.5 }
@@ -72,6 +72,26 @@ raw_retention_days = 90   # reserved: no raw archives are written yet, pruning i
 > Telemetry is not configurable: the tool sends nothing anywhere. There is no `[privacy]` section and
 > One `seo.toml` describes one project; a multi-site block is not implemented.
 
+## Locale
+
+`report.locale` accepts `en`, `ru` and `zh`; the default is `ru`. It selects the language of
+human-readable output: the weekly email subject, HTML and plain text, the CLI human summary, the
+HTML written by `report weekly --out`, and Telegram messages. It also selects number, percent,
+position, date and plural formatting for those surfaces.
+
+Locale is **presentation-only**. JSON envelopes (`--json`), MCP payloads, stored snapshots,
+`report diff` and the `report.json` written by `--out` stay canonical English, and machine codes
+(`metric`, `severity`, `engine`, `kind`, `status`, `reason`) are never translated. An unsupported
+locale fails config validation with `CONFIG_INVALID` instead of falling back silently.
+
+`report.locale` is the single source of truth for the rendered language of email, Telegram, the
+CLI human summary and the HTML written by `report weekly --out`. The lower-level delivery API
+mirrors it per channel: `EmailConfig.locale` and `TelegramConfig.locale` default to `en` and are
+what `send_email` / `send_telegram` use (neither function accepts a `locale` argument).
+`deliver(locale=...)` is only a fallback for a channel config that carries no locale; when the
+channel configs are present, their own `locale` wins. There are no `report.email.locale` or
+`report.telegram.locale` keys in `seo.toml` — set `report.locale` once.
+
 ## Secrets
 
 | Source | How |
@@ -90,7 +110,8 @@ It does not verify permissions or perform an API call.
 ## Environment variables
 
 See [`.env.example`](../.env.example). All are prefixed `LV24_SEO_`; the mapping is
-`report.email.to` ↔ `LV24_SEO_MAIL_TO`.
+`report.email.to` ↔ `LV24_SEO_MAIL_TO`. `LV24_SEO_REPORT_LOCALE` sets `report.locale` and accepts
+`ru`, `en` or `zh`.
 
 ## Multi-property
 

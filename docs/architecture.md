@@ -98,12 +98,22 @@ query level (clicks/impressions) separately, and the report labels which engine 
 
 ## 5. Report layer
 
-* `report/builders.py` produce a `Report` dataclass (JSON-serialisable).
-* `report/render.py` render the same object; no business logic in renderers.
+* `report/builders.py` produce a `Report` dataclass (JSON-serialisable, canonical English).
+  `Report.to_dict()` has no locale field: snapshots, report diff and MCP payloads do not change
+  with the display language.
+* `report/i18n.py` is presentation-only: locale catalogs (`en`, `ru`, `zh`), plural rules and
+  number/percent/position/date formatting. An unknown locale falls back to English; an invalid
+  numeric or date value renders as empty text, never as `0`.
+* `report/render.py` renders the same object. Weekly text, email text, subject and HTML are
+  localized; Markdown stays canonical English. The weekly email presenter is a 600px inline-CSS
+  template with KPI cards, top-3 opportunities, issue severities, merged sources, data notes and
+  a footer; no external images, stylesheets, scripts or tracking pixels.
 * `report/delivery.py` implements `deliver(report, …)` for SMTP email and Telegram with a
   verifying TLS context, a normalized transport result (an HTTP 400/429 is `failed`, never
-  `sent`), a semantic content hash (volatile envelope fields excluded) and an at-least-once
-  retry policy documented on the function.
+  `sent`), a semantic content hash that includes the normalized render locale (volatile envelope
+  fields and diagnostics excluded) and an at-least-once retry policy documented on the function.
+  A locale change therefore re-sends the same period once; rebuilding it in the same language
+  does not.
 * Every report carries `data_age`, per-source `limitations`, and per-engine coverage: the weekly
   headline compares GSC windows only, `sources_failed` names isolated provider failures, and
   `meta.complete` also accounts for capped, sampled, empty and comparison inputs. GSC query rows

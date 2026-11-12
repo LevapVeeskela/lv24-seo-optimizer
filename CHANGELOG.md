@@ -5,6 +5,20 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- Product-grade weekly email: localized subject, HTML and 78-column plain text for `ru`, `en`
+  and `zh` — a 600px inline-CSS card with KPI cards, top-3 opportunities, issue severities,
+  merged sources, data notes/warnings and a property/UTC footer. No external images, stylesheets,
+  scripts or tracking pixels; unknown values stay unknown and Metrica is reported as sessions.
+- `report.locale` accepts `zh` (default remains `ru`). Locale is presentation-only: JSON
+  snapshots, `report diff`, MCP payloads and machine codes stay canonical English.
+
+### Changed
+
+- Delivery de-duplication includes the normalized render locale in `content_hash`, so switching
+  language re-sends the same period once; `generated_at` and diagnostics remain excluded.
+
 ## [0.3.1] - 2026-11-11
 
 Release notes: [`docs/releases/0.3.1.md`](docs/releases/0.3.1.md).

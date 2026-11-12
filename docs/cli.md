@@ -68,9 +68,20 @@ lv24-seo report weekly [--days 7] [--lag-days 2] [--send] [--out reports/] [--js
 - `--days` current window, `--lag-days` provider lag (GSC 2–3 days).
 - `--send` delivers through the channels enabled in `seo.toml` (email/Telegram). Without it the
   report is only built and stored as a snapshot.
-- `--out DIR` writes `report.json` and `report.html`.
+- `--out DIR` writes `report.json` (canonical English) and `report.html` (rendered in
+  `report.locale`).
 - Reports are idempotent: a second run for the same period and content is skipped
   (`already_sent`), and `only_on_change` skips a send when nothing material changed.
+
+Human-readable output follows `report.locale` (`ru`, `en`, `zh`; default `ru`): the weekly CLI
+summary, `report.html` from `--out`, and delivered email/Telegram messages, including number,
+percent, position and date formatting. The weekly envelope also carries `meta.locale`, the language
+used for that rendering. `--json` envelopes, `report.json` and `report diff --markdown` stay
+canonical English, and machine codes are never translated, so scripts and snapshots do not depend
+on the display language. Switching `report.locale` to `ru` or `zh` re-sends the same period once in
+the new language; the English digest stays compatible with pre-localization ledger rows. The
+material gate runs first, so with `only_on_change` enabled a pure locale switch can still be
+suppressed when the period has no material change.
 
 ```bash
 lv24-seo report diff [--base START..END] [--head START..END] [--markdown] [--json]
