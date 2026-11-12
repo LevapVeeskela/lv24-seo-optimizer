@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
+
 from lv24_seo.report.builders import build_indexing, build_opportunities, build_weekly
 
 _PERIOD_START = date(2026, 11, 4)
@@ -237,6 +239,125 @@ def test_opportunities_report_headline_sums_expected_clicks() -> None:
     assert row["expected_clicks"] == 30.0
     assert row["evidence"]["position_band"] == "8-20"
     assert row["evidence"]["ctr_lift"] == 0.03
+
+
+def test_weekly_current_only_rows_keep_values_without_a_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No previous window: current values stay, comparisons stay unknown."""
+
+    def forbidden(*args: object, **kwargs: object) -> list[object]:
+        raise AssertionError("compute_delta must not run when previous is empty")
+
+    monkeypatch.setattr("lv24_seo.report.builders.compute_delta", forbidden)
+
+    report = build_weekly(
+        property_id="example.com",
+        period_start=_PERIOD_START,
+        period_end=_PERIOD_END,
+        current=_current(),
+        previous={},
+        generated_at=_GENERATED_AT,
+    )
+
+    assert report.headline == "GSC comparison unavailable"
+    assert any("previous period has no metrics" in warning for warning in report.warnings)
+    assert all("delta rows are all zero" not in warning for warning in report.warnings)
+
+    headline = report.section("headline")
+    assert headline is not None
+    assert headline.summary == "Comparison unavailable: both complete baseline windows are required"
+    assert headline.rows == [
+        {
+            "metric": "clicks",
+            "current": 120.0,
+            "previous": None,
+            "abs_delta": None,
+            "pct_delta": None,
+            "significant": False,
+            "direction": "flat",
+            "good": None,
+        },
+        {
+            "metric": "impressions",
+            "current": 2400.0,
+            "previous": None,
+            "abs_delta": None,
+            "pct_delta": None,
+            "significant": False,
+            "direction": "flat",
+            "good": None,
+        },
+        {
+            "metric": "ctr",
+            "current": 0.05,
+            "previous": None,
+            "abs_delta": None,
+            "pct_delta": None,
+            "significant": False,
+            "direction": "flat",
+            "good": None,
+        },
+        {
+            "metric": "position",
+            "current": 6.0,
+            "previous": None,
+            "abs_delta": None,
+            "pct_delta": None,
+            "significant": False,
+            "direction": "flat",
+            "good": None,
+        },
+    ]
+
+
+def test_weekly_current_only_does_not_invent_missing_metrics() -> None:
+    report = build_weekly(
+        property_id="example.com",
+        period_start=_PERIOD_START,
+        period_end=_PERIOD_END,
+        current={"clicks": 7.0},
+        previous={},
+        generated_at=_GENERATED_AT,
+    )
+
+    headline = report.section("headline")
+    assert headline is not None
+    rows = {row["metric"]: row for row in headline.rows}
+    assert rows["clicks"]["current"] == 7.0
+    assert rows["impressions"]["current"] is None
+    assert rows["ctr"]["current"] is None
+    assert rows["position"]["current"] is None
+    assert all(row["previous"] is None for row in headline.rows)
+
+
+def test_weekly_full_windows_keep_the_existing_delta_rows() -> None:
+    report = build_weekly(
+        property_id="example.com",
+        period_start=_PERIOD_START,
+        period_end=_PERIOD_END,
+        current=_current(),
+        previous=_previous(),
+        generated_at=_GENERATED_AT,
+    )
+
+    headline = report.section("headline")
+    assert headline is not None
+    rows = {row["metric"]: row for row in headline.rows}
+    assert rows["clicks"] == {
+        "metric": "clicks",
+        "current": 120.0,
+        "previous": 100.0,
+        "abs_delta": 20.0,
+        "pct_delta": 20.0,
+        "significant": True,
+        "direction": "up",
+        "good": True,
+    }
+    assert rows["position"]["previous"] == 7.0
+    assert rows["position"]["abs_delta"] == -1.0
+    assert rows["position"]["direction"] == "down"
+    assert all(row["previous"] is not None for row in headline.rows)
 
 
 def test_empty_weekly_input_produces_a_valid_report_with_warnings() -> None:

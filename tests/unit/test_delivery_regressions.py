@@ -176,6 +176,56 @@ def test_content_hash_ignores_generated_at_and_diagnostics() -> None:
     )
 
 
+# Digest written by the pre-localization implementation for the fixed period
+# below (semantic payload without a locale key). Keep it literal: changing it
+# would make an English user receive an already-delivered period again.
+LEGACY_EN_HASH = "dba2e96a176d4077a14929270069c9ff12934fc3b4340b1dd308fdb156f43fe1"
+
+
+def test_english_hash_matches_the_legacy_ledger_digest() -> None:
+    report = _report()
+
+    assert (report.period_start, report.period_end) == ("2026-11-02", "2026-11-09")
+    assert content_hash(report) == LEGACY_EN_HASH
+    assert content_hash(report, "en") == LEGACY_EN_HASH
+    assert content_hash(report, "EN") == LEGACY_EN_HASH
+    assert content_hash(report, "de") == LEGACY_EN_HASH  # unsupported -> en
+    assert content_hash(report, "ru") != LEGACY_EN_HASH
+    assert content_hash(report, "zh") != LEGACY_EN_HASH
+
+
+def test_legacy_english_ledger_row_skips_en_and_allows_ru_once(monkeypatch: Any) -> None:
+    _patched_send(monkeypatch)
+    store = _Store()
+    store.sent.add(
+        (
+            "weekly",
+            "https://example.com/",
+            "2026-11-02..2026-11-09",
+            LEGACY_EN_HASH,
+            "telegram",
+        )
+    )
+
+    english = deliver(_report(), telegram=_telegram_cfg(), store=store)
+    russian = deliver(
+        _report(),
+        telegram=TelegramConfig(bot_token="token", chat_id="123", locale="ru"),
+        store=store,
+    )
+    russian_again = deliver(
+        _report(),
+        telegram=TelegramConfig(bot_token="token", chat_id="123", locale="ru"),
+        store=store,
+    )
+
+    assert [result.status for result in english] == ["skipped"]
+    assert english[0].content_hash == LEGACY_EN_HASH
+    assert [result.status for result in russian] == ["sent"]
+    assert russian[0].content_hash == content_hash(_report(), "ru")
+    assert [result.status for result in russian_again] == ["skipped"]
+
+
 def test_only_on_change_skips_rebuilt_report(monkeypatch: Any) -> None:
     _patched_send(monkeypatch)
     store = _Store()
@@ -276,9 +326,32 @@ def test_commit_failure_after_send_is_reported_sent_not_failed(monkeypatch: Any)
 def test_telegram_text_marks_truncation(monkeypatch: Any) -> None:
     from lv24_seo.report import delivery, render
 
-    monkeypatch.setattr(render, "render_text", lambda report: "x" * 9000)
-    text = delivery._telegram_text(_report())
+    def fake_email_text(report: Report, *, locale: str = "en") -> str:
+        return "x" * 9000
+
+    monkeypatch.setattr(render, "render_email_text", fake_email_text, raising=False)
+    text = delivery._telegram_text(_report(), "en")
+    marker = delivery._truncation_marker("en")
     assert len(text) == delivery._TELEGRAM_LIMIT
-    assert text.endswith(delivery._TELEGRAM_TRUNCATED)
-    monkeypatch.setattr(render, "render_text", lambda report: "short")
-    assert delivery._telegram_text(_report()) == "short"
+    assert text.endswith(marker)
+
+    def short_email_text(report: Report, *, locale: str = "en") -> str:
+        return "short"
+
+    monkeypatch.setattr(render, "render_email_text", short_email_text, raising=False)
+    assert delivery._telegram_text(_report(), "en") == "short"
+
+
+def test_telegram_text_uses_email_renderer_locale(monkeypatch: Any) -> None:
+    from lv24_seo.report import delivery, render
+
+    seen: list[str] = []
+
+    def fake_email_text(report: Report, *, locale: str = "en") -> str:
+        seen.append(locale)
+        return "short"
+
+    monkeypatch.setattr(render, "render_email_text", fake_email_text, raising=False)
+
+    assert delivery._telegram_text(_report(), "zh") == "short"
+    assert seen == ["zh"]

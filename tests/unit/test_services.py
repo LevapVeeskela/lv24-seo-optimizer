@@ -18,11 +18,14 @@ import pytest
 from lv24_seo import services
 from lv24_seo.core.config import (
     CrawlConfig,
+    EmailConfig,
     GscConfig,
     ProjectConfig,
     ProvidersConfig,
+    ReportConfig,
     SeoConfig,
     StorageConfig,
+    TelegramConfig,
     YandexMetrikaConfig,
     YandexWebmasterConfig,
 )
@@ -64,6 +67,7 @@ def _config(
     counter: str = COUNTER,
     base_url: str = BASE_URL,
     data_dir: Path | None = None,
+    locale: str = "ru",
 ) -> SeoConfig:
     return SeoConfig(
         project=ProjectConfig(
@@ -76,6 +80,7 @@ def _config(
             yandex_webmaster=(YandexWebmasterConfig(host_id=host_id) if host_id else None),
             yandex_metrika=(YandexMetrikaConfig(counter=counter) if counter else None),
         ),
+        report=ReportConfig(locale=locale),
         crawl=CrawlConfig(max_urls=50),
         storage=StorageConfig(data_dir=Path(data_dir or "data")),
     )
@@ -588,6 +593,7 @@ def test_weekly_report_calls_builder_and_saves_snapshot(
     assert response["data"]["kind"] == "weekly"
     assert response["data"]["headline"] == "built weekly"
     assert response["meta"]["sent"] is False
+    assert response["meta"]["locale"] == "ru"
     assert response["meta"]["sources"] == [
         "gsc",
         "yandex_metrika",
@@ -640,6 +646,63 @@ def test_weekly_report_skips_engines_with_missing_tokens(
     assert response["meta"]["sources"] == ["gsc"]
     assert set(builder_capture["current"]) == {"clicks", "impressions", "ctr", "position"}
     assert builder_capture["previous"]["clicks"] == 10.0
+
+
+def test_weekly_report_passes_current_totals_without_a_previous_window(
+    store: Store,
+    builder_capture: dict[str, Any],
+) -> None:
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, []])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    assert response["meta"]["complete"] is False
+    assert "gsc" in response["meta"]["sources_incomplete"]
+    assert "headline delta unavailable" in " ".join(response["meta"]["limitations"])
+    # Real current totals reach the builder; the previous side stays empty so
+    # the builder emits current-only rows instead of a zero baseline.
+    assert builder_capture["current"]["clicks"] == 15.0
+    assert builder_capture["current"]["impressions"] == 150.0
+    assert builder_capture["previous"] == {}
+
+
+def test_weekly_report_fallback_without_previous_has_no_invented_baseline(
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden(*args: object, **kwargs: object) -> list[object]:
+        raise AssertionError("compute_delta must not run with a missing side")
+
+    monkeypatch.setattr(services, "_load_weekly_builder", lambda: None)
+    monkeypatch.setattr(services, "compute_delta", forbidden)
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, []])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    sections = {section["key"]: section for section in response["data"]["sections"]}
+    assert sections["gsc"]["summary"] == "Comparison unavailable: no previous GSC window"
+    rows = {row["metric"]: row for row in sections["gsc"]["rows"]}
+    assert rows["clicks"]["current"] == 15.0
+    for row in rows.values():
+        assert row["previous"] is None
+        assert row["abs_delta"] is None
+        assert row["pct_delta"] is None
+        assert row["significant"] is False
+        assert row["direction"] == "flat"
+        assert row["good"] is None
+    assert "0.0%" not in sections["gsc"]["summary"]
 
 
 def test_weekly_report_falls_back_when_builders_are_missing(
@@ -746,6 +809,62 @@ def test_weekly_report_without_store_warns_and_returns_report(
     assert response["ok"] is True
     assert "store: not configured; snapshot was not saved" in response["warnings"]
     assert "snapshot_hash" not in response["meta"]
+
+
+def test_weekly_report_meta_keeps_zh_locale(builder_capture: dict[str, Any]) -> None:
+    service = SeoService(
+        _config(locale="zh"),
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    assert response["meta"]["locale"] == "zh"
+    assert response["data"]["kind"] == "weekly"
+
+
+def test_deliver_report_passes_locale_to_channels(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lv24_seo.report import delivery
+
+    config = _config(locale="zh")
+    config.report.email = EmailConfig(
+        enabled=True,
+        to=["owner@example.com"],
+        email_from="seo@example.com",
+        smtp_host="smtp.example.com",
+    )
+    config.report.telegram = TelegramConfig(enabled=True, chat_id="123")
+    captured: dict[str, Any] = {}
+
+    def fake_deliver(report: Report, **kwargs: Any) -> list[Any]:
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(delivery, "deliver", fake_deliver)
+    service = SeoService(config, secrets=_secrets())
+    warnings: list[str] = []
+
+    sent = service._deliver_report(_report_for_delivery(), warnings)
+
+    assert sent is False
+    assert warnings == []
+    assert captured["locale"] == "zh"
+    assert captured["email"].locale == "zh"
+    assert captured["telegram"].locale == "zh"
+
+
+def _report_for_delivery() -> Report:
+    return Report(
+        kind="weekly",
+        property_id=PROPERTY,
+        period_start="2026-11-01",
+        period_end="2026-11-07",
+        headline="clicks +12%",
+        sections=[ReportSection(key="gsc", title="GSC", summary="", rows=[])],
+        generated_at="2026-11-10T00:00:00+00:00",
+    )
 
 
 # -- crawl -----------------------------------------------------------------------------------

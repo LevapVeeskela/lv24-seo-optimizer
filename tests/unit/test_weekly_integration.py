@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from lv24_seo.core.config import (
     CrawlConfig,
     GscConfig,
@@ -22,6 +24,8 @@ from lv24_seo.core.config import (
 from lv24_seo.core.secrets import SecretStore
 from lv24_seo.core.timeutil import utc_now
 from lv24_seo.providers.base import ProviderResult
+from lv24_seo.report.models import Report, ReportSection
+from lv24_seo.report.render import render_email_text
 from lv24_seo.services import SeoService
 from lv24_seo.store import Store
 
@@ -327,6 +331,62 @@ def test_complete_is_false_when_gsc_previous_window_is_empty(tmp_path) -> None: 
     assert response["meta"]["complete"] is False
     assert "gsc" in response["meta"]["sources_incomplete"]
     assert "headline delta unavailable" in " ".join(response["meta"]["limitations"])
+
+
+def test_current_only_gsc_keeps_totals_without_inventing_a_baseline(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """A real current window with no previous one is values + no comparison."""
+    with Store(tmp_path / "seo.db") as store:
+        response = _complete_case(
+            store,
+            {
+                "gsc": _ScriptedGsc([(GSC_CURRENT, False), ([], False)]),
+                "yandex_webmaster": _Webmaster(),
+                "yandex_metrika": _Metrika(120.0),
+            },
+        )
+
+    assert response["ok"] is True
+    assert response["meta"]["complete"] is False
+    assert "headline delta unavailable" in " ".join(response["meta"]["limitations"])
+
+    sections = {section["key"]: section for section in response["data"]["sections"]}
+    rows = {row["metric"]: row for row in sections["headline"]["rows"]}
+    assert set(rows) == {"clicks", "impressions", "ctr", "position"}
+    assert rows["clicks"]["current"] == 15.0
+    assert rows["impressions"]["current"] == 150.0
+    assert rows["ctr"]["current"] == 0.1
+    assert rows["position"]["current"] == pytest.approx(550.0 / 150.0)
+    for row in rows.values():
+        assert row["previous"] is None
+        assert row["abs_delta"] is None
+        assert row["pct_delta"] is None
+        assert row["significant"] is False
+        assert row["direction"] == "flat"
+        assert row["good"] is None
+
+    # The email presenter reads previous=None as "no comparison": values render,
+    # but no zero baseline, false delta or "stable" verdict is produced.
+    text = render_email_text(_report_from(response["data"]))
+    assert "Clicks: 15" in text
+    assert "Clicks: No data" not in text
+    assert "No comparison" in text
+    assert "Previous 0" not in text
+    assert "Worse" not in text
+    assert "Performance is stable" not in text
+
+
+def _report_from(payload: dict[str, Any]) -> Report:
+    return Report(
+        kind=payload["kind"],
+        property_id=payload["property_id"],
+        period_start=payload["period"]["start"],
+        period_end=payload["period"]["end"],
+        headline=payload["headline"],
+        sections=[ReportSection(**section) for section in payload["sections"]],
+        generated_at=payload["generated_at"],
+        limitations=list(payload["limitations"]),
+        warnings=list(payload["warnings"]),
+    )
 
 
 def test_complete_is_false_for_an_empty_source(tmp_path) -> None:  # type: ignore[no-untyped-def]

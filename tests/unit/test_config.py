@@ -232,6 +232,24 @@ def test_values_from_toml(tmp_path: Path) -> None:
     assert cfg.storage.raw_retention_days == 30
 
 
+@pytest.mark.parametrize("locale", ["ru", "en", "zh"])
+def test_report_locale_supports_ru_en_zh(tmp_path: Path, locale: str) -> None:
+    path = _write_config(tmp_path, f'[report]\nlocale = "{locale}"\n')
+
+    assert load_config(path, cwd=tmp_path).report.locale == locale
+
+
+def test_report_locale_rejects_unsupported_value(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, '[report]\nlocale = "de"\n')
+
+    with pytest.raises(SeoError) as exc:
+        load_config(path, cwd=tmp_path)
+
+    assert exc.value.code == CONFIG_INVALID
+    assert "report.locale" in exc.value.message
+    assert exc.value.next_action
+
+
 def test_explicit_file_wins_over_cwd_file(tmp_path: Path) -> None:
     _write_config(tmp_path, '[project]\nname = "local"\n')
     explicit = tmp_path / "custom.toml"

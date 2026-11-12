@@ -338,7 +338,10 @@ class FakeService:
         send: bool = False,
     ) -> dict[str, Any]:
         type(self).calls.append({"days": days, "lag_days": lag_days, "send": send})
-        return ok(REPORT_DATA, meta={"period": REPORT_DATA["period"]})
+        return ok(
+            REPORT_DATA,
+            meta={"period": REPORT_DATA["period"], "locale": self.config.report.locale},
+        )
 
 
 @pytest.fixture()
@@ -532,9 +535,70 @@ def test_report_weekly_writes_json_and_html(
     report_json = json.loads((out / "report.json").read_text(encoding="utf-8"))
     assert report_json["headline"] == "clicks +12%"
     html = (out / "report.html").read_text(encoding="utf-8")
-    assert "clicks +12%" in html
     assert "<!DOCTYPE html>" in html
+    assert '<html lang="ru"' in html
     assert payload["meta"]["artifacts"]["json"].endswith("report.json")
+
+
+def test_report_weekly_human_output_uses_meta_locale(
+    fake_service: type[FakeService],
+    monkeypatch: pytest.MonkeyPatch,
+    workspace: Path,
+) -> None:
+    seen: dict[str, str] = {}
+
+    def fake_render_text(report: Any, *, locale: str = "en") -> str:
+        seen["locale"] = locale
+        return "rendered report"
+
+    monkeypatch.setattr(cli_main, "render_text", fake_render_text, raising=False)
+    result = _invoke("report", "weekly", "--config", str(workspace))
+
+    assert result.exit_code == 0
+    assert "rendered report" in _stdout(result)
+    assert seen["locale"] == "ru"
+
+
+def test_report_lines_reads_locale_from_meta(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, str] = {}
+
+    def fake_render_text(report: Any, *, locale: str = "en") -> str:
+        seen["locale"] = locale
+        return "line"
+
+    monkeypatch.setattr(cli_main, "render_text", fake_render_text, raising=False)
+    payload = ok(REPORT_DATA, meta={"period": REPORT_DATA["period"], "locale": "zh"})
+
+    assert cli_main._report_lines(payload) == ["line"]
+    assert seen["locale"] == "zh"
+
+
+def test_report_out_uses_zh_config_locale(
+    fake_service: type[FakeService],
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "zh.toml"
+    workspace.write_text(
+        '[project]\nname = "Example"\n[report]\nlocale = "zh"\n',
+        encoding="utf-8",
+    )
+    out = tmp_path / "reports-zh"
+
+    payload = _json(
+        _invoke(
+            "report",
+            "weekly",
+            "--out",
+            str(out),
+            "--config",
+            str(workspace),
+            "--json",
+        )
+    )
+
+    html = (out / "report.html").read_text(encoding="utf-8")
+    assert payload["meta"]["locale"] == "zh"
+    assert '<html lang="zh-Hans"' in html
 
 
 def test_report_out_falls_back_for_unstructured_data(
@@ -563,8 +627,46 @@ def test_report_out_falls_back_for_unstructured_data(
 
     assert json.loads((out / "report.json").read_text(encoding="utf-8")) == {"foo": "bar"}
     html = (out / "report.html").read_text(encoding="utf-8")
+    assert '<html lang="ru">' in html
     assert "SEO report" in html
     assert "foo" in html
+
+
+def test_report_out_fallback_uses_zh_locale(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class DictService(FakeService):
+        def weekly_report(self, **_: Any) -> dict[str, Any]:
+            return ok({"foo": "bar"})
+
+    monkeypatch.setattr(cli_main, "SeoService", DictService)
+    workspace = tmp_path / "zh-fallback.toml"
+    workspace.write_text('[report]\nlocale = "zh"\n', encoding="utf-8")
+    out = tmp_path / "fallback-zh"
+
+    _json(
+        _invoke(
+            "report",
+            "weekly",
+            "--out",
+            str(out),
+            "--config",
+            str(workspace),
+            "--json",
+        )
+    )
+
+    html = (out / "report.html").read_text(encoding="utf-8")
+    assert '<html lang="zh">' in html
+    assert "foo" in html
+
+
+def test_fallback_html_normalizes_unknown_locale() -> None:
+    document = cli_main._fallback_html({"foo": "bar"}, locale="de")
+
+    assert '<html lang="en">' in document
+    assert "foo" in document
 
 
 def test_doctor_json_reports_checks() -> None:
