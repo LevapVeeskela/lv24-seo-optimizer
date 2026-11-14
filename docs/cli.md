@@ -59,6 +59,62 @@ buckets are only candidates when the crawl or sitemap inventory was truncated, a
 to load, or URLs went unvisited. No sitemap means an empty diff that says "empty, not clean".
 Lists are capped at 50 per bucket; `counts` are exact.
 
+## Dashboard stats
+
+```bash
+lv24-seo stats [--days 7] [--lag-days 2] [--json]
+```
+
+Read-only snapshot for the desktop dashboard. It never writes snapshots, pages or issues and does
+not need a SQLite store. Services always appear in this order: `gsc`, `yandex_webmaster`,
+`yandex_metrika`, `bing`, `crux`, `psi`. `--days` is the current window length; `--lag-days` shifts
+both windows back, and the previous window is the equally long window immediately before it.
+
+```json
+{
+  "period": { "start": "2026-11-07", "end": "2026-11-13" },
+  "previous_period": { "start": "2026-10-31", "end": "2026-11-06" },
+  "generated_at": "2026-11-14T12:00:00+00:00",
+  "services": [
+    {
+      "provider": "gsc",
+      "label": "Google Search Console",
+      "configured": true,
+      "ready": true,
+      "status": "ok",
+      "metrics": { "clicks": 1284, "impressions": 48213, "ctr": 0.0266, "position": 8.4 },
+      "previous": { "clicks": 1048, "impressions": 46761, "ctr": 0.0224, "position": 9.2 },
+      "rows": 7,
+      "data_age_days": 2,
+      "truncated": false,
+      "limitations": [],
+      "warnings": [],
+      "error": null
+    }
+  ],
+  "coverage": { "configured": 6, "returned": 5, "failed": 0, "missing": 1, "complete": false },
+  "limitations": [],
+  "warnings": []
+}
+```
+
+- `status`: `ok` (rows returned), `no_data` (reachable, no rows), `missing_token`,
+  `not_configured`, `error` (`error` is `{code, message}`, never a traceback).
+- `configured` means the target is present in `seo.toml`; `ready` also requires the provider token
+  (PSI works keyless).
+- `metrics` carries only reported values: no zero fill and no cross-engine totals. `ctr` is a 0..1
+  ratio; `position` is the provider's average position (lower is better).
+- `previous` exists only for comparable current/previous windows (GSC, Yandex Webmaster, Metrika);
+  Bing, CrUX and PSI return `null`. Bing has no window in its API.
+- CrUX adds `units` (`metric -> ms|score`) for p75 field metrics. PSI reports lab
+  `performance`/`seo` scores (0..1) from the first configured URL plus field rows when present; with
+  several URLs it adds the limitation "lab data, first URL only" and checks at most five URLs.
+- `rows` is the number of provider rows returned, not a total. `coverage.complete` is true only
+  when every configured service is `ok`, has rows, is not truncated, and none is missing or failed;
+  it is `false` when no provider is configured.
+- A provider failure is isolated: other services still return their data and the envelope stays
+  `ok: true` with `coverage.failed` incremented.
+
 ## Reports
 
 ```bash

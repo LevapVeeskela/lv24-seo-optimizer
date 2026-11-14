@@ -383,6 +383,27 @@ def properties(
     emit(payload, as_json=as_json, lines=_properties_lines(payload))
 
 
+@app.command()
+def stats(
+    days: Annotated[int, typer.Option("--days", min=1, help="Current period length in days.")] = 7,
+    lag_days: Annotated[
+        int, typer.Option("--lag-days", min=0, help="Provider data lag in days.")
+    ] = 2,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Per-provider dashboard metrics for one period (read-only, no store)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.stats(days=days, lag_days=lag_days),
+    )
+    emit(payload, as_json=as_json, lines=_stats_lines(payload))
+
+
 @gsc_app.command("query")
 def gsc_query(
     start: Annotated[date, typer.Option("--start", help="First day, YYYY-MM-DD.")],
@@ -1564,6 +1585,79 @@ def _properties_lines(payload: Mapping[str, Any]) -> list[str]:
     ]
     lines.extend(_table(["provider", "target", "token", "ready"], rows))
     return lines
+
+
+def _stats_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return ["stats: no data"]
+    period = data.get("period")
+    previous = data.get("previous_period")
+    raw_coverage = data.get("coverage")
+    coverage: Mapping[str, Any] = raw_coverage if isinstance(raw_coverage, Mapping) else {}
+    lines = [
+        f"period: {_date_range(period)} (previous {_date_range(previous)})",
+        (
+            f"coverage: {coverage.get('returned', 0)}/{coverage.get('configured', 0)} ok, "
+            f"{coverage.get('failed', 0)} failed, {coverage.get('missing', 0)} missing, "
+            f"complete={_yes_no(coverage.get('complete'))}"
+        ),
+        "",
+    ]
+    services = data.get("services")
+    rows: list[list[str]] = []
+    errors: list[str] = []
+    if isinstance(services, Sequence) and not isinstance(services, (str, bytes)):
+        for service in services:
+            if not isinstance(service, Mapping):
+                continue
+            rows.append(
+                [
+                    str(service.get("provider") or "-"),
+                    str(service.get("status") or "-"),
+                    str(service.get("rows", 0)),
+                    _stats_metric_text(service.get("metrics")),
+                ]
+            )
+            error = service.get("error")
+            if isinstance(error, Mapping):
+                errors.append(
+                    f"{service.get('provider') or '-'}: "
+                    f"{error.get('code') or 'ERROR'}: {error.get('message') or ''}"
+                )
+    lines.extend(_table(["provider", "status", "rows", "metrics"], rows))
+    lines.extend(errors)
+    limitations = data.get("limitations")
+    if isinstance(limitations, Sequence) and not isinstance(limitations, (str, bytes)):
+        for limitation in limitations:
+            lines.append(f"limitation: {limitation}")
+    return lines
+
+
+def _date_range(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return "-"
+    return f"{value.get('start') or '-'}..{value.get('end') or '-'}"
+
+
+def _stats_metric_text(metrics: Any) -> str:
+    if not isinstance(metrics, Mapping) or not metrics:
+        return "-"
+    return " ".join(f"{name}={_stats_value(str(name), value)}" for name, value in metrics.items())
+
+
+def _stats_value(name: str, value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return str(value)
+    if name == "ctr":
+        return f"{value * 100:.2f}%"
+    if name in {"performance", "seo", "cumulative_layout_shift"}:
+        return f"{value:.3f}"
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.2f}"
 
 
 def _gsc_lines(payload: Mapping[str, Any]) -> list[str]:

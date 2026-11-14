@@ -106,6 +106,13 @@ _WEEKLY_YANDEX_LIMIT = 500
 _GSC_MAX_LIMIT = 50_000
 _YANDEX_MAX_LIMIT = 500
 
+# Dashboard stats: a date-dimensioned GSC window has one row per day, and the
+# Yandex top-queries report is capped at 3,000 rows server-side. PSI is run for
+# at most five URLs (the weekly report uses the same bound).
+_STATS_GSC_LIMIT = 5_000
+_STATS_YANDEX_LIMIT = 500
+_STATS_PSI_URL_LIMIT = 5
+
 _HTTP_SCHEMES = frozenset({"http", "https"})
 # PSI works keyless; a key only raises the quota, so it never blocks client construction.
 _KEYLESS_CLIENTS = frozenset({"psi"})
@@ -114,6 +121,7 @@ _DELIVERY_UNAVAILABLE = "delivery: unavailable; report was not sent"
 _BUILDERS_UNAVAILABLE = "report builders: unavailable; using a minimal fallback report"
 
 ReportBuilder = Callable[..., Report]
+_StatsCollector = Callable[[dict[str, Any], object, date, date, date, date], None]
 
 
 def _load_weekly_builder() -> ReportBuilder | None:
@@ -257,6 +265,316 @@ class SeoService:
             "token_present": present,
             "ready": configured and (present or not requires_token),
         }
+
+    # -- dashboard stats ---------------------------------------------------------------------
+
+    def stats(self, *, days: int = 7, lag_days: int = 2) -> dict[str, Any]:
+        """Per-provider dashboard metrics for one period. Read-only: no store, no writes."""
+        warnings: list[str] = []
+        return self._respond("stats", warnings, lambda: self._stats(days, lag_days, warnings))
+
+    def _stats(self, days: int, lag_days: int, warnings: list[str]) -> dict[str, Any]:
+        span = _positive_int(days, name="days")
+        lag = _non_negative_int(lag_days, name="lag_days")
+        end = local_today(self._config.report.timezone)
+        (start, current_end), (previous_start, previous_end) = compare_period(
+            span, end=end, lag_days=lag
+        )
+        specs = {spec[0]: spec for spec in self._provider_specs()}
+        collectors: tuple[tuple[str, _StatsCollector], ...] = (
+            (SOURCE_GSC, self._stats_gsc),
+            (SOURCE_YANDEX_WEBMASTER, self._stats_yandex),
+            (SOURCE_YANDEX_METRIKA, self._stats_metrika),
+            (SOURCE_BING, self._stats_bing),
+            (SOURCE_CRUX, self._stats_crux),
+            (SOURCE_PSI, self._stats_psi),
+        )
+        services: list[dict[str, Any]] = []
+        for provider, collect in collectors:
+            block, _, secret_name, target, requires_token = specs[provider]
+            configured = block is not None and bool(target.strip())
+            ready = configured and (self._secret_present(secret_name) or not requires_token)
+            entry = _stats_entry(provider, configured=configured, ready=ready)
+            if not configured:
+                entry["status"] = "not_configured"
+            elif not ready:
+                entry["status"] = "missing_token"
+            else:
+                try:
+                    client = self._client_for(provider, warnings)
+                    collect(entry, client, start, current_end, previous_start, previous_end)
+                except SeoError as exc:
+                    entry["status"] = "error"
+                    entry["error"] = {"code": exc.code, "message": exc.message}
+                except Exception:
+                    # One broken provider must never cancel the dashboard.
+                    logger.warning("stats: unexpected provider failure for %s", provider)
+                    entry["status"] = "error"
+                    entry["error"] = {
+                        "code": INTERNAL,
+                        "message": f"unexpected error while collecting {provider}",
+                    }
+            services.append(entry)
+
+        configured_entries = [entry for entry in services if entry["configured"]]
+        returned = sum(1 for entry in configured_entries if entry["status"] == "ok")
+        failed = sum(1 for entry in configured_entries if entry["status"] == "error")
+        missing = sum(1 for entry in configured_entries if entry["status"] == "missing_token")
+        truncated = any(bool(entry["truncated"]) for entry in configured_entries)
+        complete = bool(
+            configured_entries
+            and returned == len(configured_entries)
+            and not failed
+            and not missing
+            and not truncated
+        )
+        coverage = {
+            "configured": len(configured_entries),
+            "returned": returned,
+            "failed": failed,
+            "missing": missing,
+            "complete": complete,
+        }
+        limitations = _unique([item for entry in services for item in entry["limitations"]])
+        service_warnings = _unique(
+            [*warnings, *(item for entry in services for item in entry["warnings"])]
+        )
+        data_age = max((_int_of(entry["data_age_days"]) for entry in services), default=0)
+        period = {"start": start.isoformat(), "end": current_end.isoformat()}
+        previous_period = {
+            "start": previous_start.isoformat(),
+            "end": previous_end.isoformat(),
+        }
+        data = {
+            "period": period,
+            "previous_period": previous_period,
+            "generated_at": utc_now().isoformat(timespec="seconds"),
+            "services": services,
+            "coverage": coverage,
+            "limitations": limitations,
+            "warnings": service_warnings,
+        }
+        meta = {
+            "period": period,
+            "previous_period": previous_period,
+            "days": span,
+            "lag_days": lag,
+            "complete": complete,
+            "truncated": truncated,
+            "data_age_days": data_age,
+            "limitations": limitations,
+        }
+        return ok(data, meta=meta, warnings=service_warnings)
+
+    def _stats_gsc(
+        self,
+        entry: dict[str, Any],
+        client: object,
+        start: date,
+        end: date,
+        previous_start: date,
+        previous_end: date,
+    ) -> None:
+        current = _call(
+            client,
+            "search_analytics",
+            start_date=start,
+            end_date=end,
+            dimensions=("date",),
+            row_limit=_STATS_GSC_LIMIT,
+            max_rows=_STATS_GSC_LIMIT,
+        )
+        previous = _call(
+            client,
+            "search_analytics",
+            start_date=previous_start,
+            end_date=previous_end,
+            dimensions=("date",),
+            row_limit=_STATS_GSC_LIMIT,
+            max_rows=_STATS_GSC_LIMIT,
+        )
+        _stats_fill(entry, _combined_result_meta((current, previous), source=SOURCE_GSC))
+        current_rows = _result_rows(current)
+        previous_rows = _result_rows(previous)
+        entry["rows"] = len(current_rows)
+        if current_rows:
+            entry["status"] = "ok"
+            entry["metrics"] = _gsc_totals(current_rows)
+        else:
+            entry["status"] = "no_data"
+        if previous_rows:
+            entry["previous"] = _gsc_totals(previous_rows)
+
+    def _stats_yandex(
+        self,
+        entry: dict[str, Any],
+        client: object,
+        start: date,
+        end: date,
+        previous_start: date,
+        previous_end: date,
+    ) -> None:
+        host_id = self._yandex_host_id()
+        current = _call(
+            client,
+            "popular_queries",
+            host_id,
+            limit=_STATS_YANDEX_LIMIT,
+            date_from=start,
+            date_to=end,
+        )
+        previous = _call(
+            client,
+            "popular_queries",
+            host_id,
+            limit=_STATS_YANDEX_LIMIT,
+            date_from=previous_start,
+            date_to=previous_end,
+        )
+        _stats_fill(
+            entry, _combined_result_meta((current, previous), source=SOURCE_YANDEX_WEBMASTER)
+        )
+        current_rows = _result_rows(current)
+        previous_rows = _result_rows(previous)
+        entry["rows"] = len(current_rows)
+        if current_rows:
+            entry["status"] = "ok"
+            entry["metrics"] = _yandex_totals(current_rows)
+        else:
+            entry["status"] = "no_data"
+        if previous_rows:
+            entry["previous"] = _yandex_totals(previous_rows)
+
+    def _stats_metrika(
+        self,
+        entry: dict[str, Any],
+        client: object,
+        start: date,
+        end: date,
+        previous_start: date,
+        previous_end: date,
+    ) -> None:
+        metrika = self._config.providers.yandex_metrika
+        counter_id = metrika.counter if metrika is not None else ""
+        metrics = ("ym:s:visits", "ym:s:users")
+        current = _call(
+            client,
+            "stat_data",
+            counter=counter_id,
+            metrics=metrics,
+            date1=start,
+            date2=end,
+            limit=1,
+        )
+        previous = _call(
+            client,
+            "stat_data",
+            counter=counter_id,
+            metrics=metrics,
+            date1=previous_start,
+            date2=previous_end,
+            limit=1,
+        )
+        _stats_fill(entry, _combined_result_meta((current, previous), source=SOURCE_YANDEX_METRIKA))
+        current_rows = _result_rows(current)
+        previous_rows = _result_rows(previous)
+        entry["rows"] = len(current_rows)
+        if current_rows:
+            entry["status"] = "ok"
+            entry["metrics"] = _metrika_totals(current_rows)
+        else:
+            entry["status"] = "no_data"
+        if previous_rows:
+            entry["previous"] = _metrika_totals(previous_rows)
+
+    def _stats_bing(
+        self,
+        entry: dict[str, Any],
+        client: object,
+        start: date,
+        end: date,
+        previous_start: date,
+        previous_end: date,
+    ) -> None:
+        del start, end, previous_start, previous_end
+        result = _call(client, "query_stats")
+        rows = _result_rows(result)
+        _stats_fill(entry, _result_meta(result, source=SOURCE_BING, rows=rows))
+        entry["limitations"] = _result_limitations(result)
+        entry["warnings"] = _result_warnings(result)
+        entry["rows"] = len(rows)
+        if rows:
+            entry["status"] = "ok"
+            entry["metrics"] = _bing_totals(rows)
+        else:
+            entry["status"] = "no_data"
+
+    def _stats_crux(
+        self,
+        entry: dict[str, Any],
+        client: object,
+        start: date,
+        end: date,
+        previous_start: date,
+        previous_end: date,
+    ) -> None:
+        del start, end, previous_start, previous_end
+        crux = self._config.providers.crux
+        origin = crux.origin.strip() if crux is not None else ""
+        result = _call(client, "origin", origin)
+        rows = _result_rows(result)
+        _stats_fill(entry, _result_meta(result, source=SOURCE_CRUX, rows=rows))
+        entry["limitations"] = _result_limitations(result)
+        entry["warnings"] = _result_warnings(result)
+        entry["rows"] = len(rows)
+        metrics, units = _crux_metrics(rows)
+        entry["metrics"] = metrics
+        entry["units"] = units
+        entry["status"] = "ok" if rows else "no_data"
+
+    def _stats_psi(
+        self,
+        entry: dict[str, Any],
+        client: object,
+        start: date,
+        end: date,
+        previous_start: date,
+        previous_end: date,
+    ) -> None:
+        del start, end, previous_start, previous_end
+        psi = self._config.providers.psi
+        urls = list(psi.urls) if psi is not None else []
+        strategy = psi.strategy if psi is not None else "mobile"
+        collected: list[dict[str, Any]] = []
+        first_rows: list[dict[str, Any]] = []
+        psi_warnings: list[str] = []
+        limitations: list[str] = []
+        data_age = 0
+        truncated = False
+        for index, url in enumerate(urls[:_STATS_PSI_URL_LIMIT]):
+            result = _call(client, "run", url, strategy=strategy)
+            rows = _result_rows(result)
+            if index == 0:
+                first_rows = rows
+            collected.extend(rows)
+            psi_warnings.extend(_result_warnings(result))
+            limitations.extend(_result_limitations(result))
+            data_age = max(data_age, _result_data_age(result))
+            truncated = truncated or _result_truncated(result)
+        if len(urls) > 1:
+            limitations.append("lab data, first URL only")
+        if len(urls) > _STATS_PSI_URL_LIMIT:
+            truncated = True
+            limitations.append(
+                f"psi: only the first {_STATS_PSI_URL_LIMIT} configured urls were checked"
+            )
+        entry["rows"] = len(collected)
+        entry["metrics"] = _psi_metrics(first_rows) if first_rows else {}
+        entry["status"] = "ok" if collected else "no_data"
+        entry["data_age_days"] = data_age
+        entry["truncated"] = truncated
+        entry["limitations"] = _unique(limitations)
+        entry["warnings"] = _unique(psi_warnings)
 
     # -- data --------------------------------------------------------------------------------
 
@@ -1973,6 +2291,87 @@ def _metrika_totals(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
         "visits": sum(_float_or_none(row.get("visits")) or 0.0 for row in rows),
         "users": sum(_float_or_none(row.get("users")) or 0.0 for row in rows),
     }
+
+
+def _bing_totals(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    clicks = sum(_float_or_none(row.get("clicks")) or 0.0 for row in rows)
+    impressions = sum(_float_or_none(row.get("impressions")) or 0.0 for row in rows)
+    weighted = sum(
+        (_float_or_none(row.get("position")) or 0.0)
+        * (_float_or_none(row.get("impressions")) or 0.0)
+        for row in rows
+    )
+    return {
+        "clicks": clicks,
+        "impressions": impressions,
+        "position": (weighted / impressions) if impressions > 0 else 0.0,
+    }
+
+
+def _stats_entry(provider: str, *, configured: bool, ready: bool) -> dict[str, Any]:
+    """The stable per-service skeleton; collectors fill metrics and status."""
+    return {
+        "provider": provider,
+        "label": _ENGINE_LABELS[provider],
+        "configured": configured,
+        "ready": ready,
+        "status": "not_configured",
+        "metrics": {},
+        "previous": None,
+        "rows": 0,
+        "data_age_days": 0,
+        "truncated": False,
+        "limitations": [],
+        "warnings": [],
+        "error": None,
+    }
+
+
+def _stats_fill(entry: dict[str, Any], meta: Mapping[str, Any]) -> None:
+    entry["data_age_days"] = _int_of(meta.get("data_age_days"))
+    entry["truncated"] = bool(meta.get("truncated"))
+    entry["limitations"] = _list_of_str(meta.get("limitations"))
+    entry["warnings"] = _list_of_str(meta.get("warnings"))
+
+
+def _crux_metrics(
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, float], dict[str, str]]:
+    """Map CrUX rows to ``metric -> p75`` plus the unit the provider reported."""
+    metrics: dict[str, float] = {}
+    units: dict[str, str] = {}
+    for row in rows:
+        raw_name = row.get("metric")
+        value = _float_or_none(row.get("p75"))
+        if not isinstance(raw_name, str) or not raw_name.strip() or value is None:
+            continue
+        name = raw_name.strip()
+        metrics[name] = value
+        raw_unit = row.get("unit")
+        if raw_unit in ("ms", "score"):
+            units[name] = str(raw_unit)
+        else:
+            units[name] = "score" if name == "cumulative_layout_shift" else "ms"
+    return metrics, units
+
+
+def _psi_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    """Lab scores plus field p75s from one PSI run; never averaged across URLs."""
+    metrics: dict[str, float] = {}
+    for row in rows:
+        category = row.get("category")
+        if category in ("performance", "seo"):
+            score = _float_or_none(row.get("score"))
+            if score is not None:
+                metrics[str(category)] = score
+            continue
+        if category != "field":
+            continue
+        label = row.get("metric")
+        p75 = _float_or_none(row.get("p75"))
+        if isinstance(label, str) and label.strip() and p75 is not None:
+            metrics[label.strip()] = p75
+    return metrics
 
 
 def _report_payload(report: object) -> dict[str, Any]:
