@@ -37,10 +37,34 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 |---|---|
 | Источники | GSC, Вебмастер, Метрика, Bing/IndexNow, CrUX, PSI, собственный краул, логи nginx |
 | Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), триаж индексации, striking distance, деградация контента, техрегрессии |
-| MCP | 11 инструментов, 3 ресурса, 3 промпта; по умолчанию только чтение |
+| MCP | 11 инструментов, 3 ресурса, 3 промпта; по умолчанию только чтение — таблица ниже |
 | CLI | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `stats`, `schedule`, `export`, `mcp serve` |
 | Скиллы | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
 | Автоматизация | cron / systemd timer / Планировщик Windows, рецепт GitHub Actions |
+
+### MCP-инструменты
+
+Одиннадцать инструментов. Инструменты чтения не меняют состояние провайдера и
+локальное состояние. `seo_crawl_site` и `seo_weekly_report` сохраняют локальные
+снимки, поэтому в схеме у них `readOnlyHint: false`; они не destructive. Два
+write-инструмента требуют `allow_write=true` и помечены `destructiveHint: true`.
+
+| Инструмент | Тип | `readOnlyHint` | `destructiveHint` | Что делает |
+|---|---|---|---|---|
+| `seo_properties` | чтение | `true` | `false` | Настроенные провайдеры, цели и наличие токенов |
+| `gsc_search_analytics` | чтение | `true` | `false` | Строки GSC по запросам/страницам/странам/устройствам |
+| `yandex_query_stats` | чтение | `true` | `false` | Топ запросов Яндекса для хоста |
+| `yandex_indexing_state` | чтение | `true` | `false` | История индексации, события и проблемы |
+| `seo_crawl_site` | чтение + локальное состояние | `false` | `false` | Ограниченный краул; сохраняет страницы и проблемы |
+| `seo_weekly_report` | чтение + локальное состояние | `false` | `false` | Недельный дайджест; сохраняет снимок отчёта |
+| `seo_report_diff` | чтение | `true` | `false` | Дифф двух сохранённых недельных снимков |
+| `seo_indexing_triage` | чтение | `true` | `false` | Группирует проблемы индексации в план действий |
+| `seo_opportunities` | чтение | `true` | `false` | Striking distance и деградация контента |
+| `seo_recrawl_request` | запись | `false` | `true` | Ставит URL в очередь переобхода Яндекса (gated) |
+| `seo_sitemap_submit` | запись | `false` | `true` | Отправляет или удаляет sitemap (gated) |
+
+Полные входы, выходы и ограничения — в [`docs/mcp.md`](docs/mcp.md);
+сгенерированный контракт — [`schemas/tools.json`](schemas/tools.json).
 
 ## Честность данных
 

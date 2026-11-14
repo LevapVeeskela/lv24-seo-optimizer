@@ -42,6 +42,26 @@ additions:
 * **Honest bounds** — `meta.complete`, `truncated`, `total` and `limitations[]` are carried through
   MCP, CLI and reports; unknown totals stay `null`; delivery is idempotent per period and channel.
 
+### MCP tools
+
+| Tool | Kind | Notes |
+|---|---|---|
+| `seo_properties` | read | Configured providers, targets, token presence |
+| `gsc_search_analytics` | read | GSC query/page/country/device rows |
+| `yandex_query_stats` | read | Top Yandex queries |
+| `yandex_indexing_state` | read | Indexing history, events, problems |
+| `seo_crawl_site` | read + local state | Crawl; stores pages/issues, `readOnlyHint: false` |
+| `seo_weekly_report` | read + local state | Weekly digest; stores a snapshot, `readOnlyHint: false` |
+| `seo_report_diff` | read | Diff two stored snapshots |
+| `seo_indexing_triage` | read | Group indexing problems into actions |
+| `seo_opportunities` | read | Striking-distance and decay opportunities |
+| `seo_recrawl_request` | write | Yandex recrawl queue, `allow_write=true` |
+| `seo_sitemap_submit` | write | GSC/Bing sitemap, `allow_write=true` |
+
+The two local-state tools are not destructive; the two provider writes are
+annotated `destructiveHint: true` and are gated. Full inputs and limits:
+[`docs/mcp.md`](https://github.com/LevapVeeskela/lv24-seo-optimizer/blob/main/docs/mcp.md).
+
 ## Requirements
 
 * [uv](https://docs.astral.sh/uv/) (recommended) **or** an installed `lv24-seo` binary

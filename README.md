@@ -131,10 +131,35 @@ audit → plan → fix → verify.
 | Surface | Examples |
 |---|---|
 | **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions |
-| **MCP tools** | `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_crawl_site`, `seo_weekly_report`, `seo_report_diff`, `seo_indexing_triage`, `seo_opportunities`, `seo_recrawl_request` (gated), `seo_sitemap_submit` (gated) |
+| **MCP tools** | 11 tools across GSC, Yandex, crawl, reports and gated writes — see the table below |
 | **CLI** | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `stats`, `schedule`, `export`, `mcp serve` |
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
 | **Automation** | cron / systemd timer / Windows Task Scheduler generators and a GitHub Actions recipe |
+
+### MCP tools
+
+Eleven tools, three resources and three prompts. Read-only tools never change
+provider or local state. `seo_crawl_site` and `seo_weekly_report` persist local
+snapshots, so the generated schema marks them `readOnlyHint: false`; they are
+not destructive. The two provider writes require `allow_write=true` and are
+annotated `destructiveHint: true`.
+
+| Tool | Kind | `readOnlyHint` | `destructiveHint` | What it does |
+|---|---|---|---|---|
+| `seo_properties` | read | `true` | `false` | Configured providers, targets and token presence |
+| `gsc_search_analytics` | read | `true` | `false` | GSC query/page/country/device rows |
+| `yandex_query_stats` | read | `true` | `false` | Top Yandex queries for the host |
+| `yandex_indexing_state` | read | `true` | `false` | Indexing history, events and problems |
+| `seo_crawl_site` | local-state read | `false` | `false` | Bounded crawl; stores pages and issues |
+| `seo_weekly_report` | local-state read | `false` | `false` | Weekly digest; stores a report snapshot |
+| `seo_report_diff` | read | `true` | `false` | Diff two stored weekly snapshots |
+| `seo_indexing_triage` | read | `true` | `false` | Group indexing problems into an action list |
+| `seo_opportunities` | read | `true` | `false` | Striking-distance and decay opportunities |
+| `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (gated) |
+| `seo_sitemap_submit` | write | `false` | `true` | Submit or delete a sitemap (gated) |
+
+The full inputs, outputs and limitations are in [`docs/mcp.md`](docs/mcp.md);
+the generated contract is [`schemas/tools.json`](schemas/tools.json).
 
 ## Supported sources
 
