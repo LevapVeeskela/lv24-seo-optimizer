@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import logging
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
@@ -52,6 +53,7 @@ from lv24_seo.crawl.graph import GraphStats, build_graph, normalize_url
 from lv24_seo.crawl.html import parse_html
 from lv24_seo.crawl.models import FetchResult, Issue, PageData, RuleContext
 from lv24_seo.crawl.rules import run_all
+from lv24_seo.crawl.sitemap import MAX_BYTES as SITEMAP_MAX_BYTES
 from lv24_seo.crawl.sitemap import SitemapReader
 from lv24_seo.providers.base import (
     SOURCE_BING,
@@ -119,6 +121,29 @@ _KEYLESS_CLIENTS = frozenset({"psi"})
 _HEADLINE_METRICS: tuple[str, ...] = ("clicks", "impressions", "ctr", "position")
 _DELIVERY_UNAVAILABLE = "delivery: unavailable; report was not sent"
 _BUILDERS_UNAVAILABLE = "report builders: unavailable; using a minimal fallback report"
+_BUILDERS_SIGNATURE_MISMATCH = (
+    "report builders: signature mismatch; using a minimal fallback report"
+)
+# Ten years is far beyond any provider's retention; a larger value is a caller bug, not a window.
+MAX_REPORT_DAYS = 3660
+_WEEKLY_BUILDER_KEYWORDS = frozenset(
+    {
+        "property_id",
+        "period_start",
+        "period_end",
+        "current",
+        "previous",
+        "gsc_rows",
+        "gsc_previous_rows",
+        "gsc_previous_complete",
+        "yandex_rows",
+        "metrika_rows",
+        "issues",
+        "extra_engines",
+        "limitations",
+        "thresholds",
+    }
+)
 
 ReportBuilder = Callable[..., Report]
 _StatsCollector = Callable[[dict[str, Any], object, date, date, date, date], None]
@@ -131,6 +156,22 @@ def _load_weekly_builder() -> ReportBuilder | None:
     except ImportError:
         return None
     return build_weekly if callable(build_weekly) else None
+
+
+def _weekly_builder_compatible(builder: ReportBuilder) -> bool:
+    """Check the builder signature once instead of catching a real ``TypeError`` later.
+
+    A missing parameter is a wiring/version mismatch and gets the documented fallback. A
+    ``TypeError`` raised *inside* a compatible builder is a real bug and must surface (the
+    service returns ``INTERNAL`` and no snapshot is persisted).
+    """
+    try:
+        parameters = inspect.signature(builder).parameters
+    except (TypeError, ValueError):  # exotic callables: assume the documented contract
+        return True
+    if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return True
+    return set(parameters) >= _WEEKLY_BUILDER_KEYWORDS
 
 
 @dataclass(slots=True)
@@ -186,6 +227,11 @@ class SeoService:
             )
         self._overrides = overrides
         self._wired: dict[str, object] = {}
+
+    @property
+    def timezone(self) -> str:
+        """Report timezone resolved from the workspace config."""
+        return self._config.report.timezone
 
     # -- discovery ---------------------------------------------------------------------------
 
@@ -274,7 +320,7 @@ class SeoService:
         return self._respond("stats", warnings, lambda: self._stats(days, lag_days, warnings))
 
     def _stats(self, days: int, lag_days: int, warnings: list[str]) -> dict[str, Any]:
-        span = _positive_int(days, name="days")
+        span = _positive_int(days, name="days", maximum=MAX_REPORT_DAYS)
         lag = _non_negative_int(lag_days, name="lag_days")
         end = local_today(self._config.report.timezone)
         (start, current_end), (previous_start, previous_end) = compare_period(
@@ -1054,6 +1100,7 @@ class SeoService:
         site_parts = urlsplit(site_url)
         site_origin = (site_parts.scheme.lower(), site_parts.netloc.lower())
         supports_allow_url = "allow_url" in inspect.signature(fetcher.fetch).parameters
+        supports_max_bytes = "max_bytes" in inspect.signature(fetcher.fetch).parameters
 
         def _sitemap_in_scope(target: str) -> bool:
             target_parts = urlsplit(target)
@@ -1062,9 +1109,12 @@ class SeoService:
         def _scoped_fetch(url: str) -> FetchResult:
             if _host_of(url) != host or not _sitemap_in_scope(url):
                 return FetchResult(url=url, status=0, final_url=url, error="robots_blocked")
+            kwargs: dict[str, Any] = {}
             if supports_allow_url:
-                return fetcher.fetch(url, allow_url=_sitemap_in_scope)
-            return fetcher.fetch(url)
+                kwargs["allow_url"] = _sitemap_in_scope
+            if supports_max_bytes:
+                kwargs["max_bytes"] = SITEMAP_MAX_BYTES
+            return fetcher.fetch(url, **kwargs)
 
         reader = SitemapReader(_scoped_fetch, max_urls=max_urls, max_depth=2, max_docs=20)
         collected: list[str] = []
@@ -1253,7 +1303,7 @@ class SeoService:
         send: bool,
         warnings: list[str],
     ) -> dict[str, Any]:
-        span = _positive_int(days, name="days")
+        span = _positive_int(days, name="days", maximum=MAX_REPORT_DAYS)
         lag = _non_negative_int(lag_days, name="lag_days")
         end = local_today(self._config.report.timezone)
         (start, current_end), (previous_start, previous_end) = compare_period(
@@ -1414,7 +1464,19 @@ class SeoService:
 
         builder = _load_weekly_builder()
         report_obj: Report
-        if builder is None:
+        if builder is not None and not _weekly_builder_compatible(builder):
+            warnings.append(_BUILDERS_SIGNATURE_MISMATCH)
+            all_warnings = _unique([*all_warnings, _BUILDERS_SIGNATURE_MISMATCH])
+            report_obj = self._fallback_weekly_report(
+                property_id=property_id,
+                start=start,
+                end=current_end,
+                current=current,
+                previous=fallback_previous,
+                limitations=limitations,
+                warnings=all_warnings,
+            )
+        elif builder is None:
             warnings.append(_BUILDERS_UNAVAILABLE)
             all_warnings = _unique([*all_warnings, _BUILDERS_UNAVAILABLE])
             report_obj = self._fallback_weekly_report(
@@ -1427,40 +1489,26 @@ class SeoService:
                 warnings=all_warnings,
             )
         else:
-            try:
-                report_obj = builder(
-                    property_id=property_id,
-                    period_start=start,
-                    period_end=current_end,
-                    current=gsc_current_totals,
-                    previous=gsc_previous_totals,
-                    gsc_rows=gsc_query_current,
-                    gsc_previous_rows=gsc_query_previous,
-                    gsc_previous_complete=query_complete,
-                    yandex_rows=_source_rows(sources, SOURCE_YANDEX_WEBMASTER),
-                    metrika_rows=_source_rows(sources, SOURCE_YANDEX_METRIKA),
-                    issues=stored_issues,
-                    extra_engines=_extra_engine_rows(sources),
-                    limitations=limitations,
-                    thresholds=DeltaThresholds(
-                        clicks_pct=self._config.report.thresholds.clicks_pct,
-                        impressions_pct=self._config.report.thresholds.impressions_pct,
-                        position_abs=self._config.report.thresholds.position_abs,
-                    ),
-                )
-            except TypeError:
-                all_warnings = _unique(
-                    [*all_warnings, "builders: signature mismatch; fallback report used"]
-                )
-                report_obj = self._fallback_weekly_report(
-                    property_id=property_id,
-                    start=start,
-                    end=current_end,
-                    current=current,
-                    previous=fallback_previous,
-                    limitations=limitations,
-                    warnings=all_warnings,
-                )
+            report_obj = builder(
+                property_id=property_id,
+                period_start=start,
+                period_end=current_end,
+                current=gsc_current_totals,
+                previous=gsc_previous_totals,
+                gsc_rows=gsc_query_current,
+                gsc_previous_rows=gsc_query_previous,
+                gsc_previous_complete=query_complete,
+                yandex_rows=_source_rows(sources, SOURCE_YANDEX_WEBMASTER),
+                metrika_rows=_source_rows(sources, SOURCE_YANDEX_METRIKA),
+                issues=stored_issues,
+                extra_engines=_extra_engine_rows(sources),
+                limitations=limitations,
+                thresholds=DeltaThresholds(
+                    clicks_pct=self._config.report.thresholds.clicks_pct,
+                    impressions_pct=self._config.report.thresholds.impressions_pct,
+                    position_abs=self._config.report.thresholds.position_abs,
+                ),
+            )
         payload = _report_payload(report_obj)
 
         report_obj.warnings = _unique([*report_obj.warnings, *all_warnings])
@@ -2519,7 +2567,11 @@ def _metric_key(row: Mapping[str, Any], dimensions: Sequence[str]) -> str:
         if value is None or value == "":
             continue
         parts.append(str(value))
-    return "|".join(parts)
+    # A single dimension needs no separator. Multiple values are JSON-encoded so values
+    # containing "|" stay distinct: ("a|b", "c") != ("a", "b|c").
+    if len(parts) <= 1:
+        return parts[0] if parts else ""
+    return json.dumps(parts, ensure_ascii=False, separators=(",", ":"))
 
 
 def _row_day(row: Mapping[str, Any], dimensions: Sequence[str], fallback: date) -> date:

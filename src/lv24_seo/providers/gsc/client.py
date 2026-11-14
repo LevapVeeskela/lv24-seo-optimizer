@@ -145,7 +145,7 @@ class GscClient:
                 break
 
             remaining = row_cap - len(rows)
-            if len(batch) >= remaining:
+            if len(batch) > remaining:
                 rows.extend(_map_search_row(item, dimensions) for item in batch[:remaining])
                 truncated = True
                 break
@@ -157,7 +157,7 @@ class GscClient:
 
         limitations: tuple[str, ...] = ()
         warnings: tuple[str, ...] = ()
-        if max_rows >= _MAX_TOTAL_ROWS:
+        if truncated and max_rows >= _MAX_TOTAL_ROWS:
             limitations = (ROWS_CAP_50000,)
         elif truncated:
             warnings = (

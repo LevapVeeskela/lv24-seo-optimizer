@@ -148,7 +148,7 @@ def test_search_analytics_maps_rows_and_data_age(monkeypatch: pytest.MonkeyPatch
     assert result.data_age_days == 6
     assert result.total == 1
     assert result.truncated is False
-    assert ROWS_CAP_50000 in result.limitations
+    assert ROWS_CAP_50000 not in result.limitations
     body = _body(seen[0])
     assert body == {
         "startDate": "2026-10-01",
@@ -223,6 +223,42 @@ def test_search_analytics_paginates_and_marks_truncated() -> None:
     assert ROWS_CAP_50000 not in result.limitations
     assert result.warnings
     assert "3 rows" in result.warnings[0]
+
+
+def test_search_analytics_complete_data_at_the_cap_is_not_truncated() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "rows": [
+                    {
+                        "keys": [f"q{index}"],
+                        "clicks": 1,
+                        "impressions": 2,
+                        "ctr": 0.5,
+                        "position": float(index + 1),
+                    }
+                    for index in range(3)
+                ]
+            },
+        )
+
+    result = _gsc(handler).search_analytics(
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 11, 3),
+        row_limit=3,
+        max_rows=3,
+    )
+
+    assert calls == 1
+    assert result.total == 3
+    assert result.truncated is False
+    assert result.limitations == ()
+    assert result.warnings == ()
 
 
 def test_search_analytics_stops_on_short_batch() -> None:

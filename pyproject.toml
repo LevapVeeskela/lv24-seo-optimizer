@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lv24-seo"
-version = "0.5.0"
+version = "0.5.1"
 description = "Free-first SEO control plane: Search Console, Yandex, Bing, CrUX, PSI, crawl and weekly diff reports for humans and AI agents."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -80,6 +80,7 @@ files = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
   "live: hits real provider APIs (needs tokens; never run in CI)",
   "network: hits the public internet (kept out of the default run)",

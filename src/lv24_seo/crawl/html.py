@@ -71,6 +71,13 @@ _SUPPRESSED_TAGS = frozenset({"script", "style", "noscript"})
 _BREAK_TAGS = frozenset({"br", "hr"})
 _LINK_SCHEMES = frozenset({"http", "https"})
 _JSONLD_MEDIA_TYPE = "application/ld+json"
+MAX_STORED_TEXT_CHARS = 20_000
+"""Upper bound for :attr:`PageData.text`.
+
+``word_count`` is always computed from the full visible text; only the retained copy is
+capped. No crawl rule reads ``page.text`` today, so a 20k prefix keeps diagnostics useful
+without letting a crawl of thousands of pages hold every byte in memory.
+"""
 
 
 def parse_html(
@@ -118,7 +125,7 @@ def parse_html(
         jsonld=parser.jsonld,
         links=parser.links,
         images=parser.images,
-        text=text,
+        text=text[:MAX_STORED_TEXT_CHARS],
         word_count=len(text.split()),
     )
 

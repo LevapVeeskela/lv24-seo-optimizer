@@ -480,17 +480,35 @@ def _cron_block(spec: ScheduleSpec) -> str:
 def _replace_block(text: str, block: str, name: str) -> str:
     begin = _BLOCK_BEGIN.format(name=name)
     end = _BLOCK_END.format(name=name)
-    lines = text.splitlines()
-    if begin in lines and end in lines:
-        start, stop = lines.index(begin), lines.index(end)
-        if start < stop:
-            lines = lines[:start] + lines[stop + 1 :]
+    lines = _strip_managed_blocks(text.splitlines(), begin, end)
     while lines and not lines[-1].strip():
         lines.pop()
     if lines:
         lines.append("")
     lines.extend(block.rstrip("\n").splitlines())
     return "\n".join(lines) + "\n"
+
+
+def _strip_managed_blocks(lines: list[str], begin: str, end: str) -> list[str]:
+    """Drop every managed block for ``begin``/``end``, including a truncated one.
+
+    A missing end marker used to leave the old schedule in place and append a second block.
+    Treat the damaged block as extending to the next managed marker (or EOF) so re-installing
+    repairs the crontab instead of duplicating the job.
+    """
+    kept: list[str] = []
+    index = 0
+    while index < len(lines):
+        if lines[index].strip() != begin:
+            kept.append(lines[index])
+            index += 1
+            continue
+        index += 1
+        while index < len(lines) and lines[index].strip() not in (begin, end):
+            index += 1
+        if index < len(lines) and lines[index].strip() == end:
+            index += 1
+    return kept
 
 
 def _run(

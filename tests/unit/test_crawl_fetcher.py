@@ -15,6 +15,8 @@ from lv24_seo.crawl.fetcher import (
     is_allowed,
     parse_robots,
 )
+from lv24_seo.crawl.sitemap import MAX_BYTES as SITEMAP_MAX_BYTES
+from lv24_seo.crawl.sitemap import parse_sitemap
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -380,3 +382,41 @@ def test_injected_transport_is_used_and_close_closes_the_client() -> None:
         fetcher.close()
 
     assert fetcher._client.is_closed is True
+
+
+def test_per_request_max_bytes_accepts_a_large_sitemap() -> None:
+    entries = "".join(
+        f"<url><loc>https://example.com/page/{index}</loc></url>" for index in range(110_000)
+    )
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"{entries}</urlset>"
+    ).encode()
+    assert len(body) > 5_000_000
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body)
+
+    with _fetcher(handler) as fetcher:
+        default = fetcher.fetch("https://example.com/sitemap.xml")
+        larger = fetcher.fetch("https://example.com/sitemap.xml", max_bytes=SITEMAP_MAX_BYTES)
+
+    assert default.error == "too_large"
+    assert larger.error is None
+    assert larger.body == body
+    doc = parse_sitemap(larger.body)
+    assert doc.errors == []
+    assert doc.truncated is True
+    assert len(doc.urls) == 50_000
+    assert doc.urls[0] == "https://example.com/page/0"
+
+
+def test_per_request_max_bytes_must_be_positive() -> None:
+    with (
+        _fetcher(lambda _request: httpx.Response(200, content=b"ok")) as fetcher,
+        pytest.raises(SeoError) as excinfo,
+    ):
+        fetcher.fetch("https://example.com/", max_bytes=0)
+
+    assert excinfo.value.code == INVALID_INPUT

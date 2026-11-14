@@ -6,7 +6,10 @@ Every provider call that changes state goes through this module:
    ``confirm_token``. It refuses with ``WRITE_DISABLED`` unless the caller explicitly opted in
    with ``allow_write=True`` (CLI ``--allow-write``).
 2. **Apply** - :meth:`WriteGate.apply` verifies the token against the *same* plan, claims an
-   idempotency slot in the store ledger and only then runs the caller's ``execute`` callable.
+   idempotency slot in the store ledger as ``pending`` and only then runs the caller's ``execute``
+   callable. A successful call promotes the claim to ``sent``; a failed call releases it, so a
+   retry after a provider error is allowed. Only a completed (or still in-flight) claim is a
+   duplicate.
 
 The token is ``HMAC-SHA256(secret, "<action>|<target>|<plan_hash>|<expiry>")`` where ``expiry``
 is a Unix timestamp embedded in the token as ``<expiry>:<digest>``. A changed plan, a wrong
@@ -26,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -155,9 +159,11 @@ class WriteGate:
     """Policy object shared by the CLI and MCP write tools.
 
     ``allow_write`` is the explicit opt-in; ``store`` is any object exposing
-    ``record_send(kind, property_id, period, content_hash, channel, ...) -> bool`` (the SQLite
+    ``record_send(kind, property_id, period, content_hash, channel, status=...) -> bool`` plus
+    ``mark_send_sent(...) -> bool`` and ``release_send(...) -> bool`` (the SQLite
     :class:`~lv24_seo.store.repositories.Store` qualifies). A duplicate ledger claim returns
-    ``skipped`` instead of calling the provider again.
+    ``skipped`` instead of calling the provider again; a failed call releases the claim so the
+    caller can retry.
     """
 
     def __init__(self, *, allow_write: bool, secret: str, store: object | None = None) -> None:
@@ -227,8 +233,15 @@ class WriteGate:
             )
 
         detail: dict[str, Any] = {}
-        if execute is not None:
-            detail["result"] = execute(plan)
+        try:
+            if execute is not None:
+                detail["result"] = execute(plan)
+        except BaseException:
+            # The provider did not confirm the write: release the pending claim so a retry
+            # is not mistaken for a duplicate. Never mask the original exception.
+            self._release(plan, digest, key)
+            raise
+        self._mark_sent(plan, digest, key)
         return GateResult(status="applied", plan=plan, detail=detail)
 
     def _require_enabled(self) -> None:
@@ -252,14 +265,59 @@ class WriteGate:
                 message="write ledger does not implement record_send",
                 next_action="pass a Store or omit the store when idempotency is not needed",
             )
+        if not callable(getattr(self._store, "release_send", None)) or not callable(
+            getattr(self._store, "mark_send_sent", None)
+        ):
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="write ledger cannot complete or release a pending claim",
+                next_action="pass a Store (record_send + mark_send_sent + release_send)",
+            )
         claimed: Any = record_send(
             kind=plan.action,
             property_id=plan.target,
             period=key,
             content_hash=digest,
             channel="write",
+            status="pending",
         )
         return bool(claimed)
+
+    def _release(self, plan: WritePlan, digest: str, key: str) -> None:
+        """Release a pending claim; a release failure must never hide the original error."""
+        if self._store is None:
+            return
+        release = getattr(self._store, "release_send", None)
+        if not callable(release):
+            return
+        try:
+            release(
+                kind=plan.action,
+                property_id=plan.target,
+                period=key,
+                content_hash=digest,
+                channel="write",
+            )
+        except Exception:  # pragma: no cover - defensive: storage must not mask the provider error
+            logging.getLogger(__name__).warning("write gate could not release a pending claim")
+
+    def _mark_sent(self, plan: WritePlan, digest: str, key: str) -> None:
+        """Promote the pending claim after the provider confirmed the write."""
+        if self._store is None:
+            return
+        mark = getattr(self._store, "mark_send_sent", None)
+        if not callable(mark):
+            return
+        try:
+            mark(
+                kind=plan.action,
+                property_id=plan.target,
+                period=key,
+                content_hash=digest,
+                channel="write",
+            )
+        except Exception:  # pragma: no cover - a pending claim is safer than a false "sent"
+            logging.getLogger(__name__).warning("write gate could not mark a claim as sent")
 
 
 def _canonical_json(payload: object) -> str:

@@ -202,6 +202,7 @@ class ToolState:
 
     service: SeoService
     report: ReportCache = field(default_factory=ReportCache)
+    timezone: str = "Europe/Minsk"
 
 
 def invoke(
@@ -374,12 +375,12 @@ def parse_iso_date(value: str, *, name: str) -> date:
         ) from None
 
 
-def _window(start_date: str, end_date: str, *, days: int) -> tuple[date, date]:
+def _window(start_date: str, end_date: str, *, days: int, timezone: str) -> tuple[date, date]:
     """Resolve an explicit ISO window or the last ``days`` full days (lag 2)."""
     start_text = start_date.strip()
     end_text = end_date.strip()
     if not start_text and not end_text:
-        return compare_period(days, lag_days=2)[0]
+        return compare_period(days, lag_days=2, tz=timezone)[0]
     if not start_text or not end_text:
         raise SeoError(
             code=INVALID_INPUT,
@@ -435,7 +436,7 @@ def build_gsc_search_analytics(state: ToolState) -> Callable[..., CallToolResult
     ) -> CallToolResult:
         def _run() -> Envelope:
             size, size_warning = bounded_limit(limit)
-            start, end = _window(start_date, end_date, days=7)
+            start, end = _window(start_date, end_date, days=7, timezone=state.timezone)
             dims = tuple(dimensions) if dimensions else ("query",)
             warnings = [size_warning] if size_warning else []
             payload, ignored = invoke(
@@ -808,7 +809,9 @@ def build_opportunities(state: ToolState) -> Callable[..., CallToolResult]:
             warnings = [
                 warning for warning in (span_warning, size_warning, floor_warning) if warning
             ]
-            (start, end), (previous_start, previous_end) = compare_period(span, lag_days=2)
+            (start, end), (previous_start, previous_end) = compare_period(
+                span, lag_days=2, tz=state.timezone
+            )
 
             current, ignored = invoke(
                 state.service,

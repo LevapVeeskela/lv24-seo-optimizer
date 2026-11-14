@@ -47,7 +47,7 @@ from lv24_seo.core.errors import (
     SeoError,
     exit_code_for,
 )
-from lv24_seo.mcp.registry import TOOLS, ToolSpec, tools_as_json
+from lv24_seo.mcp.registry import TOOLS, ToolSpec, tool_annotations, tools_as_json
 from lv24_seo.mcp.tools import TOOL_BUILDERS, ToolState, compact_json
 from lv24_seo.services import SeoService
 
@@ -132,11 +132,12 @@ _SERVER_CLASS, _SERVER_FLAVOR = _resolve_server_class()
 
 
 def _annotations(spec: ToolSpec) -> ToolAnnotations:
-    """Map the registry ``kind`` onto MCP tool hints."""
+    """Map the registry contract onto MCP tool hints."""
+    hints = tool_annotations(spec)
     return ToolAnnotations(
-        read_only_hint=spec.kind == "read",
-        destructive_hint=spec.kind == "write",
-        idempotent_hint=spec.kind == "read",
+        read_only_hint=hints["readOnlyHint"],
+        destructive_hint=hints["destructiveHint"],
+        idempotent_hint=hints["idempotentHint"],
     )
 
 
@@ -329,7 +330,11 @@ def create_server(service: SeoService | None = None) -> McpServer:
         service = workspace.service
 
     try:
-        state = ToolState(service=service)
+        timezone = getattr(service, "timezone", None)
+        state = ToolState(
+            service=service,
+            timezone=timezone if isinstance(timezone, str) and timezone else "Europe/Minsk",
+        )
         server = _SERVER_CLASS(name=SERVER_NAME, instructions=_INSTRUCTIONS)
         _register_tools(server, state)
         _register_resources(server, state, config)

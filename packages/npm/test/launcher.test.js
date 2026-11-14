@@ -53,6 +53,22 @@ describe('launcher unit surface', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('ignores .cmd wrappers that cannot be spawned without a shell', () => {
+    if (process.platform !== 'win32') {
+      return;
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lv24-cmd-'));
+    const originalPath = process.env.PATH;
+    try {
+      fs.writeFileSync(path.join(dir, 'lv24-seo.cmd'), '@echo off\r\necho shim\r\n');
+      process.env.PATH = dir;
+      assert.equal(launcher.findSystemBinary(), null);
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('launcher processes', () => {

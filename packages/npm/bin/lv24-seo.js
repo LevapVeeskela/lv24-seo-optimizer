@@ -59,8 +59,10 @@ function ownRealPath() {
 function findSystemBinary() {
   const pathEnv = process.env.PATH || '';
   const dirs = pathEnv.split(path.delimiter).filter(Boolean);
+  // Never return a `.cmd`/`.bat` wrapper: Node cannot spawn it with `shell: false`
+  // (EINVAL on Windows). A real console-script `.exe` or an extensionless binary is safe.
   const names =
-    process.platform === 'win32' ? ['lv24-seo.exe', 'lv24-seo.cmd', 'lv24-seo'] : ['lv24-seo'];
+    process.platform === 'win32' ? ['lv24-seo.exe', 'lv24-seo'] : ['lv24-seo'];
   const self = ownRealPath();
   for (const dir of dirs) {
     for (const name of names) {

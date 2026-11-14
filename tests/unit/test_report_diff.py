@@ -230,6 +230,26 @@ def test_cli_markdown_and_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert envelope["meta"]["complete"] is True
 
 
+def test_report_diff_markdown_sends_warnings_to_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lv24_seo.cli import main as cli_main
+
+    payload = {
+        "ok": True,
+        "data": {"markdown": "### SEO report diff\n"},
+        "meta": {},
+        "warnings": ["snapshot older than 7 days"],
+    }
+    monkeypatch.setattr(cli_main, "_run", lambda *_args, **_kwargs: payload)
+
+    result = CliRunner().invoke(cli_main.app, ["report", "diff", "--markdown"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "### SEO report diff\n"
+    assert "warning: snapshot older than 7 days" in result.stderr
+
+
 def test_mcp_tool_diffs_stored_snapshots_on_the_owner_loop(tmp_path: Path) -> None:
     """Real create_server + real Store + real call_tool (SQLite touched on the loop thread)."""
     import asyncio

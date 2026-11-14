@@ -7,6 +7,7 @@
       "title": "List properties",
       "description": "List every site/property visible to the configured tokens.",
       "kind": "read",
+      "writes_local_state": false,
       "providers": [
         "gsc",
         "yandex_webmaster",
@@ -26,6 +27,7 @@
       "title": "Google search analytics",
       "description": "Query GSC clicks/impressions/CTR/position by query, page, country or device.",
       "kind": "read",
+      "writes_local_state": false,
       "providers": [
         "gsc"
       ],
@@ -53,6 +55,7 @@
       "title": "Yandex queries",
       "description": "Top Yandex queries for a host with shows, clicks, position.",
       "kind": "read",
+      "writes_local_state": false,
       "providers": [
         "yandex_webmaster"
       ],
@@ -78,6 +81,7 @@
       "title": "Yandex indexing state",
       "description": "Indexing history, in-search page counts and diagnostics for a host.",
       "kind": "read",
+      "writes_local_state": false,
       "providers": [
         "yandex_webmaster"
       ],
@@ -97,6 +101,7 @@
       "title": "Crawl site",
       "description": "Crawl a site (robots-respecting), return crawl summary and rule violations.",
       "kind": "read",
+      "writes_local_state": true,
       "providers": [
         "crawl"
       ],
@@ -108,9 +113,9 @@
       "returns": "{summary:{urls,fetched,errors}, issues:[{id,severity,url,detail}]}",
       "limitations": [],
       "annotations": {
-        "readOnlyHint": true,
+        "readOnlyHint": false,
         "destructiveHint": false,
-        "idempotentHint": true
+        "idempotentHint": false
       }
     },
     {
@@ -118,6 +123,7 @@
       "title": "Weekly report",
       "description": "Build the weekly SEO digest (deltas vs last snapshot) for one property.",
       "kind": "read",
+      "writes_local_state": true,
       "providers": [
         "gsc",
         "yandex_webmaster",
@@ -129,9 +135,9 @@
       "returns": "{period, headline, deltas, issues, opportunities, limitations}",
       "limitations": [],
       "annotations": {
-        "readOnlyHint": true,
+        "readOnlyHint": false,
         "destructiveHint": false,
-        "idempotentHint": true
+        "idempotentHint": false
       }
     },
     {
@@ -139,6 +145,7 @@
       "title": "Report diff",
       "description": "Diff two stored weekly report snapshots (metrics, issues, opportunity churn).",
       "kind": "read",
+      "writes_local_state": false,
       "providers": [
         "store"
       ],
@@ -162,6 +169,7 @@
       "title": "Indexing triage",
       "description": "Group not-indexed URLs by reason and propose the cheapest fix.",
       "kind": "read",
+      "writes_local_state": false,
       "providers": [
         "gsc",
         "yandex_webmaster",
@@ -181,6 +189,7 @@
       "title": "Opportunities",
       "description": "Striking-distance queries, CTR gaps, decayed pages, cannibalisation candidates.",
       "kind": "read",
+      "writes_local_state": false,
       "providers": [
         "gsc",
         "yandex_webmaster"
@@ -199,6 +208,7 @@
       "title": "Request recrawl (write)",
       "description": "Queue URLs for Yandex recrawl within the daily quota.",
       "kind": "write",
+      "writes_local_state": false,
       "providers": [
         "yandex_webmaster"
       ],
@@ -222,6 +232,7 @@
       "title": "Submit sitemap (write)",
       "description": "Submit or delete a sitemap in GSC/Bing.",
       "kind": "write",
+      "writes_local_state": false,
       "providers": [
         "gsc",
         "bing"

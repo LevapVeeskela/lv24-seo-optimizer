@@ -36,6 +36,7 @@ auth_app = typer.Typer(
 _PROVIDER_SECRETS: dict[str, str] = {
     "gsc": "gsc_token",
     "yandex": "yandex_webmaster_token",
+    "metrika": "yandex_metrika_token",
     "bing": "bing_api_key",
     "crux": "crux_api_key",
     "psi": "psi_api_key",
@@ -102,7 +103,7 @@ def auth_status(
 @auth_app.command("set")
 def auth_set(
     provider: Annotated[
-        str, typer.Option("--provider", help="gsc|yandex|bing|crux|psi|smtp|telegram.")
+        str, typer.Option("--provider", help="gsc|yandex|metrika|bing|crux|psi|smtp|telegram.")
     ],
     stdin: Annotated[
         bool,

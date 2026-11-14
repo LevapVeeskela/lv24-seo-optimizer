@@ -277,3 +277,27 @@ def test_managed_cron_block_is_replaced_idempotently() -> None:
     assert first.count("# >>> lv24-seo:lv24-seo-weekly >>>") == 1
     assert "0 1 * * * /usr/bin/true" in first
     assert first.endswith("# <<< lv24-seo:lv24-seo-weekly <<<\n")
+
+
+def test_missing_end_marker_does_not_duplicate_the_cron_block() -> None:
+    block = render_cron(WEEKLY)
+    wrapped = f"# >>> lv24-seo:lv24-seo-weekly >>>\n{block}# <<< lv24-seo:lv24-seo-weekly <<<\n"
+    truncated = f"# other job\n0 1 * * * /usr/bin/true\n# >>> lv24-seo:lv24-seo-weekly >>>\n{block}"
+
+    repaired = _replace_block(truncated, wrapped, "lv24-seo-weekly")
+
+    assert repaired.count("# >>> lv24-seo:lv24-seo-weekly >>>") == 1
+    assert repaired.count("# <<< lv24-seo:lv24-seo-weekly <<<") == 1
+    assert repaired.count("0 6 * * 1") == 1
+    assert "0 1 * * * /usr/bin/true" in repaired
+
+
+def test_duplicate_managed_cron_blocks_are_collapsed() -> None:
+    block = render_cron(WEEKLY)
+    wrapped = f"# >>> lv24-seo:lv24-seo-weekly >>>\n{block}# <<< lv24-seo:lv24-seo-weekly <<<\n"
+    doubled = wrapped + wrapped
+
+    repaired = _replace_block(doubled, wrapped, "lv24-seo-weekly")
+
+    assert repaired.count("# >>> lv24-seo:lv24-seo-weekly >>>") == 1
+    assert repaired.count("0 6 * * 1") == 1

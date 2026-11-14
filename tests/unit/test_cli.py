@@ -250,6 +250,7 @@ def test_auth_set_then_status_never_leaks_the_secret(
     assert providers["gsc"]["present"] is True
     assert providers["gsc"]["source"] == "file"
     assert providers["yandex"]["present"] is False
+    assert providers["metrika"]["present"] is False
     assert payload["data"]["present"] == ["gsc"]
     assert "token-value" not in json.dumps(payload)
 

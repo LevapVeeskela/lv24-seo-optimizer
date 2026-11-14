@@ -242,9 +242,22 @@ def test_tool_metadata_and_annotations_match_registry() -> None:
         assert tool.description == spec.summary
         annotations = tool.annotations
         assert annotations is not None
-        assert annotations.read_only_hint is (spec.kind == "read")
+        read_only = spec.kind == "read" and not spec.writes_local_state
+        assert annotations.read_only_hint is read_only
         assert annotations.destructive_hint is (spec.kind == "write")
-        assert annotations.idempotent_hint is (spec.kind == "read")
+        assert annotations.idempotent_hint is read_only
+
+
+def test_gsc_default_window_uses_the_service_timezone() -> None:
+    from lv24_seo.core.timeutil import compare_period
+
+    service = GscService()
+    service.timezone = "Pacific/Kiritimati"  # type: ignore[attr-defined]
+
+    _call(create_server(service), "gsc_search_analytics")
+
+    expected = compare_period(7, lag_days=2, tz="Pacific/Kiritimati")[0]
+    assert service.windows == [expected]
 
 
 def test_input_schemas_are_generated_from_typed_parameters() -> None:

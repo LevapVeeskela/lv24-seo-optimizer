@@ -446,7 +446,7 @@ class Store:
             ORDER BY url
             LIMIT ?
             """,
-            (property_id, limit),
+            (property_id, max(0, int(limit))),
         ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
@@ -557,7 +557,7 @@ class Store:
             "property_id": property_id,
             "state": state,
             "severity": severity,
-            "limit": limit,
+            "limit": max(0, int(limit)),
         }
         rows = self.conn.execute(
             """
@@ -692,6 +692,57 @@ class Store:
                     _timestamp(sent_at, name="sent_at"),
                     status,
                 ),
+            )
+        return cursor.rowcount == 1
+
+    def mark_send_sent(
+        self,
+        kind: str,
+        property_id: str,
+        period: str,
+        content_hash: str,
+        channel: str,
+        *,
+        sent_at: datetime | str | None = None,
+    ) -> bool:
+        """Promote a ``pending`` claim to ``sent``; returns ``False`` when nothing was pending.
+
+        Only a pending row is updated, so a completed send is never rewritten by a late retry.
+        """
+        with self._write_tx():
+            cursor = self.conn.execute(
+                """
+                UPDATE sends
+                SET status = 'sent', sent_at = ?
+                WHERE kind = ? AND property_id = ? AND period = ?
+                  AND channel = ? AND content_hash = ? AND status = 'pending'
+                """,
+                (
+                    _timestamp(sent_at, name="sent_at"),
+                    kind,
+                    property_id,
+                    period,
+                    channel,
+                    content_hash,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def release_send(
+        self, kind: str, property_id: str, period: str, content_hash: str, channel: str
+    ) -> bool:
+        """Drop a ``pending`` claim after a failed write; a ``sent`` row is never deleted.
+
+        Returns ``True`` when a pending claim was released.
+        """
+        with self._write_tx():
+            cursor = self.conn.execute(
+                """
+                DELETE FROM sends
+                WHERE kind = ? AND property_id = ? AND period = ?
+                  AND channel = ? AND content_hash = ? AND status = 'pending'
+                """,
+                (kind, property_id, period, channel, content_hash),
             )
         return cursor.rowcount == 1
 

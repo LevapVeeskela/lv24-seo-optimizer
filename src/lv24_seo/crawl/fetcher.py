@@ -148,8 +148,20 @@ class Fetcher:
         """Redirect hops followed per page before ``too_many_redirects``."""
         return self._max_redirects
 
-    def fetch(self, url: str, *, allow_url: Callable[[str], bool] | None = None) -> FetchResult:
-        """GET ``url`` and never raise for network, size or redirect failures."""
+    def fetch(
+        self,
+        url: str,
+        *,
+        allow_url: Callable[[str], bool] | None = None,
+        max_bytes: int | None = None,
+    ) -> FetchResult:
+        """GET ``url`` and never raise for network, size or redirect failures.
+
+        ``max_bytes`` overrides the instance cap for one request. Sitemaps use the larger
+        :data:`~lv24_seo.crawl.sitemap.MAX_BYTES` budget while ordinary pages keep the
+        default.
+        """
+        limit = self._max_bytes if max_bytes is None else _positive_limit(max_bytes)
         started = time.perf_counter()
         chain = [url]
         current = url
@@ -200,7 +212,7 @@ class Fetcher:
                         self._last_end = time.perf_counter()
                         continue
 
-                    body = self._read_body(response)
+                    body = self._read_body(response, limit)
                     if body is None:
                         return self._failure(url, current, chain, "too_large", started)
                     self._last_end = time.perf_counter()
@@ -254,13 +266,13 @@ class Fetcher:
     ) -> None:
         self.close()
 
-    def _read_body(self, response: httpx.Response) -> bytes | None:
+    def _read_body(self, response: httpx.Response, max_bytes: int) -> bytes | None:
         """Return the body, or ``None`` when it exceeds ``max_bytes``."""
         chunks: list[bytes] = []
         total = 0
         for chunk in response.iter_bytes():
             total += len(chunk)
-            if total > self._max_bytes:
+            if total > max_bytes:
                 return None
             chunks.append(chunk)
         return b"".join(chunks)
@@ -525,3 +537,13 @@ def _is_downgrade(chain: list[str]) -> bool:
 
 def _elapsed_ms(started: float) -> float:
     return (time.perf_counter() - started) * 1000.0
+
+
+def _positive_limit(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="max_bytes must be > 0",
+            next_action="pass a positive body size limit",
+        )
+    return value

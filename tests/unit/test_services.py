@@ -571,6 +571,65 @@ def test_yandex_queries_missing_token_fails_with_warning() -> None:
 # -- weekly report ---------------------------------------------------------------------------
 
 
+def test_weekly_report_rejects_an_unbounded_window() -> None:
+    service = SeoService(_config(), secrets=_secrets())
+
+    stats = service.stats(days=1_000_000)
+    weekly = service.weekly_report(days=1_000_000)
+
+    assert stats["ok"] is False
+    assert stats["error"]["code"] == INVALID_INPUT
+    assert "3660" in stats["error"]["message"]
+    assert weekly["ok"] is False
+    assert weekly["error"]["code"] == INVALID_INPUT
+    assert "3660" in weekly["error"]["message"]
+
+
+def test_builder_type_error_is_not_hidden_and_persists_no_snapshot(
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_builder(**kwargs: Any) -> Report:
+        raise TypeError("real builder bug")
+
+    monkeypatch.setattr(services, "_load_weekly_builder", lambda: broken_builder)
+    service = SeoService(_config(), store=store, secrets=_secrets())
+
+    response = service.weekly_report()
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == INTERNAL
+    assert store.list_snapshot_periods("weekly", PROPERTY) == []
+
+
+def test_builder_signature_mismatch_uses_the_fallback_report(
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def old_builder(property_id: str, period_start: Any) -> Report:  # pragma: no cover
+        raise AssertionError("incompatible builder must not run")
+
+    monkeypatch.setattr(services, "_load_weekly_builder", lambda: old_builder)
+    service = SeoService(_config(), store=store, secrets=_secrets())
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    assert any("signature mismatch" in warning for warning in response["warnings"])
+    assert len(store.list_snapshot_periods("weekly", PROPERTY)) == 1
+
+
+def test_metric_key_keeps_pipe_values_distinct() -> None:
+    from lv24_seo.services import _metric_key
+
+    dimensions = ("query", "page")
+
+    first = _metric_key({"query": "a|b", "page": "c"}, dimensions)
+    second = _metric_key({"query": "a", "page": "b|c"}, dimensions)
+
+    assert first != second
+
+
 def test_weekly_report_calls_builder_and_saves_snapshot(
     store: Store,
     builder_capture: dict[str, Any],

@@ -158,6 +158,15 @@ def test_word_count_is_cyrillic_safe() -> None:
     assert page.word_count == 7
 
 
+def test_stored_text_is_capped_while_word_count_uses_the_full_body() -> None:
+    words = " ".join(f"word{index}" for index in range(30_000))
+    page = parse_html("https://lv24.by/long", f"<html><body><p>{words}</p></body></html>")
+
+    assert page.word_count == 30_000
+    assert len(page.text) == html_module.MAX_STORED_TEXT_CHARS
+    assert page.text.startswith("word0 word1")
+
+
 def test_x_robots_tag_header_is_case_insensitive() -> None:
     page = parse_html(
         "https://lv24.by/",

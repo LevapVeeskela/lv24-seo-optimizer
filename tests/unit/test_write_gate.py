@@ -33,11 +33,13 @@ PLAN = WritePlan(
 
 
 class FakeLedger:
-    """Minimal ``record_send`` ledger: the first claim wins, repeats return ``False``."""
+    """Minimal pending/sent ledger: the first claim wins, repeats return ``False``."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
-        self._slots: set[tuple[str, str, str, str, str]] = set()
+        self.released: list[tuple[str, str, str, str, str]] = []
+        self.completed: list[tuple[str, str, str, str, str]] = []
+        self._slots: dict[tuple[str, str, str, str, str], str] = {}
 
     def record_send(
         self,
@@ -46,6 +48,8 @@ class FakeLedger:
         period: str,
         content_hash: str,
         channel: str,
+        *,
+        status: str = "sent",
     ) -> bool:
         self.calls.append(
             {
@@ -54,13 +58,47 @@ class FakeLedger:
                 "period": period,
                 "content_hash": content_hash,
                 "channel": channel,
+                "status": status,
             }
         )
         slot = (kind, property_id, period, content_hash, channel)
         if slot in self._slots:
             return False
-        self._slots.add(slot)
+        self._slots[slot] = status
         return True
+
+    def mark_send_sent(
+        self,
+        kind: str,
+        property_id: str,
+        period: str,
+        content_hash: str,
+        channel: str,
+    ) -> bool:
+        slot = (kind, property_id, period, content_hash, channel)
+        if self._slots.get(slot) != "pending":
+            return False
+        self._slots[slot] = "sent"
+        self.completed.append(slot)
+        return True
+
+    def release_send(
+        self,
+        kind: str,
+        property_id: str,
+        period: str,
+        content_hash: str,
+        channel: str,
+    ) -> bool:
+        slot = (kind, property_id, period, content_hash, channel)
+        if self._slots.get(slot) != "pending":
+            return False
+        del self._slots[slot]
+        self.released.append(slot)
+        return True
+
+    def status(self, slot: tuple[str, str, str, str, str]) -> str | None:
+        return self._slots.get(slot)
 
 
 def _gate(*, allow_write: bool = True, store: object | None = None) -> WriteGate:
@@ -305,7 +343,58 @@ def test_duplicate_apply_is_skipped_without_calling_execute_again() -> None:
         "period": "job-1",
         "content_hash": plan_hash(PLAN),
         "channel": "write",
+        "status": "pending",
     }
+    assert ledger.calls[1]["status"] == "pending"
+    assert ledger.status(("indexnow", "example.com", "job-1", plan_hash(PLAN), "write")) == "sent"
+    assert ledger.completed == [("indexnow", "example.com", "job-1", plan_hash(PLAN), "write")]
+
+
+def test_failed_execute_releases_the_claim_and_a_retry_executes_again() -> None:
+    ledger = FakeLedger()
+    gate = _gate(store=ledger)
+    token = gate.plan(PLAN).confirm_token
+    calls: list[WritePlan] = []
+
+    def failing(plan: WritePlan) -> dict[str, Any]:
+        calls.append(plan)
+        raise RuntimeError("provider rejected the request")
+
+    with pytest.raises(RuntimeError, match="provider rejected"):
+        gate.apply(PLAN, token, idempotency_key="job-1", execute=failing)
+
+    slot = ("indexnow", "example.com", "job-1", plan_hash(PLAN), "write")
+    assert ledger.status(slot) is None
+    assert ledger.released == [slot]
+
+    def succeeding(plan: WritePlan) -> dict[str, Any]:
+        calls.append(plan)
+        return {"queued": 2}
+
+    retry = gate.apply(PLAN, token, idempotency_key="job-1", execute=succeeding)
+
+    assert retry.status == "applied"
+    assert calls == [PLAN, PLAN]
+    assert ledger.status(slot) == "sent"
+
+
+def test_successful_execute_leaves_a_sent_claim_and_blocks_a_second_apply() -> None:
+    ledger = FakeLedger()
+    gate = _gate(store=ledger)
+    token = gate.plan(PLAN).confirm_token
+    calls: list[WritePlan] = []
+
+    def execute(plan: WritePlan) -> dict[str, Any]:
+        calls.append(plan)
+        return {"queued": 2}
+
+    first = gate.apply(PLAN, token, idempotency_key="job-1", execute=execute)
+    second = gate.apply(PLAN, token, idempotency_key="job-1", execute=execute)
+
+    assert first.status == "applied"
+    assert second.status == "skipped"
+    assert second.reason == "duplicate"
+    assert calls == [PLAN]
 
 
 def test_default_idempotency_period_is_the_plan_hash() -> None:

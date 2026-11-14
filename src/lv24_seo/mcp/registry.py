@@ -6,8 +6,12 @@ Wave W5 fills the tool implementations; this module only declares the shape now.
 
 from __future__ import annotations
 
+import argparse
 import json
+import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 ToolKind = Literal["read", "write"]
@@ -19,6 +23,7 @@ class ToolSpec:
     title: str
     summary: str
     kind: ToolKind = "read"
+    writes_local_state: bool = False
     providers: tuple[str, ...] = field(default_factory=tuple)
     inputs: dict[str, str] = field(default_factory=dict)
     returns: str = ""
@@ -73,6 +78,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         name="seo_crawl_site",
         title="Crawl site",
         summary="Crawl a site (robots-respecting), return crawl summary and rule violations.",
+        writes_local_state=True,
         providers=("crawl",),
         inputs={
             "start_url": "https://example.com/",
@@ -85,6 +91,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         name="seo_weekly_report",
         title="Weekly report",
         summary="Build the weekly SEO digest (deltas vs last snapshot) for one property.",
+        writes_local_state=True,
         providers=("gsc", "yandex_webmaster", "yandex_metrika", "crux", "crawl"),
         returns="{period, headline, deltas, issues, opportunities, limitations}",
     ),
@@ -147,6 +154,21 @@ TOOLS: tuple[ToolSpec, ...] = (
 )
 
 
+def tool_annotations(spec: ToolSpec) -> dict[str, bool]:
+    """MCP hints derived from the registry contract.
+
+    A tool that writes local state (crawl snapshots, weekly snapshots) is not read-only even
+    when it never touches a provider. It is not destructive either: local state can be
+    regenerated, so ``destructiveHint`` stays ``False``.
+    """
+    read_only = spec.kind == "read" and not spec.writes_local_state
+    return {
+        "readOnlyHint": read_only,
+        "destructiveHint": spec.kind == "write",
+        "idempotentHint": read_only,
+    }
+
+
 def tools_as_json() -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -157,20 +179,75 @@ def tools_as_json() -> dict[str, object]:
                 "title": t.title,
                 "description": t.summary,
                 "kind": t.kind,
+                "writes_local_state": t.writes_local_state,
                 "providers": list(t.providers),
                 "inputs": t.inputs,
                 "returns": t.returns,
                 "limitations": list(t.limitations),
-                "annotations": {
-                    "readOnlyHint": t.kind == "read",
-                    "destructiveHint": t.kind == "write",
-                    "idempotentHint": t.kind == "read",
-                },
+                "annotations": tool_annotations(t),
             }
             for t in TOOLS
         ],
     }
 
 
+def render_tools_json() -> str:
+    """Canonical ``schemas/tools.json`` text (LF, trailing newline)."""
+    return json.dumps(tools_as_json(), ensure_ascii=False, indent=2) + "\n"
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Print, write or verify the generated tool schema.
+
+    ``--write`` is the documented regeneration command; ``--check`` exits non-zero when the
+    checked-in file no longer matches the registry (useful in CI and before a release).
+    """
+    parser = argparse.ArgumentParser(description="Render or verify schemas/tools.json.")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument(
+        "--write",
+        action="store_true",
+        help="Write the generated schema (default: schemas/tools.json).",
+    )
+    action.add_argument(
+        "--check",
+        action="store_true",
+        help="Exit 1 when the schema on disk differs from the registry.",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Destination file (default: schemas/tools.json under the current directory).",
+    )
+    args = parser.parse_args(argv)
+    destination = args.out if args.out is not None else Path.cwd() / "schemas" / "tools.json"
+    rendered = render_tools_json()
+
+    if args.check:
+        try:
+            existing = destination.read_text(encoding="utf-8")
+        except OSError:
+            print(f"{destination}: missing; run python -m lv24_seo.mcp.registry --write")
+            return 1
+        if existing != rendered:
+            print(
+                f"{destination}: drift detected; run python -m lv24_seo.mcp.registry --write",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"{destination}: up to date")
+        return 0
+
+    if args.write:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(rendered, encoding="utf-8", newline="\n")
+        print(f"wrote {len(TOOLS)} tools to {destination}")
+        return 0
+
+    sys.stdout.write(rendered)
+    return 0
+
+
 if __name__ == "__main__":  # pragma: no cover - developer utility
-    print(json.dumps(tools_as_json(), indent=2, ensure_ascii=False))
+    raise SystemExit(main())

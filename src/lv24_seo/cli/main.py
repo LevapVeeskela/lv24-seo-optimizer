@@ -860,6 +860,8 @@ def report_diff(
         persist=True,
     )
     if markdown and payload.get("ok") and not as_json:
+        for warning in payload.get("warnings") or []:
+            typer.echo(f"warning: {warning}", err=True)
         data = payload.get("data") or {}
         typer.echo(str(data.get("markdown", "")), nl=False)
         return

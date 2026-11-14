@@ -326,6 +326,30 @@ def test_duplicate_send_returns_false_and_keeps_original_row(store: Store) -> No
     assert store.was_sent("weekly", "p1", "2026-W45", changed, "telegram") is False
 
 
+def test_pending_send_can_be_completed_or_released(store: Store) -> None:
+    digest = store.save_snapshot("weekly", "p1", "2026-W45", {"clicks": 10})
+
+    assert store.record_send("weekly", "p1", "2026-W45", digest, "email", status="pending") is True
+    assert store.mark_send_sent("weekly", "p1", "2026-W45", digest, "email") is True
+    assert store.mark_send_sent("weekly", "p1", "2026-W45", digest, "email") is False
+    assert store.was_sent("weekly", "p1", "2026-W45", digest, "email") is True
+    assert store.release_send("weekly", "p1", "2026-W45", digest, "email") is False
+
+    assert (
+        store.record_send("weekly", "p1", "2026-W45", digest, "telegram", status="pending") is True
+    )
+    assert store.release_send("weekly", "p1", "2026-W45", digest, "telegram") is True
+    assert store.was_sent("weekly", "p1", "2026-W45", digest, "telegram") is False
+
+
+def test_negative_list_limits_are_clamped_to_zero(store: Store) -> None:
+    store.upsert_page("p1", "https://example.com/", status=200)
+    store.upsert_issue("thin", "low", "p1", "https://example.com/", {"word_count": 3})
+
+    assert store.list_pages("p1", limit=-1) == []
+    assert store.list_issues("p1", limit=-1) == []
+
+
 def test_record_run_returns_incrementing_ids_and_stores_stats(store: Store) -> None:
     first = store.record_run(
         "weekly",

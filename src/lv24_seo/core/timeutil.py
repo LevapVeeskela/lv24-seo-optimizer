@@ -230,11 +230,12 @@ def compare_period(
     *,
     end: date | None = None,
     lag_days: int = 0,
+    tz: str = "Europe/Minsk",
 ) -> tuple[tuple[date, date], tuple[date, date]]:
     """Current and previous windows for a like-for-like report comparison.
 
-    Uses the default zone; pass an explicit ``end`` when the caller has already resolved a
-    local day in another timezone.
+    Uses ``tz`` when ``end`` is omitted; pass an explicit ``end`` when the caller has already
+    resolved a local day in another timezone.
     """
-    current = period_window(days, end=end, lag_days=lag_days)
+    current = period_window(days, end=end, lag_days=lag_days, tz=tz)
     return current, previous_window(*current)

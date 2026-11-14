@@ -673,7 +673,7 @@ def test_stats_is_read_only_without_store(tmp_path: Path, monkeypatch: pytest.Mo
 
 @pytest.mark.parametrize(
     ("days", "lag_days"),
-    [(0, 2), (-1, 2), (7, -1), (True, 2)],
+    [(0, 2), (-1, 2), (7, -1), (True, 2), (1_000_000, 2), (3661, 2)],
 )
 def test_stats_rejects_invalid_windows(days: int, lag_days: int) -> None:
     payload = _service().stats(days=days, lag_days=lag_days)
