@@ -265,9 +265,9 @@ lv24-seo auth login --provider yandex          # prints the instructions
 lv24-seo auth set --provider yandex --stdin    # stores yandex_webmaster_token
 ```
 
-There is no `auth set --provider metrika` in v0.1; use `LV24_SEO_YANDEX_METRIKA_TOKEN` (or the
-0600 secrets file) for Metrika. Webmaster tokens live ~6 months and Metrika tokens ~1 year; put a
-rotation reminder in the calendar. `lv24-seo auth status` reports only whether a token is present and
+Metrika accepts `auth set --provider metrika` (or `LV24_SEO_YANDEX_METRIKA_TOKEN`, or the 0600
+secrets file). Webmaster tokens live ~6 months and Metrika tokens ~1 year; put a rotation reminder
+in the calendar. `lv24-seo auth status` reports only whether a token is present and
 where it came from — never the value.
 
 ### 5. SMTP

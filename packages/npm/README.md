@@ -20,7 +20,8 @@ into the unpinned (`latest`) lookup.
 
 ## Status
 
-Beta. The current Python/NPM line ships 11 read-only-by-default MCP tools, 3 resources,
+Beta. The current Python/NPM line ships 11 MCP tools (9 read-only; the two local-state
+writers are annotated `readOnlyHint: false`), 3 resources,
 3 prompts, the full CLI, scheduler generators and a product-grade weekly email. Recent
 additions:
 
