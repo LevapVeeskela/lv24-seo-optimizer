@@ -17,6 +17,7 @@ uv tool install "lv24-seo[secrets]"
 lv24-seo doctor
 lv24-seo init --property https://example.com
 lv24-seo auth set --provider gsc --stdin   # нужен extra: pip install "lv24-seo[secrets]"
+lv24-seo auth set --provider metrika --stdin  # у Метрики отдельный auth-провайдер и токен
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
 lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown            # разница двух сохранённых недельных снапшотов
@@ -37,17 +38,44 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 |---|---|
 | Источники | GSC, Вебмастер, Метрика, Bing/IndexNow, CrUX, PSI, собственный краул, логи nginx |
 | Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), триаж индексации, striking distance, деградация контента, техрегрессии |
-| MCP | 11 инструментов, 3 ресурса, 3 промпта; по умолчанию только чтение — таблица ниже |
-| CLI | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `stats`, `schedule`, `export`, `mcp serve` |
+| MCP | 11 инструментов, 3 ресурса, 3 промпта; без записи к провайдеру по умолчанию — таблица ниже |
+| CLI | 17 команд верхнего уровня (10 групп + 7 команд): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `mcp` |
 | Скиллы | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
 | Автоматизация | cron / systemd timer / Планировщик Windows, рецепт GitHub Actions |
 
+## Десктоп
+
+Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.2.1** — оболочка Tauri v2 с
+дашбордом, просмотром недельного отчёта, редактором конфигурации и сценарием «рекомендации →
+агенту». Она несёт закреплённый сайдкар `lv24-seo 0.5.1` и не добавляет собственной логики
+провайдеров.
+
+| Платформа | Файлы | Автообновление |
+|---|---|---|
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.2.1_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.2.1_x64-portable.zip` | только NSIS |
+| Linux x64 | `LV24.SEO.Optimizer_0.2.1_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.2.1_amd64.deb`, `LV24.SEO.Optimizer-0.2.1-1.x86_64.rpm` | только AppImage |
+| macOS 13+ arm64/x64 | DMG, `.app.tar.gz` (+ `.sig`) | только `.app` |
+
+deb, rpm и portable ZIP ставятся вручную (MSI не выпускается); у `0.1.0` нет обновлятора. Релизы
+`0.2.x` публикуют `latest.json` и `SHA256SUMS.txt`.
+
+**Одно хранилище секретов.** Десктоп и CLI используют одну и ту же запись OS-keychain на
+провайдера (и на секрет доставки): сервис `lv24-seo`, имена `gsc_token`,
+`yandex_webmaster_token`, `yandex_metrika_token`, `bing_api_key`, `crux_api_key`, `psi_api_key`,
+`smtp_password`, `telegram_bot_token`. Токен, сохранённый через `lv24-seo auth set` в терминале,
+виден в `auth status` десктопа, и наоборот. Переменные `LV24_SEO_*` наследуются процессом CLI
+внутри десктопа. Опциональный файловый fallback `<data-dir>/secrets.json` (0600 на POSIX, ACL на
+Windows) общий только при одном и том же workspace/data-dir.
+
+Репозиторий десктопа: <https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop>.
+
 ### MCP-инструменты
 
-Одиннадцать инструментов. Инструменты чтения не меняют состояние провайдера и
-локальное состояние. `seo_crawl_site` и `seo_weekly_report` сохраняют локальные
-снимки, поэтому в схеме у них `readOnlyHint: false`; они не destructive. Два
-write-инструмента требуют `allow_write=true` и помечены `destructiveHint: true`.
+Одиннадцать инструментов, три ресурса и три промпта. Девять относятся к чтению: семь инструментов,
+доступных только для чтения, не меняют состояние провайдера и локальное состояние; `seo_crawl_site`
+и `seo_weekly_report` сохраняют локальные снимки, поэтому у них `readOnlyHint: false` (они не
+destructive). Два write-инструмента требуют `allow_write=true`, помечены `destructiveHint: true`
+и в 0.5.1 отвечают `WRITE_DISABLED`, пока write-адаптеры не подключены.
 
 | Инструмент | Тип | `readOnlyHint` | `destructiveHint` | Что делает |
 |---|---|---|---|---|
@@ -60,11 +88,13 @@ write-инструмента требуют `allow_write=true` и помечен
 | `seo_report_diff` | чтение | `true` | `false` | Дифф двух сохранённых недельных снимков |
 | `seo_indexing_triage` | чтение | `true` | `false` | Группирует проблемы индексации в план действий |
 | `seo_opportunities` | чтение | `true` | `false` | Striking distance и деградация контента |
-| `seo_recrawl_request` | запись | `false` | `true` | Ставит URL в очередь переобхода Яндекса (gated) |
-| `seo_sitemap_submit` | запись | `false` | `true` | Отправляет или удаляет sitemap (gated) |
+| `seo_recrawl_request` | запись | `false` | `true` | Ставит URL в очередь переобхода Яндекса (gated; `WRITE_DISABLED` в 0.5.1) |
+| `seo_sitemap_submit` | запись | `false` | `true` | Отправляет или удаляет sitemap (gated; `WRITE_DISABLED` в 0.5.1) |
 
-Полные входы, выходы и ограничения — в [`docs/mcp.md`](docs/mcp.md);
-сгенерированный контракт — [`schemas/tools.json`](schemas/tools.json).
+Ресурсы: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Промпты:
+`weekly_seo_review`, `indexing_triage`, `content_opportunities`. Полные входы, выходы и
+ограничения — в [`docs/mcp.md`](docs/mcp.md); сгенерированный контракт —
+[`schemas/tools.json`](schemas/tools.json).
 
 ## Честность данных
 

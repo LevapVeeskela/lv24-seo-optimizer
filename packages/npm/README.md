@@ -20,16 +20,16 @@ into the unpinned (`latest`) lookup.
 
 ## Status
 
-Beta. The current Python/NPM line ships 11 MCP tools (9 read-only; the two local-state
-writers are annotated `readOnlyHint: false`), 3 resources,
-3 prompts, the full CLI, scheduler generators and a product-grade weekly email. Recent
+Beta. `@lv24/seo 0.5.1` launches `lv24-seo 0.5.1` and ships 11 MCP tools (9 read-class: 7 pure
+read-only plus the two local-state writers annotated `readOnlyHint: false`), 3 resources, 3 prompts,
+3 skills, the 17-command CLI, scheduler generators and a product-grade weekly email. Recent
 additions:
 
 * **Localized product email** — `report weekly --send` renders a 600px inline-CSS digest in
   `ru`, `en` or `zh`: KPI cards for clicks/impressions/CTR/position, top-3 opportunities,
   issue severities, merged sources, data notes and a property/UTC footer. Plain-text fallback
   and subject are localized too; JSON/MCP payloads stay canonical English. Unknown values stay
-  unknown, CTR changes are shown in percentage points, and Metrica is labelled as sessions,
+  unknown, CTR changes are shown in percentage points, and Metrika is labelled as sessions,
   never as clicks. Set the language once with `report.locale`.
 * **Week-over-week report diff** — `report diff` and the `seo_report_diff` MCP tool compare two
   stored weekly snapshots without provider calls. Metrics present on one side only stay unknown,
@@ -59,7 +59,10 @@ additions:
 | `seo_sitemap_submit` | write | GSC/Bing sitemap, `allow_write=true` |
 
 The two local-state tools are not destructive; the two provider writes are
-annotated `destructiveHint: true` and are gated. Full inputs and limits:
+annotated `destructiveHint: true`, gated by `allow_write=true`, and return `WRITE_DISABLED` in 0.5.1
+because the write adapters are not wired yet. Yandex Metrika has its own auth provider:
+`npx @lv24/seo auth set --provider metrika --stdin` stores `yandex_metrika_token`, separate from the
+Webmaster token. Full inputs and limits:
 [`docs/mcp.md`](https://github.com/LevapVeeskela/lv24-seo-optimizer/blob/main/docs/mcp.md).
 
 ## Requirements
@@ -74,10 +77,13 @@ annotated `destructiveHint: true` and are gated. Full inputs and limits:
 npx @lv24/seo doctor --json
 npx @lv24/seo init --property https://example.com
 npx @lv24/seo auth set --provider gsc --stdin
+npx @lv24/seo auth set --provider metrika --stdin
+npx @lv24/seo properties --json               # configured providers + token presence
 npx @lv24/seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
 npx @lv24/seo report weekly --json --out reports/
 npx @lv24/seo report weekly --send              # product email/Telegram digest
 npx @lv24/seo report diff --markdown          # diff of two stored weekly snapshots
+npx @lv24/seo stats --days 7 --json           # per-provider dashboard snapshot
 npx @lv24/seo crawl --json                    # issues + sitemap↔crawl coverage diff
 npx @lv24/seo mcp serve                       # stdio MCP server for Claude/OpenCode/Cursor
 npx @lv24/seo export skills --out ./skills    # packaged agent skills
@@ -128,6 +134,14 @@ called; write tools require `allow_write=true` and are disabled by default.
 Tokens are read from the keychain (set them with `lv24-seo auth set`) or from `LV24_SEO_*`
 environment variables. Nothing is written by this wrapper.
 
+The desktop app and the CLI share the same OS keychain entry per provider (and per delivery secret):
+service `lv24-seo`, usernames `gsc_token`, `yandex_webmaster_token`, `yandex_metrika_token`,
+`bing_api_key`, `crux_api_key`, `psi_api_key`, `smtp_password`, `telegram_bot_token`. A token entered
+with `lv24-seo auth set` is visible to the desktop's `auth status` and vice versa. `LV24_SEO_*`
+variables are inherited by the desktop's CLI runner. The opt-in `<data-dir>/secrets.json` fallback
+(0600 on POSIX, ACLs on Windows) is shared only when both surfaces use the same workspace/data
+directory.
+
 If auto-detection picks the wrong binary, point it explicitly (must be absolute):
 
 ```bash
@@ -153,6 +167,9 @@ npm test   # node --test test/launcher.test.js, offline: pinning, guards, exit c
 ## Links
 
 * Repository and full docs: <https://github.com/LevapVeeskela/lv24-seo-optimizer>
+* Desktop app (same engine): Windows NSIS/portable ZIP, Linux AppImage/deb/rpm, macOS arm64/x64
+  DMG; signed updates for NSIS, `.app` and AppImage:
+  <https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop>
 * CLI, MCP tools, email scheduling and limits: `docs/cli.md`, `docs/mcp.md`,
   `docs/scheduling.md`, `docs/data-sources.md`
 * Release notes: <https://github.com/LevapVeeskela/lv24-seo-optimizer/tree/main/docs/releases>

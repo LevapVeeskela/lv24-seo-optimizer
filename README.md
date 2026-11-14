@@ -18,7 +18,7 @@
 
 | 🚀 Start | 🧠 Use | 🛠 Operate |
 | --- | --- | --- |
-| [Install](#install) · [See it work](#see-it-work) · [Docs](#documents) | [CLI](docs/cli.md) · [MCP tools](docs/mcp.md) · [Skills](docs/skills.md) | [Scheduling](docs/scheduling.md) · [Data limits](docs/data-sources.md) · [Security](SECURITY.md) |
+| [Install](#install) · [See it work](#see-it-work) · [Desktop](#desktop-app) | [CLI](docs/cli.md) · [MCP tools](docs/mcp.md) · [Skills](docs/skills.md) | [Scheduling](docs/scheduling.md) · [Data limits](docs/data-sources.md) · [Security](SECURITY.md) |
 
 One tool that pulls Google Search Console, Yandex Webmaster, Yandex Metrika, Bing Webmaster,
 Chrome UX Report and PageSpeed Insights into a single normalized model, crawls your site for
@@ -48,7 +48,7 @@ No paid SEO platform required. Everything in the default path has a free tier.
 * **Comparable periods.** The headline compares current and previous GSC windows. Yandex,
   Metrika, Bing, CrUX field data and PSI lab data keep separate sections. Opt-in delivery
   applies the configured significance thresholds and skips content already sent for the period.
-* **Agent-native.** A small, stable MCP tool surface (read-only by default), a JSON envelope on every
+* **Agent-native.** A small, stable MCP tool surface (no provider writes by default), a JSON envelope on every
   CLI command, and skills that encode *audit → plan → fix → verify* against a real repository.
 * **Zero spend.** Public-repo CI, SQLite storage, SMTP/Telegram delivery, no SaaS in the default path.
   Paid-provider integrations are research/planned work, not dependencies or shipped adapters.
@@ -59,7 +59,7 @@ No paid SEO platform required. Everything in the default path has a free tier.
 Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule crawler, SQLite history, analysis (deltas, opportunities,
 indexing triage, multi-engine fusion, nginx log stats), per-provider `stats`, report builders +
 HTML/text/Markdown renderers,
-SMTP/Telegram delivery with idempotency, the full CLI, the MCP server (11 tools, 3 resources,
+SMTP/Telegram delivery with idempotency, the 17-command CLI, the MCP server (11 tools, 3 resources,
 3 prompts) and scheduler generators. Canonical source ids, GSC-only headline deltas, partial
 provider isolation and window/daily storage separation are enforced with regression tests.
 `0.5.1` is a bugfix release; see [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md).
@@ -84,18 +84,46 @@ npx @lv24/seo doctor --json
 ```bash
 lv24-seo init --property https://example.com   # writes seo.toml + data/
 lv24-seo auth set --provider gsc --stdin       # token to the OS keychain (needs lv24-seo[secrets])
+lv24-seo auth set --provider metrika --stdin   # Metrika has its own auth provider and token
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
 lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown                 # week-over-week diff of stored snapshots
 lv24-seo stats --days 7 --json                  # read-only per-provider dashboard snapshot
 lv24-seo crawl --json                           # issues + sitemap↔crawl coverage diff
-lv24-seo export skills --out ./skills          # packaged agent skills from the wheel
-lv24-seo mcp serve                             # stdio MCP server
+lv24-seo export skills --out ./skills           # packaged agent skills from the wheel
+lv24-seo mcp serve                              # stdio MCP server
 lv24-seo install --client claude|opencode|vscode|cursor
 ```
 
 > `npx @lv24/seo` requires [uv](https://docs.astral.sh/uv/) (or an installed `lv24-seo` binary): the
 > npm package is a launcher, not a second implementation.
+
+## Desktop app
+
+The same engine ships as **LV24 SEO Optimizer Desktop 0.2.1** — a Tauri v2 shell with a dashboard,
+weekly report view, configuration editor/diff/validation and a recommendations-to-agent workflow. It
+bundles the pinned `lv24-seo 0.5.1` sidecar and adds no provider logic of its own.
+
+| Platform | Assets | Auto-update |
+|---|---|---|
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.2.1_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.2.1_x64-portable.zip` | NSIS only |
+| Linux x64 | `LV24.SEO.Optimizer_0.2.1_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.2.1_amd64.deb`, `LV24.SEO.Optimizer-0.2.1-1.x86_64.rpm` | AppImage only |
+| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.2.1_aarch64.dmg`, `LV24.SEO.Optimizer_0.2.1_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
+
+deb, rpm and the portable ZIP are manual-only (MSI is not produced); `0.1.0` has no updater. The
+`0.2.x` releases publish `latest.json` and `SHA256SUMS.txt`.
+
+**One secret store.** The desktop and the CLI use the same OS keychain entry per provider (and per
+delivery secret): service `lv24-seo`, usernames `gsc_token`, `yandex_webmaster_token`,
+`yandex_metrika_token`, `bing_api_key`, `crux_api_key`, `psi_api_key`, `smtp_password`,
+`telegram_bot_token`. A token entered with `lv24-seo auth set` in a terminal appears in the desktop's
+`auth status`, and a token entered in the desktop is visible to the CLI. `LV24_SEO_*` environment
+variables are inherited by the desktop's CLI runner. The opt-in `<data-dir>/secrets.json` fallback
+(0600 on POSIX, ACLs on Windows) is shared only when both surfaces use the same workspace/data
+directory.
+
+Desktop repo: <https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop> · design notes:
+[`docs/plans/2026-11-14-seo-desktop.md`](docs/plans/2026-11-14-seo-desktop.md).
 
 ## See it work
 
@@ -103,13 +131,14 @@ lv24-seo install --client claude|opencode|vscode|cursor
 $ lv24-seo doctor
 
 [OK  ] python: 3.13.12
-[OK  ] platform: Windows 11
+[OK  ] platform: win32
 [OK  ] config: C:\work\seo.toml
 [OK  ] cwd_writable: C:\work
-[FAIL] tokens: not configured yet (gsc / yandex / metrika / bing / crux)
+[FAIL] tokens: none present; run `lv24-seo auth status`
 ```
 
-`doctor` checks the runtime, config, data dir and token presence only — no network calls.
+`doctor` checks the runtime, config, data dir, working-directory writability and token presence only
+— no network calls.
 
 ```text
 $ lv24-seo report weekly --days 7 --json --out reports/
@@ -132,17 +161,17 @@ audit → plan → fix → verify.
 |---|---|
 | **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions |
 | **MCP tools** | 11 tools across GSC, Yandex, crawl, reports and gated writes — see the table below |
-| **CLI** | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `stats`, `schedule`, `export`, `mcp serve` |
+| **CLI** | 17 top-level commands (10 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `mcp` |
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
 | **Automation** | cron / systemd timer / Windows Task Scheduler generators and a GitHub Actions recipe |
 
 ### MCP tools
 
-Eleven tools, three resources and three prompts. Read-only tools never change
-provider or local state. `seo_crawl_site` and `seo_weekly_report` persist local
-snapshots, so the generated schema marks them `readOnlyHint: false`; they are
-not destructive. The two provider writes require `allow_write=true` and are
-annotated `destructiveHint: true`.
+Eleven tools, three resources and three prompts. Nine are read-class: seven pure read-only tools that
+never change provider or local state, plus `seo_crawl_site` and `seo_weekly_report`, which persist
+local snapshots and therefore carry `readOnlyHint: false` (they are not destructive). The two
+provider writes require `allow_write=true`, are annotated `destructiveHint: true`, and return
+`WRITE_DISABLED` in 0.5.1 because the write adapters are not wired yet.
 
 | Tool | Kind | `readOnlyHint` | `destructiveHint` | What it does |
 |---|---|---|---|---|
@@ -150,16 +179,17 @@ annotated `destructiveHint: true`.
 | `gsc_search_analytics` | read | `true` | `false` | GSC query/page/country/device rows |
 | `yandex_query_stats` | read | `true` | `false` | Top Yandex queries for the host |
 | `yandex_indexing_state` | read | `true` | `false` | Indexing history, events and problems |
-| `seo_crawl_site` | local-state read | `false` | `false` | Bounded crawl; stores pages and issues |
-| `seo_weekly_report` | local-state read | `false` | `false` | Weekly digest; stores a report snapshot |
+| `seo_crawl_site` | read + local state | `false` | `false` | Bounded crawl; stores pages and issues |
+| `seo_weekly_report` | read + local state | `false` | `false` | Weekly digest; stores a report snapshot |
 | `seo_report_diff` | read | `true` | `false` | Diff two stored weekly snapshots |
 | `seo_indexing_triage` | read | `true` | `false` | Group indexing problems into an action list |
 | `seo_opportunities` | read | `true` | `false` | Striking-distance and decay opportunities |
-| `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (gated) |
-| `seo_sitemap_submit` | write | `false` | `true` | Submit or delete a sitemap (gated) |
+| `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (gated; `WRITE_DISABLED` in 0.5.1) |
+| `seo_sitemap_submit` | write | `false` | `true` | Submit or delete a sitemap (gated; `WRITE_DISABLED` in 0.5.1) |
 
-The full inputs, outputs and limitations are in [`docs/mcp.md`](docs/mcp.md);
-the generated contract is [`schemas/tools.json`](schemas/tools.json).
+Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `weekly_seo_review`,
+`indexing_triage`, `content_opportunities`. The full inputs, outputs and limitations are in
+[`docs/mcp.md`](docs/mcp.md); the generated contract is [`schemas/tools.json`](schemas/tools.json).
 
 ## Supported sources
 
@@ -167,7 +197,7 @@ the generated contract is [`schemas/tools.json`](schemas/tools.json).
 |---|---|---|---|
 | Google Search Console | yes (access token; service-account flow planned) | queries, pages, countries, devices; URL Inspection adapter | sitemap submit disabled |
 | Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics | recrawl disabled |
-| Yandex Metrika | yes | sessions and users; filtered reports through adapter | — |
+| Yandex Metrika | yes | sessions and users; filtered reports through adapter; separate `metrika` auth provider (`yandex_metrika_token`) | — |
 | Bing Webmaster + IndexNow | yes | queries, crawl issues, instant URL ping | IndexNow submit |
 | Chrome UX Report | yes (API key) | origin-level field CWV | — |
 | PageSpeed Insights | yes | lab audits per URL | — |
@@ -184,6 +214,9 @@ the generated contract is [`schemas/tools.json`](schemas/tools.json).
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
+* [Release notes 0.5.1](docs/releases/0.5.1.md) — what changed in the current engine release
+* [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop) — Tauri shell, 0.2.1 assets and update matrix
+* [Desktop plan](docs/plans/2026-11-14-seo-desktop.md) — shell scope and milestones
 * [Security](SECURITY.md) — token handling, read-only defaults, write gating
 * [Research 2026](docs/research/2026-11-landscape.md) — API limits, existing MCP servers, tool landscape
 
