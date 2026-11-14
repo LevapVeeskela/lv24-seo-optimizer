@@ -34,9 +34,16 @@ from lv24_seo.automation.scheduler import ScheduleSpec
 from lv24_seo.automation.scheduler import install as install_schedule
 from lv24_seo.cli import emit, run_envelope, tool_version
 from lv24_seo.cli.auth import auth_app
-from lv24_seo.core.config import SeoConfig, load_config, redacted_dump, resolve_config_path
+from lv24_seo.core.config import (
+    SeoConfig,
+    data_dir_path,
+    load_config,
+    redacted_dump,
+    resolve_config_path,
+)
 from lv24_seo.core.envelope import fail, ok
 from lv24_seo.core.errors import CONFIG_INVALID, INTERNAL, INVALID_INPUT, WRITE_DISABLED, SeoError
+from lv24_seo.core.logging import configure_logging_from_env
 from lv24_seo.core.secrets import SecretStore
 from lv24_seo.core.write_gate import WRITE_SECRET_ENV, WriteGate, WritePlan
 from lv24_seo.mcp.registry import tools_as_json
@@ -77,6 +84,17 @@ app.add_typer(indexnow_app, name="indexnow", help="IndexNow submission (write, g
 app.add_typer(report_app, name="report", help="Build reports.")
 app.add_typer(schedule_app, name="schedule", help="Host scheduler jobs.")
 app.add_typer(export_app, name="export", help="Export machine contracts.")
+
+
+@app.callback()
+def _configure_logging() -> None:
+    """Install the redacting log handler when ``LV24_SEO_LOG_LEVEL`` asks for it.
+
+    This is a process entry point, not a library import: the CLI never reconfigures the root
+    logger unless the operator opted in, so embedding applications keep their own handlers.
+    """
+    configure_logging_from_env()
+
 
 _DB_FILENAME = "seo.sqlite3"  # canonical: lv24_seo.composition.DB_FILENAME
 _MAX_HUMAN_ROWS = 20
@@ -209,9 +227,10 @@ def doctor(
     def action() -> dict[str, Any]:
         resolved = resolve_config_path(config_path)
         config = load_config(config_path)
-        data_dir = Path(config.storage.data_dir).expanduser()
+        data_dir = data_dir_path(config)
         statuses = SecretStore(data_dir=config.storage.data_dir).status()
         present = [status.name for status in statuses if status.present]
+        scope_note = _data_dir_scope_note(data_dir, resolved)
         checks = [
             {
                 "id": "python",
@@ -252,22 +271,25 @@ def doctor(
         ]
         fatal = ("python", "cwd_writable")
         healthy = all(check["ok"] for check in checks if check["id"] in fatal)
+        meta = {
+            "config": None if resolved is None else str(resolved),
+            "data_dir": str(data_dir),
+            "data_dir_source": "config" if data_dir.is_absolute() else "working directory",
+        }
+        # A relative data directory is not an error (it is the historical default), but with a
+        # config file present it is ambiguous, so it is reported through the envelope warning
+        # channel instead of a failing check that would contradict `healthy: true`.
+        warnings = [scope_note] if scope_note is not None else []
         if healthy:
-            return ok(
-                {"healthy": True, "checks": checks},
-                meta={"config": None if resolved is None else str(resolved)},
-            )
+            return ok({"healthy": True, "checks": checks}, meta=meta, warnings=warnings)
         return fail(
             SeoError(
                 code=INTERNAL,
                 message="environment check failed",
                 next_action="fix the failing checks and rerun `lv24-seo doctor`",
             ),
-            meta={
-                "healthy": False,
-                "checks": checks,
-                "config": None if resolved is None else str(resolved),
-            },
+            meta={**meta, "healthy": False, "checks": checks},
+            warnings=warnings,
         )
 
     payload = run_envelope(action)
@@ -356,7 +378,7 @@ def config_show(
         return ok(
             {
                 "path": None if resolved is None else str(resolved),
-                "data_dir": str(config.storage.data_dir),
+                "data_dir": str(data_dir_path(config)),
                 "config": redacted_dump(config),
             },
             meta={"redacted": True},
@@ -611,31 +633,68 @@ def _write_command(
 
     def action() -> dict[str, Any]:
         plan, execute = prepare()
-        gate = WriteGate(
-            allow_write=allow_write,
-            secret=os.environ.get(WRITE_SECRET_ENV, ""),
-        )
-        if confirm is None:
-            result = gate.plan(plan)
-            return ok(
-                {
-                    "plan": plan.to_dict(),
-                    "plan_hash": result.detail.get("plan_hash", ""),
-                    "confirm_token": result.confirm_token,
-                    "status": result.status,
-                },
-                meta={"dry_run": True, "action": plan.action, "target": plan.target},
+        # A dry run needs no ledger, and must not create a database as a side effect.
+        store, ledger_warnings = (None, []) if confirm is None else _write_ledger()
+        try:
+            gate = WriteGate(
+                allow_write=allow_write,
+                secret=os.environ.get(WRITE_SECRET_ENV, ""),
+                store=store,
             )
+            if confirm is None:
+                result = gate.plan(plan)
+                return ok(
+                    {
+                        "plan": plan.to_dict(),
+                        "plan_hash": result.detail.get("plan_hash", ""),
+                        "confirm_token": result.confirm_token,
+                        "status": result.status,
+                    },
+                    meta={"dry_run": True, "action": plan.action, "target": plan.target},
+                    warnings=ledger_warnings,
+                )
 
-        result = gate.apply(plan, confirm, execute=execute)
-        data: dict[str, Any] = {"plan": plan.to_dict(), "status": result.status}
-        if result.status == "skipped":
-            data["reason"] = result.reason or "duplicate"
-        if "result" in result.detail:
-            data["result"] = _json_result(result.detail["result"])
-        return ok(data, meta={"dry_run": False, "action": plan.action, "target": plan.target})
+            result = gate.apply(plan, confirm, execute=execute)
+            data: dict[str, Any] = {"plan": plan.to_dict(), "status": result.status}
+            if result.status == "skipped":
+                data["reason"] = result.reason or "duplicate"
+            if "result" in result.detail:
+                data["result"] = _json_result(result.detail["result"])
+            return ok(
+                data,
+                meta={"dry_run": False, "action": plan.action, "target": plan.target},
+                warnings=ledger_warnings,
+            )
+        finally:
+            if store is not None:
+                store.close()
 
     return run_envelope(action)
+
+
+def _write_ledger() -> tuple[Store | None, list[str]]:
+    """Open the shared idempotency ledger, or explain why replay protection is off.
+
+    ``WriteGate`` can only recognise a replayed ``confirm_token`` when it has the SQLite
+    ledger: without it the same token stays valid for its whole TTL and the provider write can
+    happen twice. The ledger lives in the workspace data directory, so an initialised
+    workspace gets replay protection for free; a write command must still work (with an
+    explicit warning) when the config is missing or invalid, because sitemap and IndexNow
+    submissions need no config.
+    """
+    try:
+        config = load_config()
+    except SeoError:
+        return None, [
+            "write ledger: config could not be loaded; replay protection is off for this run"
+        ]
+    store = _store_for(config)
+    if store is None:
+        return None, [
+            "write ledger: no data directory (run `lv24-seo init`); "
+            "the confirm token can be replayed within its 5-minute lifetime"
+        ]
+    return store, []
 
 
 def _json_result(value: Any) -> Any:
@@ -1498,6 +1557,23 @@ def _is_writable(path: Path) -> bool:
         return True
     except OSError:
         return False
+
+
+def _data_dir_scope_note(data_dir: Path, config_path: Path | None) -> str | None:
+    """Explain a data directory that still depends on the working directory.
+
+    A config file pins a relative ``data_dir`` to its own folder, so an absolute value means
+    the scope is unambiguous. A relative one means the built-in default or
+    ``LV24_SEO_DATA_DIR`` is in play: running the same config from two directories then reads
+    two different databases. That is the historical behaviour, not a crash, so the check is
+    reported without failing ``doctor``.
+    """
+    if data_dir.is_absolute():
+        return None
+    note = f"{data_dir} is relative, so it follows the working directory"
+    if config_path is not None:
+        note += f" instead of {config_path.parent}"
+    return f"{note}; set an absolute [storage].data_dir to pin it"
 
 
 def _checks(payload: Mapping[str, Any]) -> list[dict[str, Any]]:

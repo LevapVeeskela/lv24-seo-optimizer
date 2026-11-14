@@ -9,6 +9,17 @@ The file is discovered by :func:`resolve_config_path`: an explicit path wins, th
 file is not an error -- the defaults describe a runnable, read-only tool. Unknown TOML keys
 are rejected so a typo fails loudly instead of silently disabling a setting.
 
+Path anchoring
+--------------
+``resolve_config_path`` always returns an **absolute** path, and a relative
+``[storage].data_dir`` written in a config file is resolved against that file's parent
+(:func:`load_config`). ``lv24-seo init`` creates ``<config dir>/data`` and writes
+``data_dir = "./data"``, so ``--config /srv/site/seo.toml`` from any working directory now
+uses ``/srv/site/data`` instead of a stray ``./data`` next to the shell. Two cases stay
+relative on purpose, because they are process-scoped rather than file-scoped: the built-in
+default (no ``[storage]`` block) and the ``LV24_SEO_DATA_DIR`` override. ``lv24-seo doctor``
+flags that ambiguity.
+
 Secrets are deliberately *not* part of this model: tokens and passwords live in
 :mod:`lv24_seo.core.secrets`. :func:`redacted_dump` still masks any secret-looking key, so
 a future field cannot leak through ``seo://config`` or CLI ``--json`` output.
@@ -47,6 +58,7 @@ __all__ = [
     "ThresholdsConfig",
     "YandexMetrikaConfig",
     "YandexWebmasterConfig",
+    "data_dir_path",
     "load_config",
     "redacted_dump",
     "resolve_config_path",
@@ -187,7 +199,12 @@ class CrawlConfig(_StrictModel):
 
 
 class StorageConfig(_StrictModel):
-    """Local data directory and raw-response retention."""
+    """Local data directory and raw-response retention.
+
+    A relative ``data_dir`` written in a config file is anchored to that file's directory by
+    :func:`load_config`; the built-in default and ``LV24_SEO_DATA_DIR`` stay relative to the
+    process working directory.
+    """
 
     data_dir: Path = Path("data")
     raw_retention_days: int = Field(default=90, ge=0)
@@ -225,9 +242,13 @@ def resolve_config_path(path: Path | None = None, cwd: Path | None = None) -> Pa
 
     An explicit path must point to an existing file; otherwise ``CONFIG_INVALID`` is raised.
     Returns ``None`` when nothing exists, which means "use defaults" to :func:`load_config`.
+
+    The returned path is always **absolute** (and normalised, without resolving symlinks), so
+    a caller that hands it to a scheduler or anchors a relative setting to it never depends on
+    the process working directory.
     """
     if path is not None:
-        candidate = Path(path).expanduser()
+        candidate = _absolute_path(path)
         if not candidate.exists():
             raise _invalid_config(
                 f"config file not found: {candidate}",
@@ -241,7 +262,7 @@ def resolve_config_path(path: Path | None = None, cwd: Path | None = None) -> Pa
         return candidate
 
     base = Path.cwd() if cwd is None else Path(cwd)
-    local = base / CONFIG_FILENAME
+    local = _absolute_path(base / CONFIG_FILENAME)
     if local.is_file():
         return local
 
@@ -249,6 +270,16 @@ def resolve_config_path(path: Path | None = None, cwd: Path | None = None) -> Pa
     if user_config.is_file():
         return user_config
     return None
+
+
+def data_dir_path(config: SeoConfig) -> Path:
+    """The configured data directory with ``~`` expanded.
+
+    Absolute when the config file pinned it (see :func:`load_config`); otherwise relative to
+    the process working directory, which is the historical behaviour for the built-in default
+    and for ``LV24_SEO_DATA_DIR``.
+    """
+    return Path(config.storage.data_dir).expanduser()
 
 
 def load_config(
@@ -260,9 +291,15 @@ def load_config(
 
     ``env`` defaults to :data:`os.environ`; passing an explicit mapping keeps callers and
     tests hermetic. Environment values always win over the file.
+
+    A relative ``[storage].data_dir`` declared in the file is resolved against the file's
+    parent *before* the environment is merged, so an explicit file value is never
+    reinterpreted from the working directory while ``LV24_SEO_DATA_DIR`` keeps its
+    process-scoped meaning.
     """
     resolved = resolve_config_path(path, cwd)
     data: dict[str, Any] = {} if resolved is None else _read_toml(resolved)
+    _anchor_file_data_dir(data, resolved)
     _apply_env_overrides(data, os.environ if env is None else env)
     try:
         return SeoConfig.model_validate(data)
@@ -281,6 +318,41 @@ def redacted_dump(cfg: SeoConfig) -> dict[str, Any]:
     """
     dumped = cfg.model_dump(mode="json", by_alias=True)
     return cast(dict[str, Any], _redact(dumped))
+
+
+def _anchor_file_data_dir(data: dict[str, Any], config_path: Path | None) -> None:
+    """Resolve a relative ``[storage].data_dir`` against the config file that declares it.
+
+    Only a value written in the file is anchored. The built-in default and the
+    ``LV24_SEO_DATA_DIR`` override stay process-scoped (see :func:`load_config`), which keeps
+    the historical behaviour for shells that never set ``data_dir`` and makes the change
+    visible instead of silent: ``lv24-seo doctor`` reports which scope is in use.
+
+    A non-string value (for example a TOML array) is left untouched so pydantic reports the
+    real schema error instead of a path error.
+    """
+    if config_path is None:
+        return
+    storage = data.get("storage")
+    if not isinstance(storage, dict):
+        return
+    raw = cast(dict[str, Any], storage).get("data_dir")
+    if not isinstance(raw, str):
+        return
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        cast(dict[str, Any], storage)["data_dir"] = str(_absolute_path(candidate))
+        return
+    cast(dict[str, Any], storage)["data_dir"] = str(_absolute_path(config_path.parent / candidate))
+
+
+def _absolute_path(path: Path | str) -> Path:
+    """Absolute, normalised path with ``~`` expanded; symlinks are deliberately kept.
+
+    ``os.path.abspath`` normalises ``..`` (unlike ``Path.absolute``) but never resolves
+    symlinks, so a config reached through a link anchors its data directory next to the link.
+    """
+    return Path(os.path.abspath(Path(path).expanduser()))
 
 
 def _read_toml(path: Path) -> dict[str, Any]:

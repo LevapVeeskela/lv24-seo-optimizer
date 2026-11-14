@@ -13,12 +13,27 @@ Policy
 * Values of 12+ characters keep two leading and two trailing characters (``ab***yz``); shorter
   values collapse to ``***``.
 * Containers nested six or more levels deep are replaced with ``***``.
+
+Who installs the handler
+------------------------
+This module is a **library**: importing it, or importing any ``lv24_seo`` module, never touches
+the root logger. :func:`setup_logging` replaces the root handlers, which would silently
+reconfigure an embedding application (its own formatter, its own file, its own test capture).
+Only the two process entry points install it, and only when the operator opted in through
+:data:`LOG_LEVEL_ENV`:
+
+* ``lv24-seo …`` — the Typer callback calls :func:`configure_logging_from_env`;
+* ``lv24-seo mcp serve`` — :func:`lv24_seo.mcp.server.serve` calls it before the transport.
+
+Everything else (``create_server``, ``SeoService``, provider clients, scripts that import the
+package) keeps the caller's logging configuration untouched and only *emits* records.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sys
 from collections.abc import Mapping
@@ -26,14 +41,19 @@ from datetime import UTC, datetime
 from typing import Any, TextIO
 
 __all__ = [
+    "LOG_LEVEL_ENV",
     "SENSITIVE_KEY_PATTERN",
     "JsonFormatter",
     "RedactionFilter",
+    "configure_logging_from_env",
     "get_logger",
     "redact_mapping",
     "redact_value",
     "setup_logging",
 ]
+
+#: Opt-in switch for the process entry points; unset means "leave logging alone".
+LOG_LEVEL_ENV = "LV24_SEO_LOG_LEVEL"
 
 _MASK = "***"
 _MIN_LONG_VALUE = 12
@@ -151,6 +171,32 @@ def setup_logging(
 def get_logger(name: str) -> logging.Logger:
     """Return the named logger; redaction is installed by :func:`setup_logging`."""
     return logging.getLogger(name)
+
+
+def configure_logging_from_env(
+    env: Mapping[str, str] | None = None,
+    *,
+    stream: TextIO | None = None,
+) -> bool:
+    """Install the redacting handler when ``LV24_SEO_LOG_LEVEL`` is set.
+
+    This is the only automatic caller of :func:`setup_logging` and it is meant for process
+    entry points (the CLI callback and the MCP transport), never for library imports: an
+    unset variable leaves the root logger exactly as the embedding application configured it.
+    A set value (``INFO``, ``DEBUG``, ``WARNING``, …) opts in explicitly.
+
+    Output is one JSON line per record when the stream is not a terminal (a pipe, a scheduler
+    log or an MCP host capturing stderr) and a plain line otherwise. Returns ``True`` when a
+    handler was installed.
+    """
+    source = os.environ if env is None else env
+    raw = source.get(LOG_LEVEL_ENV, "")
+    level = raw.strip() if isinstance(raw, str) else ""
+    if not level:
+        return False
+    target = stream if stream is not None else sys.stderr
+    setup_logging(level, json_output=not _is_tty(target), stream=target)
+    return True
 
 
 class _SafeStreamHandler(logging.StreamHandler):  # type: ignore[type-arg]
@@ -313,3 +359,11 @@ def _coerce_level(level: str) -> int:
     except Exception:
         return logging.INFO
     return resolved if isinstance(resolved, int) else logging.INFO
+
+
+def _is_tty(stream: TextIO) -> bool:
+    """``True`` only for a real terminal; a wrapper without ``isatty`` counts as a pipe."""
+    try:
+        return bool(stream.isatty())
+    except Exception:
+        return False

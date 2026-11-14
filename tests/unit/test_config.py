@@ -228,7 +228,8 @@ def test_values_from_toml(tmp_path: Path) -> None:
     assert cfg.crawl.respect_robots is False
     assert cfg.crawl.user_agent == "test-agent"
 
-    assert cfg.storage.data_dir == Path("./var/seo")
+    # A relative [storage].data_dir is anchored to the config file's own directory.
+    assert cfg.storage.data_dir == tmp_path / "var" / "seo"
     assert cfg.storage.raw_retention_days == 30
 
 
@@ -477,4 +478,4 @@ def test_redacted_dump_preserves_non_secret_data(tmp_path: Path) -> None:
     assert dump == cfg.model_dump(mode="json", by_alias=True)
     assert dump["report"]["email"]["from"] == "seo@example.com"
     assert "email_from" not in dump["report"]["email"]
-    assert dump["storage"]["data_dir"] == "data"
+    assert dump["storage"]["data_dir"] == str(tmp_path / "data")

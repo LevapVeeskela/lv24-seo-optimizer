@@ -160,7 +160,10 @@ class SitemapReader:
         try:
             result = self._fetch(url)
         except Exception as exc:  # the reader reports failures, never raises them
-            return None, str(exc) or type(exc).__name__
+            # Only the exception *type* is reported: a fetch exception routinely embeds the
+            # full URL (query strings carry API keys) and these strings reach CLI warnings,
+            # report limitations and MCP payloads. Same rule as core.http's error messages.
+            return None, type(exc).__name__
         error = getattr(result, "error", None)
         if error:
             return None, str(error)

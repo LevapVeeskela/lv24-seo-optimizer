@@ -118,7 +118,8 @@ class GscClient:
         row_cap = max(0, min(max_rows, _MAX_TOTAL_ROWS))
 
         rows: list[Row] = []
-        truncated = False
+        # A zero cap suppresses every row, which is a cap and not an empty result set.
+        truncated = row_cap == 0
         start_row = 0
 
         while len(rows) < row_cap:
@@ -154,6 +155,12 @@ class GscClient:
             if len(batch) < page_size:
                 break
             start_row += page_size
+            if len(rows) >= row_cap:
+                # The last full page filled the cap exactly. There may be more rows behind
+                # it, so report the cap instead of a complete result: an "exactly N rows"
+                # answer that hides the cap would let a report claim full coverage.
+                truncated = True
+                break
 
         limitations: tuple[str, ...] = ()
         warnings: tuple[str, ...] = ()

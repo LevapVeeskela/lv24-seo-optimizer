@@ -285,9 +285,12 @@ def test_fetch_error_is_reported_without_raising() -> None:
 
 def test_fetch_exception_is_reported_without_raising() -> None:
     def boom(_url: str) -> FakeResult:
-        raise RuntimeError("connect failed")
+        raise RuntimeError("connect failed https://example.com/sitemap.xml?key=sk-live-secret")
 
     doc = SitemapReader(boom).read("https://example.com/sitemap.xml")
 
-    assert doc.errors == ["connect failed"]
+    # Only the exception type is reported: the message may embed a URL with a query token,
+    # and these strings reach CLI warnings and MCP payloads.
+    assert doc.errors == ["RuntimeError"]
+    assert all("sk-live-secret" not in error for error in doc.errors)
     assert doc.urls == []

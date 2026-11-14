@@ -225,7 +225,13 @@ def test_search_analytics_paginates_and_marks_truncated() -> None:
     assert "3 rows" in result.warnings[0]
 
 
-def test_search_analytics_complete_data_at_the_cap_is_not_truncated() -> None:
+def test_search_analytics_full_page_at_the_cap_is_reported_as_capped() -> None:
+    """A full page that fills the cap cannot prove completeness, so it must say so.
+
+    The provider returned exactly the requested page size, which is indistinguishable from
+    "there are more rows". Reporting ``truncated=False`` here would let a report claim full
+    coverage that the caller's own cap produced, so the cap is reported with a warning.
+    """
     calls = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -256,9 +262,10 @@ def test_search_analytics_complete_data_at_the_cap_is_not_truncated() -> None:
 
     assert calls == 1
     assert result.total == 3
-    assert result.truncated is False
+    assert result.truncated is True
     assert result.limitations == ()
-    assert result.warnings == ()
+    assert result.warnings
+    assert "3 rows" in result.warnings[0]
 
 
 def test_search_analytics_stops_on_short_batch() -> None:

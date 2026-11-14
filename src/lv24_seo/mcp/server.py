@@ -47,6 +47,7 @@ from lv24_seo.core.errors import (
     SeoError,
     exit_code_for,
 )
+from lv24_seo.core.logging import configure_logging_from_env
 from lv24_seo.mcp.registry import TOOLS, ToolSpec, tool_annotations, tools_as_json
 from lv24_seo.mcp.tools import TOOL_BUILDERS, ToolState, compact_json
 from lv24_seo.services import SeoService
@@ -392,7 +393,12 @@ async def serve(transport: str = TRANSPORT_STDIO, *, port: int = 8765) -> None:
     HTTP+SSE transport is intentionally rejected. A missing streamable-HTTP API in the
     installed SDK raises a clear :class:`~lv24_seo.core.errors.SeoError` before any
     socket is opened.
+
+    This is the MCP process entry point, so it also installs the redacting log handler when
+    ``LV24_SEO_LOG_LEVEL`` is set (stderr, never stdout: stdio carries the protocol).
+    :func:`create_server` stays a library call and never reconfigures logging.
     """
+    configure_logging_from_env()
     if not isinstance(transport, str):
         raise SeoError(
             code=INVALID_INPUT,

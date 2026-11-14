@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from lv24_seo.core.config import SeoConfig, load_config
+from lv24_seo.core.config import SeoConfig, data_dir_path, load_config
 from lv24_seo.core.secrets import SecretStore
 from lv24_seo.store.repositories import Store
 
@@ -43,8 +43,12 @@ class Workspace:
 
 
 def open_store(config: SeoConfig) -> Store | None:
-    """Open the SQLite history only when ``init`` created the data directory."""
-    data_dir = Path(config.storage.data_dir).expanduser()
+    """Open the SQLite history only when ``init`` created the data directory.
+
+    The directory comes from :func:`~lv24_seo.core.config.data_dir_path`, so a config file
+    that pins a relative ``data_dir`` is honoured from any working directory.
+    """
+    data_dir = data_dir_path(config)
     if not data_dir.is_dir():
         return None
     return Store(data_dir / DB_FILENAME)
