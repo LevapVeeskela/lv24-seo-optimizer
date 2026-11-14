@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.5.1).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.5.2).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -47,8 +47,8 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 
 Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.2.1** — оболочка Tauri v2 с
 дашбордом, просмотром недельного отчёта, редактором конфигурации и сценарием «рекомендации →
-агенту». Она несёт закреплённый сайдкар `lv24-seo 0.5.1` и не добавляет собственной логики
-провайдеров.
+агенту». Она несёт закреплённый сайдкар `lv24-seo` (`0.5.1` в текущей сборке десктопа) и не
+добавляет собственной логики провайдеров.
 
 | Платформа | Файлы | Автообновление |
 |---|---|---|
@@ -75,7 +75,7 @@ Windows) общий только при одном и том же workspace/data
 доступных только для чтения, не меняют состояние провайдера и локальное состояние; `seo_crawl_site`
 и `seo_weekly_report` сохраняют локальные снимки, поэтому у них `readOnlyHint: false` (они не
 destructive). Два write-инструмента требуют `allow_write=true`, помечены `destructiveHint: true`
-и в 0.5.1 отвечают `WRITE_DISABLED`, пока write-адаптеры не подключены.
+и в 0.5.2 отвечают `WRITE_DISABLED`, пока write-адаптеры не подключены.
 
 | Инструмент | Тип | `readOnlyHint` | `destructiveHint` | Что делает |
 |---|---|---|---|---|
@@ -88,8 +88,8 @@ destructive). Два write-инструмента требуют `allow_write=tr
 | `seo_report_diff` | чтение | `true` | `false` | Дифф двух сохранённых недельных снимков |
 | `seo_indexing_triage` | чтение | `true` | `false` | Группирует проблемы индексации в план действий |
 | `seo_opportunities` | чтение | `true` | `false` | Striking distance и деградация контента |
-| `seo_recrawl_request` | запись | `false` | `true` | Ставит URL в очередь переобхода Яндекса (gated; `WRITE_DISABLED` в 0.5.1) |
-| `seo_sitemap_submit` | запись | `false` | `true` | Отправляет или удаляет sitemap (gated; `WRITE_DISABLED` в 0.5.1) |
+| `seo_recrawl_request` | запись | `false` | `true` | Ставит URL в очередь переобхода Яндекса (gated; `WRITE_DISABLED` в 0.5.2) |
+| `seo_sitemap_submit` | запись | `false` | `true` | Отправляет или удаляет sitemap (gated; `WRITE_DISABLED` в 0.5.2) |
 
 Ресурсы: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Промпты:
 `weekly_seo_review`, `indexing_triage`, `content_opportunities`. Полные входы, выходы и
@@ -107,10 +107,10 @@ destructive). Два write-инструмента требуют `allow_write=tr
 
 ## Статус
 
-Бета (v0.5.1). Открытые честные ограничения: OAuth-токен GSC (service account — позже),
+Бета (v0.5.2). Открытые честные ограничения: OAuth-токен GSC (service account — позже),
 `sitemap submit` / `recrawl` отвечают `WRITE_DISABLED` (IndexNow реально отправляет),
 `crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`). Исправления
-0.5.1 — в [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md).
+0.5.2 — в [`docs/releases/0.5.2.md`](docs/releases/0.5.2.md).
 
 ## Для агентов
 

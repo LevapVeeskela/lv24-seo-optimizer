@@ -6,12 +6,12 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.5.1`: 6 provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow,
+- Engine `lv24-seo 0.5.2`: 6 provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow,
   CrUX, PSI) plus a 30-rule crawl. Yandex Metrika is a separate `metrika` auth provider
   (`yandex_metrika_token`), not the Webmaster token.
 - CLI: 17 top-level commands (10 groups + 7 commands), every command with `--json`.
 - MCP: 11 tools (9 read-class, including 2 local-state writers with `readOnlyHint: false`; 2 gated
-  provider writes that return `WRITE_DISABLED` in 0.5.1), 3 resources, 3 prompts.
+  provider writes that return `WRITE_DISABLED` in 0.5.2), 3 resources, 3 prompts.
 - Skills: `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit`.
 - Desktop `0.2.1`: Windows NSIS + portable ZIP, Linux AppImage/deb/rpm, macOS arm64/x64 DMG;
   signed updates for NSIS, `.app` and AppImage.
@@ -30,7 +30,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
-- [Release notes 0.5.1](docs/releases/0.5.1.md): current engine release
+- [Release notes 0.5.2](docs/releases/0.5.2.md): current engine release
 - [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop): Tauri shell, assets and update matrix
 - [Desktop plan](docs/plans/2026-11-14-seo-desktop.md): shell scope and milestones
 - [Security](SECURITY.md): token handling, write gating

@@ -22,8 +22,9 @@ Legend: **R** = read, **W** = write (gated), *free* = no payment required.
 
 1. Never request `page` and `query` together *and* compare the sums with an ungrouped total — grouping
    drops rows by design. Store both groupings separately, labelled.
-2. Paginate with `startRow` until a short page. Mark `truncated: true` only when a further row exists
-   beyond the 50,000 cap; a final batch that exactly fills the cap is complete.
+2. Paginate with `startRow` until a short page. A final page that exactly fills the 50,000-row cap is
+   reported as `truncated: true` with `rows_cap_50000`: a full page is not proof that no row exists
+   behind the cap, so exact-cap data is never claimed complete.
 3. Cache daily pulls in SQLite; never re-query a month repeatedly (the "load quota" is opaque).
 4. A service account cannot complete interactive verification for `sc-domain:` — a human publishes the
    DNS TXT once (or `sites.add` is called by an already-verified principal).

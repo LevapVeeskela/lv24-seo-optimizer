@@ -55,14 +55,14 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.5.1).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
+**Beta (v0.5.2).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
 Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule crawler, SQLite history, analysis (deltas, opportunities,
 indexing triage, multi-engine fusion, nginx log stats), per-provider `stats`, report builders +
 HTML/text/Markdown renderers,
 SMTP/Telegram delivery with idempotency, the 17-command CLI, the MCP server (11 tools, 3 resources,
 3 prompts) and scheduler generators. Canonical source ids, GSC-only headline deltas, partial
 provider isolation and window/daily storage separation are enforced with regression tests.
-`0.5.1` is a bugfix release; see [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md).
+`0.5.2` is a bugfix release; see [`docs/releases/0.5.2.md`](docs/releases/0.5.2.md).
 
 Still honest gaps before `v1.0`: GSC service-account auth (OAuth token only today),
 sitemap submit / Yandex recrawl return an explicit `WRITE_DISABLED` (IndexNow really submits),
@@ -102,7 +102,8 @@ lv24-seo install --client claude|opencode|vscode|cursor
 
 The same engine ships as **LV24 SEO Optimizer Desktop 0.2.1** — a Tauri v2 shell with a dashboard,
 weekly report view, configuration editor/diff/validation and a recommendations-to-agent workflow. It
-bundles the pinned `lv24-seo 0.5.1` sidecar and adds no provider logic of its own.
+bundles a pinned `lv24-seo` sidecar (`0.5.1` in the current desktop build) and adds no provider logic
+of its own.
 
 | Platform | Assets | Auto-update |
 |---|---|---|
@@ -171,7 +172,7 @@ Eleven tools, three resources and three prompts. Nine are read-class: seven pure
 never change provider or local state, plus `seo_crawl_site` and `seo_weekly_report`, which persist
 local snapshots and therefore carry `readOnlyHint: false` (they are not destructive). The two
 provider writes require `allow_write=true`, are annotated `destructiveHint: true`, and return
-`WRITE_DISABLED` in 0.5.1 because the write adapters are not wired yet.
+`WRITE_DISABLED` in 0.5.2 because the write adapters are not wired yet.
 
 | Tool | Kind | `readOnlyHint` | `destructiveHint` | What it does |
 |---|---|---|---|---|
@@ -184,8 +185,8 @@ provider writes require `allow_write=true`, are annotated `destructiveHint: true
 | `seo_report_diff` | read | `true` | `false` | Diff two stored weekly snapshots |
 | `seo_indexing_triage` | read | `true` | `false` | Group indexing problems into an action list |
 | `seo_opportunities` | read | `true` | `false` | Striking-distance and decay opportunities |
-| `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (gated; `WRITE_DISABLED` in 0.5.1) |
-| `seo_sitemap_submit` | write | `false` | `true` | Submit or delete a sitemap (gated; `WRITE_DISABLED` in 0.5.1) |
+| `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (gated; `WRITE_DISABLED` in 0.5.2) |
+| `seo_sitemap_submit` | write | `false` | `true` | Submit or delete a sitemap (gated; `WRITE_DISABLED` in 0.5.2) |
 
 Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `weekly_seo_review`,
 `indexing_triage`, `content_opportunities`. The full inputs, outputs and limitations are in
@@ -214,7 +215,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
-* [Release notes 0.5.1](docs/releases/0.5.1.md) — what changed in the current engine release
+* [Release notes 0.5.2](docs/releases/0.5.2.md) — what changed in the current engine release
 * [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop) — Tauri shell, 0.2.1 assets and update matrix
 * [Desktop plan](docs/plans/2026-11-14-seo-desktop.md) — shell scope and milestones
 * [Security](SECURITY.md) — token handling, read-only defaults, write gating

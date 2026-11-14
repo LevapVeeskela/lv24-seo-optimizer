@@ -50,9 +50,9 @@ class ProviderResult[T]:
 
 Rules:
 
-* `truncated` is computed from the provider's own cap and evidence of more data (GSC reports it only
-  when a row exists beyond 50,000; Yandex uses `total > limit`), never guessed. An exact full batch
-  is complete.
+* `truncated` is computed from the provider's own cap and evidence of more data (GSC reports it when
+  the cap is reached, including a final page that fills it exactly; Yandex uses `total > limit`),
+  never guessed. A full page at the cap is potentially truncated, never claimed complete.
 * `limitations` codes are enum-like and translated to text in the report renderer.
 * Adapters never mutate the database; the caller (`analysis` or `store`) persists.
 
@@ -162,7 +162,7 @@ query level (clicks/impressions) separately, and the report labels which engine 
 * Write-gate claims are `pending` until the provider confirms the write, then promoted to `sent`;
   a provider exception releases the claim so a retry is allowed. A completed or in-flight claim is
   a duplicate. A crash between provider success and promotion leaves a `pending` row that is
-  treated as in-flight; 0.5.1 has no TTL or automatic cleanup.
+  treated as in-flight; 0.5.2 has no TTL or automatic cleanup.
 * The crawler is serial with `Crawl-delay` pacing; `concurrency` stays reserved. Read POST retry
   opt-in changes retry safety, not concurrency.
 

@@ -20,7 +20,7 @@ into the unpinned (`latest`) lookup.
 
 ## Status
 
-Beta. `@lv24/seo 0.5.1` launches `lv24-seo 0.5.1` and ships 11 MCP tools (9 read-class: 7 pure
+Beta. `@lv24/seo 0.5.2` launches `lv24-seo 0.5.2` and ships 11 MCP tools (9 read-class: 7 pure
 read-only plus the two local-state writers annotated `readOnlyHint: false`), 3 resources, 3 prompts,
 3 skills, the 17-command CLI, scheduler generators and a product-grade weekly email. Recent
 additions:
@@ -59,7 +59,7 @@ additions:
 | `seo_sitemap_submit` | write | GSC/Bing sitemap, `allow_write=true` |
 
 The two local-state tools are not destructive; the two provider writes are
-annotated `destructiveHint: true`, gated by `allow_write=true`, and return `WRITE_DISABLED` in 0.5.1
+annotated `destructiveHint: true`, gated by `allow_write=true`, and return `WRITE_DISABLED` in 0.5.2
 because the write adapters are not wired yet. Yandex Metrika has its own auth provider:
 `npx @lv24/seo auth set --provider metrika --stdin` stores `yandex_metrika_token`, separate from the
 Webmaster token. Full inputs and limits:

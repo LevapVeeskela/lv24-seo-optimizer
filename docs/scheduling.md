@@ -11,7 +11,9 @@ lv24-seo schedule install --kind daily  --cron "0 6 * * *" --config ./seo.toml
 ```
 
 The generated command embeds the **absolute `--config` path**, so a custom
-filename, a path with spaces, or several configs in one folder keep working.
+filename, a path with spaces, or several configs in one folder keep working. The job also uses the
+config file's parent as its working directory, so a scheduler that starts elsewhere still reads the
+same config and data directory.
 `schedule print --cron … --target …` renders without touching the host. There is
 no `schedule status` command — inspect the host scheduler (`crontab -l`,
 `systemctl --user list-timers`, Task Scheduler).

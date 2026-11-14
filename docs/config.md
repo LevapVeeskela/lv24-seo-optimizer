@@ -65,12 +65,39 @@ respect_robots = true
 user_agent = "lv24-seo/0.1 (+https://example.com/bot)"
 
 [storage]
-data_dir = "./data"
+data_dir = "./data"      # relative to this file; absolute values and LV24_SEO_DATA_DIR are used as-is
 raw_retention_days = 90   # reserved: no raw archives are written yet, pruning is a logged no-op
 ```
 
 > Telemetry is not configurable: the tool sends nothing anywhere. There is no `[privacy]` section and
 > One `seo.toml` describes one project; a multi-site block is not implemented.
+
+## Data directory
+
+`storage.data_dir` has three scopes:
+
+| Value | Resolved against |
+|---|---|
+| Relative value written in `seo.toml` (`data_dir = "./data"`) | the config file's parent |
+| Built-in default (no `[storage]` block) | the process working directory |
+| `LV24_SEO_DATA_DIR` | used as given; a relative value resolves against the process working directory. The environment always wins over the file |
+
+A config that pins a relative directory is therefore self-contained: `--config /srv/site/seo.toml`
+uses `/srv/site/data` from any working directory. `lv24-seo init` creates `<config dir>/data` and
+writes `data_dir = "./data"`. Paths are made absolute with `os.path.abspath` (`~` expanded, `..`
+normalised); symlinks are deliberately not resolved, so a config reached through a link anchors its
+data directory next to the link. The SQLite store is `<data_dir>/seo.sqlite3`.
+
+`lv24-seo doctor --json` makes the scope visible: `meta.data_dir` is the effective directory,
+`meta.data_dir_source` is `config` when it is absolute (pinned by the file or an absolute
+`LV24_SEO_DATA_DIR`) and `working directory` when it is relative, and a relative directory with a
+config file present adds a warning that names the config's folder.
+A relative directory still works, but running the same config from two directories reads two
+different databases. Set an absolute path to pin it. `lv24-seo config show --json` reports the same
+effective path.
+
+The opt-in `<data_dir>/secrets.json` fallback follows the same directory; the desktop app and the
+CLI share it only when they resolve the same data directory.
 
 ## Locale
 
@@ -120,6 +147,15 @@ It does not verify permissions or perform an API call.
 See [`.env.example`](../.env.example). All are prefixed `LV24_SEO_`; the mapping is
 `report.email.to` ↔ `LV24_SEO_MAIL_TO`. `LV24_SEO_REPORT_LOCALE` sets `report.locale` and accepts
 `ru`, `en` or `zh`.
+
+`LV24_SEO_DATA_DIR` overrides `storage.data_dir` and is **process-scoped**: a relative value resolves
+against the working directory, not the config file. Use it for container/CI runs where the data
+directory is mounted elsewhere; run `lv24-seo doctor --json` to confirm which directory won.
+
+`LV24_SEO_LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, …) opts the process into redacting logging. The CLI
+and `lv24-seo mcp serve` install the handler; library imports and `create_server()` never reconfigure
+logging. Unset means "leave logging alone". Output is one JSON line per record when stderr is not a
+terminal (a pipe, scheduler log or MCP host) and a plain line otherwise.
 
 ## Multi-property
 

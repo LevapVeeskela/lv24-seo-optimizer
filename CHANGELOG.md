@@ -3,6 +3,46 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.5.2] - 2026-11-15
+
+Release notes: [`docs/releases/0.5.2.md`](docs/releases/0.5.2.md).
+
+Bugfix release. No schema migration and no new CLI command or MCP tool. `doctor` gains the additive
+`meta.data_dir` and `meta.data_dir_source` fields and may add a warning; every other envelope key is
+unchanged.
+
+### Fixed
+
+- Config: a relative `storage.data_dir` written in `seo.toml` is anchored to that file's parent, so
+  `--config /srv/site/seo.toml` uses `/srv/site/data` from any working directory. The built-in
+  default and `LV24_SEO_DATA_DIR` stay process-scoped.
+- `doctor`: reports the effective data directory and its scope (`config` or `working directory`) and
+  warns when a relative directory is ambiguous next to a config file. `config show` reports the
+  effective absolute path.
+- `resolve_config_path` always returns an absolute, normalised path; scheduler artifacts embed an
+  absolute `--config` and use the config's parent as the working directory.
+- CLI writes: `--confirm` uses the workspace SQLite idempotency ledger, so a replayed confirm token
+  returns `skipped`/`duplicate` and the provider is called once. A run without an initialised
+  workspace still applies but warns that replay protection is off; a dry run creates no database.
+- Sitemap: a fetch failure reports only the exception type, never the URL or query token, in CLI
+  warnings, report limitations and MCP payloads.
+- GSC: a full final page at the row cap is reported as `truncated: true` with `rows_cap_50000` (or
+  the caller-cap warning) instead of claiming complete data. A zero cap is a cap, not an empty set.
+- Logging: the redacting handler is installed only when `LV24_SEO_LOG_LEVEL` is set, and only by the
+  CLI callback and `lv24-seo mcp serve`. Library imports no longer leave a replaced root handler.
+
+### Changed
+
+- GSC exact-cap results are truncated by design: a full page is not proof that no row exists behind
+  the cap.
+- Relative `data_dir` values in existing configs now resolve next to the config file; use an
+  absolute value or `LV24_SEO_DATA_DIR` to keep the old working-directory behaviour.
+
+### Documentation
+
+- README (EN/RU), CLI, configuration, scheduling, MCP, data sources, architecture, troubleshooting,
+  the npm launcher README and `llms.txt` describe the 0.5.2 behaviour.
+
 ## [0.5.1] - 2026-11-14
 
 Release notes: [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md).

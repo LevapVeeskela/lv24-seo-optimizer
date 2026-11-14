@@ -24,6 +24,11 @@ lv24-seo properties [--json]                  # provider -> target + token prese
 
 `init` refuses to overwrite an existing `seo.toml` unless `--force` is passed.
 
+`doctor --json` reports `meta.data_dir` and `meta.data_dir_source` (`config` when the effective
+directory is absolute, `working directory` when it is relative) and adds a warning when a relative
+directory is ambiguous next to a config file. A relative directory does not fail the check; see
+[configuration](config.md#data-directory). `doctor` makes no network calls.
+
 ## Authentication
 
 ```bash
@@ -46,9 +51,14 @@ lv24-seo crawl [--start URL] [--max-urls 500] [--json]
 ```
 
 GSC needs explicit `--start/--end` (there is no `--days` shorthand and no `--property`
-override — the property comes from `seo.toml`). `crawl` respects `robots.txt`, follows
-same-host links breadth-first, runs all rules and stores pages/issues in SQLite when a store is
-configured.
+override — the property comes from `seo.toml`). A GSC page that exactly fills the row cap is reported
+as `truncated: true` with `rows_cap_50000` (default cap) or a caller-cap warning: a full page is not
+proof that no row exists behind the cap, so an exact-cap result is never claimed complete.
+
+`crawl` respects `robots.txt`, follows same-host links breadth-first, runs all rules and stores
+pages/issues in SQLite when a store is configured. A sitemap that fails to load reports only the
+exception type in warnings and `limitations[]` — never the URL or query string, which can carry a
+token.
 
 `crawl` also returns `data.sitemap_coverage`: the sitemap (what the site advertises) compared
 with what the crawl saw, in six buckets — `unlinked` (in the sitemap, OK, but no crawled page
@@ -168,7 +178,9 @@ lv24-seo schedule install --kind weekly|daily [--cron "0 6 * * 1"] [--print] [--
 
 `print` renders the artefact without touching the host; `install` writes the cron block / systemd user
 units / Task Scheduler XML. Generated jobs call `report weekly --send --json`, so a scheduled run
-delivers the report.
+delivers the report. The job embeds the **absolute** `--config` path and uses the config file's parent
+as its working directory, so a scheduler that starts in another directory still reads the same config
+and data directory.
 
 Only simple cron expressions (`M H * * *` and `M H * * DOW`) can be converted to systemd/Windows.
 
@@ -187,7 +199,16 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
 - Write operations (sitemap submit, recrawl queue, IndexNow submit) **are** exposed with gating:
   a dry run first, then `--allow-write` plus the HMAC `confirm_token` from the plan (ADR-0003).
   IndexNow actually submits; GSC sitemap submit and Yandex recrawl refuse with `WRITE_DISABLED`
-  when the provider path is not wired, instead of pretending.
+  when the provider path is not wired, instead of pretending. With an initialised workspace the
+  apply uses the SQLite idempotency ledger, so replaying the same token returns
+  `status: skipped` / `reason: duplicate` and the provider is called once. Without a workspace the
+  command still applies but warns that replay protection is off for the token's five-minute
+  lifetime; a dry run opens no ledger and creates no database.
+- Logging is opt-in: `LV24_SEO_LOG_LEVEL=INFO` (or `DEBUG`, `WARNING`, …) makes the CLI and
+  `lv24-seo mcp serve` install the redacting handler. Unset means the process leaves logging to its
+  caller; importing the library or calling `create_server()` never replaces root handlers. Output is
+  one JSON line per record on a non-TTY stderr and a plain line on a terminal; the MCP transport logs
+  to stderr only.
 - No command prints a token, cookie or full `Authorization` header.
 
 ## Windows notes

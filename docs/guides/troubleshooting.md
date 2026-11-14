@@ -249,14 +249,16 @@ key, property or even the summary invalidates it:
 {"ok": false, "error": {"code": "CONFIRM_REQUIRED", "message": "confirm token is missing, expired or does not match this plan", "retryable": false, "next_action": "rerun the dry run, review the plan and pass the fresh confirm_token within 5 minutes"}, "meta": {"version": "0.0.1"}, "warnings": []}
 ```
 
-Tokens live 300 seconds. Treat one as single-use: the CLI does not attach the idempotency ledger, so
-a replay inside the window can apply again.
+Tokens live 300 seconds. With an initialised workspace the CLI attaches the SQLite idempotency
+ledger, so replaying the same token returns `status: skipped` / `reason: duplicate` and the provider
+is called once. Without a data directory the apply still runs, but the envelope warns that replay
+protection is off for the token's five-minute lifetime — run `lv24-seo init` to enable it. A dry run
+opens no ledger and creates no database.
 
-A store-backed apply (library or future MCP write layer) claims the slot as `pending`, promotes it
-to `sent` only after the provider confirms, and releases it when the provider raises. A retry after
-a provider failure is therefore allowed; a completed or still in-flight claim is `skipped`. A crash
-between the provider success and the promotion leaves `pending`, which is treated as in-flight until
-an operator releases it.
+An apply claims the slot as `pending`, promotes it to `sent` only after the provider confirms, and
+releases it when the provider raises. A retry after a provider failure is therefore allowed; a
+completed or still in-flight claim is `skipped`. A crash between the provider success and the
+promotion leaves `pending`, which is treated as in-flight until an operator releases it.
 
 `WRITE_DISABLED` has several distinct causes; the message identifies the one you hit:
 
@@ -315,6 +317,8 @@ Common warning strings and their fixes:
 | `host_not_loaded` + `degraded_host` | Wait, or fix the host id |
 | `no provider rows; traffic and opportunities are empty` | Configure at least one engine and property |
 | `store: not configured; snapshot was not saved` | Run `init` so the data directory exists |
+| `write ledger: no data directory` … | Run `init`; a store-less apply has no replay protection |
+| `data is relative, so it follows the working directory` … | Set an absolute `[storage].data_dir` to pin the database to the config file |
 
 A weekly report with no usable source is still a successful command. Trimmed envelope:
 
@@ -347,7 +351,7 @@ lv24-seo properties --json
 
 | Source | What it contains | What it never contains |
 |---|---|---|
-| `doctor --json` | Python version, platform, config path, cwd/data-dir writability, token presence | Tokens, network results |
+| `doctor --json` | Python version, platform, config path, effective data directory and its scope, cwd/data-dir writability, token presence, an ambiguity warning for a relative data directory | Tokens, network results |
 | `auth status --json` | Provider, secret name, `present`, `source`, `expires_at` | Secret values |
 | `config show --json` | Effective config with secret-looking keys masked as `***` | Tokens, passwords, API keys |
 | Error envelope | `code`, `message`, `next_action`, `retryable`, optional `detail` | Request bodies, headers, token fields; input-validation details can echo the value you passed (including a URL query) |
@@ -355,9 +359,11 @@ lv24-seo properties --json
 
 The logging layer (`core/logging.py`) masks `Authorization`, `token`, `secret`, `password`,
 `cookie`, `api_key`, known token prefixes (`y0_`, `eyJ`, `ghp_`, `sk-`) and opaque 32+ character
-runs. However, the current CLI does not install a log handler, and `LV24_SEO_LOG_LEVEL` is ignored
-by the config layer. The stable diagnostic interface is the `--json` envelope; do not rely on log
-format.
+runs. Logging is **opt-in**: `LV24_SEO_LOG_LEVEL=INFO` (or `DEBUG`, `WARNING`, …) makes the CLI and
+`lv24-seo mcp serve` install the redacting handler. An unset variable leaves the caller's logging
+configuration untouched, and importing the library or calling `create_server()` never replaces root
+handlers. Output is one JSON line per record when stderr is not a terminal. The stable diagnostic
+interface is still the `--json` envelope; do not rely on log format.
 
 Before posting anywhere:
 

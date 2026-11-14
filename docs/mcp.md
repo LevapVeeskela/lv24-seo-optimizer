@@ -35,7 +35,9 @@ Lists every property the configured tokens can see.
 
 → `{ "rows": [{ "keys": ["..."], "clicks": 1, "impressions": 10, "ctr": 0.1, "position": 8.4 }], "total": 1200, "truncated": false, "data_age_days": 2, "limitations": ["no_query_page_join"] }`
 
-Filters travel as `dimensionFilterGroups`, never as a top-level `filters` key.
+Filters travel as `dimensionFilterGroups`, never as a top-level `filters` key. A final page that
+exactly fills the row cap is reported as `truncated: true` with `rows_cap_50000` (or a caller-cap
+warning); a full page is not proof of complete coverage.
 
 ### `yandex_query_stats`
 
@@ -58,7 +60,8 @@ grouped by `rule_id` and severity. Optional `include_rules` filter (real rule id
 `robots-blocked`, `broken-internal-link`, `canonical-mismatch`); no `rules` parameter and no
 `--ignore-robots` flag exist. Serial crawl with polite `Crawl-delay` pacing. Page text is retained up
 to 20,000 characters; `word_count` stays exact. Sitemap documents use a 50 MB body budget and a
-50,000-URL cap. The payload also carries `sitemap_coverage` (sitemap ↔ crawl diff with
+50,000-URL cap. A sitemap that fails to load reports only the exception type, never the URL or
+query string. The payload also carries `sitemap_coverage` (sitemap ↔ crawl diff with
 `complete`/`limitations`; see `docs/cli.md`).
 
 ### `seo_weekly_report`
