@@ -5,7 +5,9 @@ Design rules:
 * **11 tools, not 50.** Agents pick better from a small, opinionated surface; the API shape stays
   behind the adapter.
 * Names `{source}_{verb}_{object}` for primitives, `seo_{task}` for composed workflows.
-* Read-only by default. Write tools carry `destructiveHint: true` and require a confirm token.
+* Read-only by default. Two tools persist local snapshots and carry `readOnlyHint: false` with
+  `writes_local_state: true`; gated write tools carry `destructiveHint: true` and require a confirm
+  token.
 * Every response includes `truncated`, `total`, `data_age_days` and `limitations[]`.
 * Read tools take no `format` parameter; responses are compact JSON, and the weekly report renders
   markdown through `seo://report/latest` (or `report weekly --out`).
@@ -27,7 +29,7 @@ Lists every property the configured tokens can see.
 | Input | Type | Default |
 |---|---|---|
 | `property` | string, required | — |
-| `start_date` / `end_date` | ISO date | last 7 full days |
+| `start_date` / `end_date` | ISO date | last 7 full days in `report.timezone` |
 | `dimensions` | `query,page,country,device,date` | `["query"]` |
 | `limit` | 1..500 | 50 |
 
@@ -54,14 +56,16 @@ Returns indexing history buckets, in-search page counts, diagnostics with severi
 Crawls a site (default 500 URLs, max 5000), respects robots.txt, returns a summary plus rule violations
 grouped by `rule_id` and severity. Optional `include_rules` filter (real rule ids such as
 `robots-blocked`, `broken-internal-link`, `canonical-mismatch`); no `rules` parameter and no
-`--ignore-robots` flag exist. Serial crawl with polite `Crawl-delay` pacing. The payload also
-carries `sitemap_coverage` (sitemap ↔ crawl diff with `complete`/`limitations`; see `docs/cli.md`).
+`--ignore-robots` flag exist. Serial crawl with polite `Crawl-delay` pacing. Page text is retained up
+to 20,000 characters; `word_count` stays exact. Sitemap documents use a 50 MB body budget and a
+50,000-URL cap. The payload also carries `sitemap_coverage` (sitemap ↔ crawl diff with
+`complete`/`limitations`; see `docs/cli.md`).
 
 ### `seo_weekly_report`
 
-Inputs: none — the property, window (`days`, default 7) and lag come from config/defaults.
-Composes GSC (headline deltas) + Yandex query window + Metrika sessions + Bing/CrUX/PSI when configured +
-stored crawl issues for the period. Returns
+Inputs: none — the property, window (`days`, default 7, max 3660), lag and timezone
+(`report.timezone`) come from config/defaults. Composes GSC (headline deltas) + Yandex query window +
+Metrika sessions + Bing/CrUX/PSI when configured + stored crawl issues for the period. Returns
 `{period, previous_period, headline, sources, sources_failed, complete, issues, opportunities, limitations}`.
 The headline compares GSC windows only; CrUX is field data, PSI is lab data, and the two are never merged.
 
@@ -99,6 +103,20 @@ Yandex recrawl queue. Reads the remaining quota first, refuses when `urls > quot
 GSC/Bing sitemap submit. Requires `allow_write=true` plus the confirm token. Google offers no
 general URL submission — the tool says so instead of pretending.
 
+## Annotations
+
+`schemas/tools.json` exposes `writes_local_state` per tool. It is additive: a tool can be a `read`
+tool and still write local snapshots.
+
+| Tools | `kind` | `writes_local_state` | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
+|---|---|---|---|---|---|
+| `seo_properties`, `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_report_diff`, `seo_indexing_triage`, `seo_opportunities` | read | `false` | `true` | `false` | `true` |
+| `seo_crawl_site`, `seo_weekly_report` | read | `true` | `false` | `false` | `false` |
+| `seo_recrawl_request`, `seo_sitemap_submit` | write | `false` | `false` | `true` | `false` |
+
+The two local-state tools persist crawl or weekly snapshots; they never mutate provider state and
+need no confirm token. The two write tools remain gated by `allow_write=true` plus the confirm token.
+
 ## Resources
 
 | URI | Content |
@@ -119,14 +137,6 @@ Exactly three resources — there is no `seo://property/{id}/baseline`.
 
 Total: 11 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
 `lv24_seo/mcp/registry.py` — never edit it by hand.
-
-## Prompts
-
-| Name | Purpose |
-|---|---|
-| `weekly_seo_review` | full pipeline: report → anomalies → top 5 actions |
-| `indexing_triage` | triage only, output as a fix plan |
-| `content_opportunities` | opportunities → prioritised backlog |
 
 ## Error contract
 

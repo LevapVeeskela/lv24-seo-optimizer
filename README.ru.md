@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.5.0).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.5.1).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -20,6 +20,7 @@ lv24-seo auth set --provider gsc --stdin   # нужен extra: pip install "lv24
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
 lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown            # разница двух сохранённых недельных снапшотов
+lv24-seo stats --days 7 --json             # срез по провайдерам для дашборда
 lv24-seo crawl --json                      # проблемы + сверка sitemap ↔ краул
 lv24-seo export skills --out ./skills      # скиллы из wheel-пакета
 ```
@@ -37,7 +38,7 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 | Источники | GSC, Вебмастер, Метрика, Bing/IndexNow, CrUX, PSI, собственный краул, логи nginx |
 | Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), триаж индексации, striking distance, деградация контента, техрегрессии |
 | MCP | 11 инструментов, 3 ресурса, 3 промпта; по умолчанию только чтение |
-| CLI | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `schedule`, `export`, `mcp serve` |
+| CLI | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `stats`, `schedule`, `export`, `mcp serve` |
 | Скиллы | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
 | Автоматизация | cron / systemd timer / Планировщик Windows, рецепт GitHub Actions |
 
@@ -52,9 +53,10 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 
 ## Статус
 
-Бета (v0.5.0). Открытые честные ограничения: OAuth-токен GSC (service account — позже),
+Бета (v0.5.1). Открытые честные ограничения: OAuth-токен GSC (service account — позже),
 `sitemap submit` / `recrawl` отвечают `WRITE_DISABLED` (IndexNow реально отправляет),
-`crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`).
+`crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`). Исправления
+0.5.1 — в [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md).
 
 ## Для агентов
 

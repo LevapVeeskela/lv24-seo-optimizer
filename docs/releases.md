@@ -7,7 +7,7 @@ The pipeline is **release plumbing only**: it verifies the exact tagged commit (
 offline tests, schema drift, installed-wheel smoke), builds the sdist/wheel, publishes them to
 PyPI with OIDC Trusted Publishing, publishes the thin `@lv24/seo` npm launcher with npm OIDC
 trusted publishing, and publishes `server.json` to the MCP Registry. No long-lived NPM_TOKEN or
-PyPI token exists. The current release is `0.5.0`.
+PyPI token exists. The current release is `0.5.1`.
 
 | Artifact | Built by | Published by | Cost |
 |---|---|---|---|
@@ -150,6 +150,8 @@ Notes:
   expires and must be recreated.
 * `package.json` → `repository.url` must match the GitHub repository exactly (it does).
 * Provenance is generated automatically by trusted publishing on a public repo.
+* On Windows the launcher only spawns a real `lv24-seo.exe` or an extensionless binary; a
+  `lv24-seo.cmd` shim is skipped because Node cannot spawn it with `shell: false` (`EINVAL`).
 
 Fallback if `npm trust` cannot target a package that does not exist yet: publish the first
 version locally with a short-lived Granular Access Token (read/write on `@lv24`, 2FA bypass):
@@ -202,13 +204,15 @@ Also update `README.md` status/install text if it still says a release is "plann
 ### 2. Regenerate the MCP schemas
 
 ```bash
-uv run python -c "import json, pathlib; from lv24_seo.mcp.registry import tools_as_json; pathlib.Path('schemas/tools.json').write_text(json.dumps(tools_as_json(), indent=2, ensure_ascii=False) + '\n', encoding='utf-8')"
+uv run python -m lv24_seo.mcp.registry --write
+uv run python -m lv24_seo.mcp.registry --check
 git diff -- schemas/tools.json
 ```
 
-The Python one-liner writes UTF-8 on every OS; a shell `>` redirect in Windows PowerShell 5.1 would
-write UTF-16 and corrupt the file. The diff must contain only intended MCP surface changes. CI's
-`schemas` job regenerates the same content and fails on drift.
+`--write` renders UTF-8 with LF on every OS (a shell `>` redirect in Windows PowerShell 5.1 would
+write UTF-16 and corrupt the file); `--check` exits `1` when the checked-in file drifts from the
+registry. The diff must contain only intended MCP surface changes. CI's `schemas` job regenerates
+the same content and fails on drift.
 
 ### 3. Quality gate
 

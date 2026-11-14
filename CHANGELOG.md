@@ -3,6 +3,57 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.5.1] - 2026-11-14
+
+Release notes: [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md).
+
+Bugfix release. No schema migration and no new CLI command or MCP tool. `schemas/tools.json` gains
+the additive `writes_local_state` field, and two MCP tools now report `readOnlyHint: false` because
+they persist local snapshots.
+
+### Fixed
+
+- Write gate: a claim is stored as `pending`, promoted to `sent` after the provider confirms the
+  write, and released when the provider raises. A retry after a provider failure is no longer
+  mistaken for a duplicate; a completed or in-flight claim still is.
+- Crawl: stored page text is capped at 20,000 characters while `word_count` stays exact for the full
+  visible text. No crawl rule reads the retained text.
+- MCP: `seo_crawl_site` and `seo_weekly_report` report `readOnlyHint: false` and the new
+  `writes_local_state: true`; they write local crawl/weekly snapshots but never provider state and
+  still need no confirm token. `destructiveHint` stays `false`.
+- Sitemap discovery: the documented 50 MB per-document cap is now reachable through a per-request
+  body budget; ordinary pages keep the 5 MB cap and the 50,000-URL protocol cap is unchanged.
+- `--days` is capped at 3,660 for `stats` and `report weekly`; larger values fail with
+  `INVALID_INPUT` (exit 2) instead of building an unbounded window.
+- Weekly report: the builder signature is checked before the call. An incompatible signature gets
+  the documented fallback report; a `TypeError` raised inside a compatible builder is no longer
+  swallowed and cannot poison a snapshot with a fallback payload.
+- GSC: a final batch that exactly fills 50,000 rows is no longer marked truncated; `rows_cap_50000`
+  appears only when another row actually exists beyond the cap.
+- npm launcher: Windows skips `lv24-seo.cmd` shims, which Node cannot spawn with `shell: false`
+  (`EINVAL`), and uses `lv24-seo.exe` or an extensionless binary before falling back to `uvx`.
+- MCP: default `gsc_search_analytics` and `seo_opportunities` windows resolve in
+  `report.timezone`, not a hardcoded zone.
+- Metric keys: multi-dimension keys are JSON-encoded, so values containing `|` no longer collide;
+  single-dimension keys are unchanged.
+- Store list queries clamp negative limits to `0` instead of passing them to SQLite.
+- `report diff --markdown` writes warnings to stderr, keeping stdout valid Markdown.
+- Scheduler install replaces every managed block, including a damaged block with a missing end
+  marker, instead of appending a duplicate job.
+- `auth status` includes Yandex Metrika (eight rows), and `auth set --provider metrika` is accepted.
+- `python -m lv24_seo.mcp.registry --write` and `--check` now work as documented.
+
+### Changed
+
+- `--days` above 3,660 is rejected instead of accepted.
+- Crawl results retain at most 20,000 characters of page text per page.
+- MCP clients that read annotations see `readOnlyHint: false` for the two local-state tools.
+
+### Documentation
+
+- README (EN/RU), MCP surface, CLI, configuration, data sources, architecture, scheduling,
+  troubleshooting and the write-gating ADR now describe the 0.5.1 behaviour.
+
 ## [0.5.0] - 2026-11-14
 
 Release notes: [`docs/releases/0.5.0.md`](docs/releases/0.5.0.md).

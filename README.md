@@ -55,12 +55,14 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.5.0).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
+**Beta (v0.5.1).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
 Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule crawler, SQLite history, analysis (deltas, opportunities,
-indexing triage, multi-engine fusion, nginx log stats), report builders + HTML/text/Markdown renderers,
+indexing triage, multi-engine fusion, nginx log stats), per-provider `stats`, report builders +
+HTML/text/Markdown renderers,
 SMTP/Telegram delivery with idempotency, the full CLI, the MCP server (11 tools, 3 resources,
 3 prompts) and scheduler generators. Canonical source ids, GSC-only headline deltas, partial
 provider isolation and window/daily storage separation are enforced with regression tests.
+`0.5.1` is a bugfix release; see [`docs/releases/0.5.1.md`](docs/releases/0.5.1.md).
 
 Still honest gaps before `v1.0`: GSC service-account auth (OAuth token only today),
 sitemap submit / Yandex recrawl return an explicit `WRITE_DISABLED` (IndexNow really submits),
