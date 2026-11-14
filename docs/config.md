@@ -92,6 +92,14 @@ what `send_email` / `send_telegram` use (neither function accepts a `locale` arg
 channel configs are present, their own `locale` wins. There are no `report.email.locale` or
 `report.telegram.locale` keys in `seo.toml` — set `report.locale` once.
 
+## Timezone
+
+`report.timezone` is the IANA zone used for report and `stats` windows, MCP default windows
+(`gsc_search_analytics`, `seo_opportunities`, `seo_weekly_report`) and local day boundaries. It must
+be a valid IANA name; an invalid zone fails config validation with `CONFIG_INVALID`. Provider data
+stays date-based and is not converted. Scheduler generators apply the same zone where the backend
+supports it — see [scheduling](scheduling.md).
+
 ## Secrets
 
 | Source | How |

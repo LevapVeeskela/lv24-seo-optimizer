@@ -4,7 +4,7 @@
 Claude Code, OpenCode, Cursor and VS Code, and documents what `lv24-seo install` merges.
 The tool surface itself is in [MCP tool surface](../mcp.md).
 
-## Launcher status in the current alpha
+## Launcher status
 
 `lv24-seo install` writes this entry (verified with `lv24-seo install --client claude --print`):
 
@@ -19,23 +19,16 @@ The tool surface itself is in [MCP tool surface](../mcp.md).
 }
 ```
 
-It assumes two things that are **not true in this checkout** (verified 2026-11-10, version
-`0.0.1`):
-
-| Assumption | Actual result |
-|---|---|
-| `lv24-seo` is on PyPI | `uvx --from lv24-seo lv24-seo version` → `lv24-seo was not found in the package registry` |
-| `lv24-seo mcp serve` is a CLI command | `lv24-seo --help` lists no `mcp`; `lv24-seo mcp serve` → `No such command 'mcp'` |
-
-The server module itself works: `python -m lv24_seo.mcp.server --help` prints the transport
-options, and the process answers an MCP `initialize` handshake as `serverInfo.name = "lv24-seo"`.
-If your installed version already resolves `uvx --from lv24-seo ...` and lists `mcp` in
-`lv24-seo --help`, ignore this status section and use the blocks as written.
+Current releases are published to PyPI (`lv24-seo`) and npm (`@lv24/seo`), so both
+`uvx --from lv24-seo lv24-seo ...` and `npx @lv24/seo ...` work. The npm package is a thin
+launcher: it forwards argv to the Python CLI and contains no SEO logic. On Windows it only spawns a
+real `lv24-seo.exe` or an extensionless binary; a `lv24-seo.cmd` shim is skipped because Node cannot
+spawn it with `shell: false` (`EINVAL`). If no binary is found it falls back to `uvx`.
 
 The JSON blocks below are the intended shape; `install` writes the same `command`/`args` under the
 client-specific key. The VS Code block is the exception: `install` writes the portable `mcpServers`
-shape, not the `servers` shape used by `.vscode/mcp.json`. Until the package is published and the
-`mcp` subcommand is wired, point the client at a checkout instead:
+shape, not the `servers` shape used by `.vscode/mcp.json`. If a client cannot resolve the published
+package, point it at a checkout instead:
 
 ```json
 {
@@ -58,9 +51,7 @@ shape, not the `servers` shape used by `.vscode/mcp.json`. Until the package is 
 Use the absolute path to your checkout (on Windows, forward slashes work: `C:/path/to/checkout`).
 The `uv run --directory` form was verified against this repository. Use the same command array for
 the other clients (`command` is an array in OpenCode); everything else on this page — file
-locations, merge behavior, environment variables, security — applies to both launchers. Any
-`uvx ... mcp serve` command in the client sections inherits the limitation above; substitute the
-checkout argv until the launcher lands.
+locations, merge behavior, environment variables, security — applies to both launchers.
 
 ## Before registering: configuration and tokens
 
@@ -299,7 +290,7 @@ lv24-seo properties
 | Command | What to look for |
 |---|---|
 | `doctor` | Python ≥ 3.11, config found, writable data dir, token presence. It is offline: no DNS, TLS or sitemap checks. A missing config, data dir or token is a **failed check but not a failed command**; only Python and a writable cwd are fatal. |
-| `auth status` | Seven rows (`gsc`, `yandex`, `bing`, `crux`, `psi`, `smtp`, `telegram`), each `present`/`missing`, with source `env`, `keyring`, `file` or `missing`. Values are never printed. Metrika is not listed; it is environment-only today. |
+| `auth status` | Eight rows (`gsc`, `yandex`, `metrika`, `bing`, `crux`, `psi`, `smtp`, `telegram`), each `present`/`missing`, with source `env`, `keyring`, `file` or `missing`. Values are never printed. |
 | `properties` | Project, each provider's target, token state and `ready`. `psi` is `ready` without a key. Missing tokens produce warnings, not an error. |
 
 Then ask the agent: **“How is SEO doing?”**
@@ -322,7 +313,9 @@ in [Agent skills](../skills.md). Without a skill, call `seo_weekly_report` direc
 
 ## Security notes
 
-* Nine of the eleven tools are read-only (`readOnlyHint: true`). `seo_recrawl_request` and
+* Seven of the eleven tools are read-only (`readOnlyHint: true`). `seo_crawl_site` and
+  `seo_weekly_report` persist local snapshots, so they carry `readOnlyHint: false` and
+  `writes_local_state: true` without being destructive. `seo_recrawl_request` and
   `seo_sitemap_submit` are the two write tools (`destructiveHint: true`) and are disabled unless
   the call passes `allow_write=true`.
 * Even with `allow_write=true`, the MCP write tools return `WRITE_DISABLED`

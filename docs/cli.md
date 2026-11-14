@@ -28,7 +28,7 @@ lv24-seo properties [--json]                  # provider -> target + token prese
 
 ```bash
 lv24-seo auth status [--json]                                  # presence + source, never values
-lv24-seo auth set --provider gsc|yandex|bing|crux|psi|smtp|telegram [--stdin]
+lv24-seo auth set --provider gsc|yandex|metrika|bing|crux|psi|smtp|telegram [--stdin]
 lv24-seo auth login --provider gsc|yandex                      # prints the provider-specific steps
 lv24-seo auth logout --provider <name>
 ```
@@ -57,7 +57,9 @@ links to it), `missing_from_sitemap` (indexable 200 HTML the sitemap omits), `no
 fetched: status **unknown**, not broken). `complete` is `false` and `limitations[]` says which
 buckets are only candidates when the crawl or sitemap inventory was truncated, a sitemap failed
 to load, or URLs went unvisited. No sitemap means an empty diff that says "empty, not clean".
-Lists are capped at 50 per bucket; `counts` are exact.
+Lists are capped at 50 per bucket; `counts` are exact. Stored page text is capped at 20,000
+characters (`word_count` stays exact), and sitemap documents get a 50 MB body budget with the
+50,000-URL protocol cap.
 
 ## Dashboard stats
 
@@ -67,8 +69,9 @@ lv24-seo stats [--days 7] [--lag-days 2] [--json]
 
 Read-only snapshot for the desktop dashboard. It never writes snapshots, pages or issues and does
 not need a SQLite store. Services always appear in this order: `gsc`, `yandex_webmaster`,
-`yandex_metrika`, `bing`, `crux`, `psi`. `--days` is the current window length; `--lag-days` shifts
-both windows back, and the previous window is the equally long window immediately before it.
+`yandex_metrika`, `bing`, `crux`, `psi`. `--days` is the current window length (1..3660; larger
+values fail with `INVALID_INPUT`); `--lag-days` shifts both windows back, and the previous window is
+the equally long window immediately before it.
 
 ```json
 {
@@ -121,7 +124,8 @@ both windows back, and the previous window is the equally long window immediatel
 lv24-seo report weekly [--days 7] [--lag-days 2] [--send] [--out reports/] [--json]
 ```
 
-- `--days` current window, `--lag-days` provider lag (GSC 2–3 days).
+- `--days` current window (1..3660; larger values fail with `INVALID_INPUT`), `--lag-days`
+  provider lag (GSC 2–3 days).
 - `--send` delivers through the channels enabled in `seo.toml` (email/Telegram). Without it the
   report is only built and stored as a snapshot.
 - `--out DIR` writes `report.json` (canonical English) and `report.html` (rendered in
@@ -148,8 +152,9 @@ provider: headline metric changes, issue counts per severity, opportunities adde
 limitations added/lifted. A metric present in only one snapshot is listed as unknown (never
 zero), and `comparable`/`meta.complete` is `false` when either snapshot had no headline
 comparison or the period lengths differ. `--markdown` prints only GitHub-flavoured Markdown for a
-PR comment or CI summary; output is deterministic so it diffs cleanly between runs. Needs `init`
-and at least two `report weekly` runs for different periods.
+PR comment or CI summary; warnings go to stderr, so stdout stays valid Markdown. Output is
+deterministic so it diffs cleanly between runs. Needs `init` and at least two `report weekly` runs
+for different periods.
 
 Planned for the next wave: `report indexing`, `report opportunities`, `report history`
 (see `docs/plans/2026-11-10-implementation-plan.md`, WP5.5).

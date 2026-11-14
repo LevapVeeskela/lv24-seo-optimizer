@@ -13,8 +13,11 @@ Three provider calls change state: Yandex recrawl queue (hard daily quota), site
    `"dry_run": true`.
 2. **Two-phase apply.** A dry run returns `confirm_token` = HMAC(payload + config + 5 min TTL). Applying
    requires the token; a changed payload invalidates it.
-3. **Idempotency.** Every apply stores `(kind, target, payload_hash, idempotency_key)` in the audit
-   table; a repeat returns the previous result instead of calling the provider again.
+3. **Idempotency.** Every apply stores `(kind, target, payload_hash, idempotency_key)` in the sends
+   ledger as `pending`, promotes it to `sent` after the provider confirms, and releases it when the
+   provider raises. A completed or still in-flight claim is a duplicate; a retry after a provider
+   failure is allowed. (Revision in 0.5.1; the original text said a repeat always returned the
+   previous result.)
 4. **Quota guard.** Recrawl checks `GET /recrawl/quota` before queueing and refuses `urls > quota_left`
    with `QUOTA_EXCEEDED`.
 5. **Audit.** `runs` gets a row with actor (`cli` / `mcp:<client>`), plan, applied ids and result.

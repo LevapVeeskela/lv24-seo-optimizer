@@ -30,7 +30,10 @@ is rejected instead of silently rescheduled. An unknown/unavailable timezone is 
 before installation. Windows needs `tzdata` (included on Windows); fixed-offset XML does not
 encode an IANA zone's future DST rules, so review such tasks after seasonal transitions.
 
-The install result always carries a `warnings` list with the backend limits above.
+The install result always carries a `warnings` list with the backend limits above. Re-installing
+replaces every managed block for that job. A damaged block with a missing end marker is treated as
+extending to the next managed marker (or EOF), so `schedule install` repairs the file instead of
+appending a duplicate job.
 
 ## Recommended cadence
 

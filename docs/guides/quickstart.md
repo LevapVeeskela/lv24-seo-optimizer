@@ -1,6 +1,6 @@
 # Quickstart
 
-Verified against the 0.3.0 CLI (`lv24-seo <command> --help` is the authority when in doubt).
+Verified against the 0.5.1 CLI (`lv24-seo <command> --help` is the authority when in doubt).
 
 ## 1. Install
 
@@ -69,6 +69,7 @@ only `--limit`.
 ```bash
 lv24-seo crawl --start https://example.com/ --max-urls 50
 lv24-seo report weekly --days 7 --lag-days 2 --out reports/
+lv24-seo stats --days 7 --json
 ```
 
 `report weekly` builds the digest, saves a snapshot to SQLite (when `init`

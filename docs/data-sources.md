@@ -22,7 +22,8 @@ Legend: **R** = read, **W** = write (gated), *free* = no payment required.
 
 1. Never request `page` and `query` together *and* compare the sums with an ungrouped total — grouping
    drops rows by design. Store both groupings separately, labelled.
-2. Paginate with `startRow` until a short page; if `rows == 50,000` mark `truncated: true`.
+2. Paginate with `startRow` until a short page. Mark `truncated: true` only when a further row exists
+   beyond the 50,000 cap; a final batch that exactly fills the cap is complete.
 3. Cache daily pulls in SQLite; never re-query a month repeatedly (the "load quota" is opaque).
 4. A service account cannot complete interactive verification for `sc-domain:` — a human publishes the
    DNS TXT once (or `sites.add` is called by an already-verified principal).
@@ -108,7 +109,10 @@ sessions and key events. Join to GSC on the URL path, not on the query. Threshol
   refused unless `allow_private` is set for local audits, DNS re-resolved per redirect hop) and a
   request budget (`1 + max_urls × (max_redirects + 1)`, reported as `request_count/request_budget`).
   `concurrency` is reserved and has no effect today. `/a` and `/a/` stay distinct until a fetch
-  proves otherwise; unvisited link targets are reported as `unvisited`, never as broken.
+  proves otherwise; unvisited link targets are reported as `unvisited`, never as broken. Retained
+  page text is capped at 20,000 characters; `word_count` is computed from the full visible text.
+  Ordinary pages use a 5 MB body budget, while sitemap documents get 50 MB per document and the
+  50,000-URL protocol cap.
 * Crawl scope: the seed and every redirect hop are checked against the start origin
   (scheme + host + port) and `robots.txt` **before** the request is sent; an off-origin or
   disallowed hop is never requested and is reported as `robots_blocked` with a coverage note.

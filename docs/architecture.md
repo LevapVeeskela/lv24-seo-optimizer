@@ -50,8 +50,9 @@ class ProviderResult[T]:
 
 Rules:
 
-* `truncated` is computed from the provider's own cap (e.g. `len(rows) == 50_000` for GSC, `total > limit`
-  for Yandex), never guessed.
+* `truncated` is computed from the provider's own cap and evidence of more data (GSC reports it only
+  when a row exists beyond 50,000; Yandex uses `total > limit`), never guessed. An exact full batch
+  is complete.
 * `limitations` codes are enum-like and translated to text in the report renderer.
 * Adapters never mutate the database; the caller (`analysis` or `store`) persists.
 
@@ -74,6 +75,8 @@ Rules:
 Daily rows and window aggregates live in different tables by construction: a request with a
 `date` dimension lands in `metric_daily` keyed by that date; anything else lands in
 `metric_windows` keyed by its real window, so overlapping windows never overwrite each other.
+A single-dimension `key` is stored raw; multi-dimension keys are JSON-encoded, so dimension values
+containing `|` cannot collide.
 Migration 2 marks pre-migration **GSC** daily rows (other sources are untouched) with `accuracy=legacy_unknown_granularity`; their
 original window cannot be recovered. Normal daily reads exclude them. Repository callers may
 explicitly use `include_legacy=True` to inspect retained data; no historical rows are deleted.
@@ -154,7 +157,12 @@ query level (clicks/impressions) separately, and the report labels which engine 
   `reason=delivery_journal_failed`, never as `failed`. Telegram gets plain text (no `parse_mode`),
   with an explicit truncation marker when the report exceeds the message limit.
 * Crawl persistence is one transaction per sync (`Store.atomic`); a crash mid-window cannot leave a
-  half-synced period. Crawl and provider operations record `runs` rows with stats.
+  half-synced period. Crawl and provider operations record `runs` rows with stats. Retained page
+  text is capped at 20,000 characters; `word_count` uses the full visible text.
+* Write-gate claims are `pending` until the provider confirms the write, then promoted to `sent`;
+  a provider exception releases the claim so a retry is allowed. A completed or in-flight claim is
+  a duplicate. A crash between provider success and promotion leaves a `pending` row that is
+  treated as in-flight; 0.5.1 has no TTL or automatic cleanup.
 * The crawler is serial with `Crawl-delay` pacing; `concurrency` stays reserved. Read POST retry
   opt-in changes retry safety, not concurrency.
 
@@ -162,5 +170,8 @@ query level (clicks/impressions) separately, and the report labels which engine 
 
 * Tokens live in the keychain or `0600` files, never in `seo.toml`.
 * Provider clients are constructed per run with scoped credentials; nothing global.
-* Write operations pass through `core/write_gate.py` (plan → confirm token → apply → audit row).
+* Write operations pass through `core/write_gate.py` (plan → confirm token → pending claim →
+  provider call → `sent` or release). Local-state MCP tools (`seo_crawl_site`,
+  `seo_weekly_report`) are not write-gated because they never mutate provider state; they are
+  marked `writes_local_state: true` and `readOnlyHint: false`.
 * Logs are redacted at the formatter level, not per call site.

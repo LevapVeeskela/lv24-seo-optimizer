@@ -44,13 +44,13 @@ printf '%s' "$TOKEN" | lv24-seo auth set --provider gsc --stdin
 lv24-seo properties
 ```
 
-Providers accepted by `auth set` are `gsc`, `yandex`, `bing`, `crux`, `psi`, `smtp`, `telegram`.
-Yandex Webmaster and Metrika use different secrets:
+Providers accepted by `auth set` are `gsc`, `yandex`, `metrika`, `bing`, `crux`, `psi`, `smtp`,
+`telegram`. Yandex Webmaster and Metrika use different secrets:
 
 | Engine | Secret | How to store it |
 |---|---|---|
 | Yandex Webmaster | `yandex_webmaster_token` | `auth set --provider yandex` |
-| Yandex Metrika | `yandex_metrika_token` | `LV24_SEO_YANDEX_METRIKA_TOKEN` only (no `auth set --provider metrika`) |
+| Yandex Metrika | `yandex_metrika_token` | `auth set --provider metrika` or `LV24_SEO_YANDEX_METRIKA_TOKEN` |
 
 `auth login --provider gsc|yandex` does **not** open a browser and does not write anything; it
 prints the provider-specific manual steps. Follow them, then use `auth set`.
@@ -251,6 +251,12 @@ key, property or even the summary invalidates it:
 
 Tokens live 300 seconds. Treat one as single-use: the CLI does not attach the idempotency ledger, so
 a replay inside the window can apply again.
+
+A store-backed apply (library or future MCP write layer) claims the slot as `pending`, promotes it
+to `sent` only after the provider confirms, and releases it when the provider raises. A retry after
+a provider failure is therefore allowed; a completed or still in-flight claim is `skipped`. A crash
+between the provider success and the promotion leaves `pending`, which is treated as in-flight until
+an operator releases it.
 
 `WRITE_DISABLED` has several distinct causes; the message identifies the one you hit:
 
