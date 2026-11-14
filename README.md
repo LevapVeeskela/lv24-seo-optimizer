@@ -100,16 +100,16 @@ lv24-seo install --client claude|opencode|vscode|cursor
 
 ## Desktop app
 
-The same engine ships as **LV24 SEO Optimizer Desktop 0.2.1** — a Tauri v2 shell with a dashboard,
+The same engine ships as **LV24 SEO Optimizer Desktop 0.2.2** — a Tauri v2 shell with a dashboard,
 weekly report view, configuration editor/diff/validation and a recommendations-to-agent workflow. It
-bundles a pinned `lv24-seo` sidecar (`0.5.1` in the current desktop build) and adds no provider logic
+bundles a pinned `lv24-seo` sidecar (`0.5.2` in the current desktop build) and adds no provider logic
 of its own.
 
 | Platform | Assets | Auto-update |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.2.1_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.2.1_x64-portable.zip` | NSIS only |
-| Linux x64 | `LV24.SEO.Optimizer_0.2.1_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.2.1_amd64.deb`, `LV24.SEO.Optimizer-0.2.1-1.x86_64.rpm` | AppImage only |
-| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.2.1_aarch64.dmg`, `LV24.SEO.Optimizer_0.2.1_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.2.2_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.2.2_x64-portable.zip` | NSIS only |
+| Linux x64 | `LV24.SEO.Optimizer_0.2.2_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.2.2_amd64.deb`, `LV24.SEO.Optimizer-0.2.2-1.x86_64.rpm` | AppImage only |
+| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.2.2_aarch64.dmg`, `LV24.SEO.Optimizer_0.2.2_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
 
 deb, rpm and the portable ZIP are manual-only (MSI is not produced); `0.1.0` has no updater. The
 `0.2.x` releases publish `latest.json` and `SHA256SUMS.txt`.
@@ -216,7 +216,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
 * [Release notes 0.5.2](docs/releases/0.5.2.md) — what changed in the current engine release
-* [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop) — Tauri shell, 0.2.1 assets and update matrix
+* [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop) — Tauri shell, 0.2.2 assets and update matrix
 * [Desktop plan](docs/plans/2026-11-14-seo-desktop.md) — shell scope and milestones
 * [Security](SECURITY.md) — token handling, read-only defaults, write gating
 * [Research 2026](docs/research/2026-11-landscape.md) — API limits, existing MCP servers, tool landscape

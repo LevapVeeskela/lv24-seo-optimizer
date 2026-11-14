@@ -13,8 +13,8 @@
 - MCP: 11 tools (9 read-class, including 2 local-state writers with `readOnlyHint: false`; 2 gated
   provider writes that return `WRITE_DISABLED` in 0.5.2), 3 resources, 3 prompts.
 - Skills: `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit`.
-- Desktop `0.2.1`: Windows NSIS + portable ZIP, Linux AppImage/deb/rpm, macOS arm64/x64 DMG;
-  signed updates for NSIS, `.app` and AppImage.
+- Desktop `0.2.2`: Windows NSIS + portable ZIP, Linux AppImage/deb/rpm, macOS arm64/x64 DMG;
+  signed updates for NSIS, `.app` and AppImage; bundles engine `0.5.2`.
 - Desktop and CLI share one OS keychain entry per provider (service `lv24-seo`); the opt-in
   `<data-dir>/secrets.json` fallback is shared only with the same workspace/data directory.
 
