@@ -55,7 +55,7 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.4.0).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
+**Beta (v0.5.0).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
 Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule crawler, SQLite history, analysis (deltas, opportunities,
 indexing triage, multi-engine fusion, nginx log stats), report builders + HTML/text/Markdown renderers,
 SMTP/Telegram delivery with idempotency, the full CLI, the MCP server (11 tools, 3 resources,
@@ -85,6 +85,7 @@ lv24-seo auth set --provider gsc --stdin       # token to the OS keychain (needs
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
 lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown                 # week-over-week diff of stored snapshots
+lv24-seo stats --days 7 --json                  # read-only per-provider dashboard snapshot
 lv24-seo crawl --json                           # issues + sitemap↔crawl coverage diff
 lv24-seo export skills --out ./skills          # packaged agent skills from the wheel
 lv24-seo mcp serve                             # stdio MCP server
@@ -129,7 +130,7 @@ audit → plan → fix → verify.
 |---|---|
 | **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions |
 | **MCP tools** | `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_crawl_site`, `seo_weekly_report`, `seo_report_diff`, `seo_indexing_triage`, `seo_opportunities`, `seo_recrawl_request` (gated), `seo_sitemap_submit` (gated) |
-| **CLI** | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `schedule`, `export`, `mcp serve` |
+| **CLI** | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `stats`, `schedule`, `export`, `mcp serve` |
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
 | **Automation** | cron / systemd timer / Windows Task Scheduler generators and a GitHub Actions recipe |
 

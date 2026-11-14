@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.5.0] - 2026-11-14
+
+Release notes: [`docs/releases/0.5.0.md`](docs/releases/0.5.0.md).
+
+### Added
+
+- `lv24-seo stats --days N --lag-days N --json`: read-only per-provider dashboard metrics for
+  GSC, Yandex Webmaster, Yandex Metrika, Bing, CrUX and PSI. Current and previous values where
+  comparable, rows, data age, truncation, limitations, warnings, per-service status/error and a
+  coverage summary. No store writes and no cross-engine totals.
+- Statuses distinguish `ok`, `no_data`, `missing_token`, `not_configured` and `error`, so a
+  desktop dashboard can show configuration gaps instead of zeros.
+- CrUX returns p75 values with units; PSI returns lab scores and field p75s from the first
+  configured URL without averaging; Bing returns clicks/impressions/position; Metrika returns
+  visits/users.
+- CLI human table for `stats` and documentation of the JSON shape.
+
 ## [0.4.0] - 2026-11-13
 
 Release notes: [`docs/releases/0.4.0.md`](docs/releases/0.4.0.md).
