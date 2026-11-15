@@ -18,6 +18,7 @@ env/
 .coverage
 htmlcov/
 .uv/
+.vigil/
 
 # Local data (never commit crawled data, tokens or reports)
 data/
