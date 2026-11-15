@@ -3,13 +3,41 @@
 on:
   push:
     branches: [main]
-    paths-ignore: ["docs/**", "**/*.md", "LICENSE"]
+    # QA-10: only prose that cannot change the package is skipped. `**/*.md` used to
+    # swallow `skills/*/SKILL.md`, which ships inside the wheel, so skills edits never
+    # ran CI. Root-level prose stays listed explicitly; docs/ is the docs site source.
+    paths-ignore:
+      - "docs/**"
+      - "LICENSE"
+      - "llms.txt"
+      - "AGENTS.md"
+      - "CHANGELOG.md"
+      - "CLAUDE.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "README.md"
+      - "README.ru.md"
+      - "SECURITY.md"
+      - "TRADEMARKS.md"
   pull_request:
-    paths-ignore: ["docs/**", "**/*.md", "LICENSE"]
+    paths-ignore:
+      - "docs/**"
+      - "LICENSE"
+      - "llms.txt"
+      - "AGENTS.md"
+      - "CHANGELOG.md"
+      - "CLAUDE.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "README.md"
+      - "README.ru.md"
+      - "SECURITY.md"
+      - "TRADEMARKS.md"
   workflow_dispatch:
 
-# Zero-spend policy: standard Ubuntu runners, verified free usage and $0 hard budgets,
-# no larger runners, no artifacts beyond 7 days, concurrency cancels stale runs.
+# Zero-spend policy: standard GitHub-hosted runners only (ubuntu/windows/macos), verified
+# free usage and $0 hard budgets, no larger runners, no artifacts beyond 7 days,
+# concurrency cancels stale runs.
 permissions:
   contents: read
 
@@ -65,6 +93,28 @@ jobs:
       - name: Tests (offline only)
         run: uv run --locked pytest -q -m "not live and not network"
 
+  test-other-os:
+    # QA-04: Windows and macOS cover path handling, keyring and SQLite locking that the
+    # Linux matrix cannot. Python 3.12 only keeps the extra time bounded; standard
+    # GitHub-hosted runners on a public repository are free (zero-spend policy).
+    name: test (${{ matrix.os }}, 3.12)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --locked --extra dev
+      - name: Tests (offline only)
+        run: uv run --locked pytest -q -m "not live and not network"
+
   schemas:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -79,6 +129,34 @@ jobs:
         run: uv run --locked python -m lv24_seo.mcp.registry > /tmp/tools.json
       - name: Fail on drift
         run: diff -u schemas/tools.json /tmp/tools.json
+
+  wheel-contract:
+    # QA-03: build the artefact PyPI ships and run the frozen CLI envelope contract
+    # (tests/contract) against the installed wheel, not the source tree. An envelope or
+    # exit-code change that would break the desktop after a release fails here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Build the wheel
+        run: uv build --wheel --out-dir /tmp/dist
+      - name: Install the wheel into a clean environment
+        # No dev extras and no editable install: only the published artefact and its
+        # declared dependencies, which is what the desktop bundles.
+        run: |
+          uv venv /tmp/contract-venv --python 3.12
+          uv pip install --python /tmp/contract-venv/bin/python /tmp/dist/*.whl
+      - name: CLI envelope contract (installed wheel)
+        # pytest comes from the locked dev environment; the CLI under test is the wheel.
+        env:
+          LV24_SEO_CONTRACT_CLI: /tmp/contract-venv/bin/lv24-seo
+        run: |
+          uv sync --locked --extra dev
+          uv run --locked pytest tests/contract -p no:cacheprovider
 
   npm:
     # The npm package is a thin launcher; this job proves it parses, its unit and
@@ -100,3 +178,23 @@ jobs:
         run: node --test test/launcher.test.js
       - name: Package contents
         run: npm pack --dry-run
+
+  audit:
+    # QA-09: audit the locked runtime dependency set that ships to users, not the dev
+    # tooling. pip-audit is pinned so a new release cannot change the gate on its own;
+    # a CVE without a fix gets an explicit --ignore-vuln with a link in the PR.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - name: Export locked runtime requirements
+        run: >-
+          uv export --locked --no-dev --no-emit-project --format requirements-txt
+          --output-file /tmp/requirements.txt
+      - name: pip-audit
+        run: >-
+          uv tool run --from pip-audit==2.10.1 pip-audit
+          --requirement /tmp/requirements.txt --strict --disable-pip

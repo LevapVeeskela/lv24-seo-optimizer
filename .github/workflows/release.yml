@@ -78,6 +78,37 @@ jobs:
           print(f"versions aligned at {tag}")
           PY
 
+      - name: Require release notes for the tag
+        # QA-10: a tag must ship notes. Either docs/releases/<version>.md exists and is
+        # not empty, or CHANGELOG.md has a heading for the version. The gate runs before
+        # the build so a tag without notes fails fast instead of after publishing.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - "${GITHUB_REF_NAME#v}" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          version = sys.argv[1]
+          notes = pathlib.Path("docs/releases") / f"{version}.md"
+          if notes.is_file() and notes.read_text(encoding="utf-8").strip():
+              print(f"release notes: {notes}")
+              raise SystemExit(0)
+
+          changelog = pathlib.Path("CHANGELOG.md")
+          if changelog.is_file():
+              pattern = re.compile(rf"^##\s*\[?v?{re.escape(version)}\]?(?:\s|$)", re.MULTILINE)
+              if pattern.search(changelog.read_text(encoding="utf-8")):
+                  print(f"release notes: CHANGELOG.md entry for {version}")
+                  raise SystemExit(0)
+
+          print(
+              f"::error::no release notes for {version}: add docs/releases/{version}.md "
+              "or a CHANGELOG.md entry"
+          )
+          raise SystemExit(1)
+          PY
+
       - name: Require the committed lockfile
         run: git ls-files --error-unmatch uv.lock
 
