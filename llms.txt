@@ -20,6 +20,7 @@
 
 ## Docs
 
+- [Documentation portal](https://seo.lv24.by/): en/ru/zh guides, CLI/config reference, desktop and MCP docs
 - [README](README.md): what it is, install, supported sources
 - [AGENTS.md](AGENTS.md): contract for AI agents working in the repo
 - [Implementation plan](docs/plans/2026-11-10-implementation-plan.md): waves and work packages
