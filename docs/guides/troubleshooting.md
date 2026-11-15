@@ -21,14 +21,24 @@ MCP tools return the same envelope (as `structuredContent` when the SDK supports
 | `QUOTA_EXCEEDED` | 4 | usually | HTTP 429, or the local rate limiter cannot fit the wait in its budget | Wait for the reset; lower `--limit`; split the window |
 | `UPSTREAM_UNAVAILABLE` | 4 | often | Network/timeout, HTTP 5xx, invalid JSON, or a capability the client does not implement | Retry later; check egress and provider status |
 | `WRITE_DISABLED` | 2 | no | A write was attempted without `--allow-write`/`allow_write`, the write secret is missing, the adapter is not wired, or a secret could not be stored | See [Write tools](#write_disabled--confirm_required) |
-| `CONFIRM_REQUIRED` | 1 | no | A gated CLI write received a missing, expired or plan-mismatched `--confirm` token | Rerun the dry run and pass the fresh token |
+| `CONFIRM_REQUIRED` | 2 | no | A gated write received a missing, expired or plan-mismatched confirm token | Rerun the dry run and pass the fresh token |
 | `INVALID_INPUT` | 2 | no | Bad flag, date, limit, URL, provider name or client name | Fix the argument; read `next_action` |
 | `CONFIG_INVALID` | 2 | no | Bad `seo.toml`, bad host JSON, BOM, or a missing explicit config path | Fix the file named in the message |
-| `TRUNCATED` | 5 | n/a | Reserved as an error code. **Not emitted:** truncation is `meta.truncated` / `limitations` and exits `0` | Raise the limit within provider caps |
+| `STORE_LOCKED` | 1 | yes | Another process holds the SQLite write lock past the busy timeout | Wait for the other run (crawl, report, MCP server), then retry; nothing was written |
+| `STORE_CORRUPT` | 1 | no | The database file is not valid SQLite; a byte copy is kept as `<db>.corrupt-<utc>` | Inspect `detail.backup_path`, move the original aside, rerun |
+| `STORE_UNAVAILABLE` | 1 | no | SQLite could not open or write the path (permissions, missing directory, disk) | Fix the path/permissions; run `doctor --json` |
+| `TRUNCATED` | 5 | n/a | Reserved as an error code. **Not emitted:** truncation is `meta.truncated` / `limitations` and exits `0` unless `--strict` is set | Raise the limit within provider caps |
 | `INTERNAL` | 1 | no | Unexpected failure; the message deliberately omits the traceback | Run `doctor --json`; report with the envelope |
 
-Exit `5` is only produced for a successful payload with `meta.truncated` **and** `meta.strict`;
-no current command sets `strict`. Treat `meta.truncated` as the signal, not the exit code.
+Exit `5` is produced only for a successful payload with `meta.truncated` **and** `meta.strict`.
+`--strict` exists on the read commands (`stats`, `gsc query`, `yandex queries`, `yandex indexing`,
+`crawl`, `report weekly`, `report diff`) and always sets `meta.strict`; without it, truncation is
+still visible in `meta.truncated` but the command exits `0`. `report diff --markdown --strict`
+prints the Markdown and then exits `5` for truncated data.
+
+`STORE_*` codes are typed storage failures, not program bugs. They currently map to exit `1`
+(unexpected) because they have no dedicated exit status; use `error.code` and `retryable`, not the
+exit number. `STORE_LOCKED` is the only one safe to retry as-is.
 
 ## AUTH_REQUIRED and AUTH_INVALID
 
@@ -206,6 +216,11 @@ error:
 The command still exits 0. Retry later; Yandex query reports also lag roughly four days. Check the
 host in Webmaster before assuming maintenance — a wrong `host_id` looks identical.
 
+An **empty** history is not a degraded host. When the host answered but has no indexing buckets or
+search-URL events for the window, the result is `rows: []`, `total: 0`,
+`limitations: ["empty_history"]`, no `degraded_host` warning, and exit 0. `HOST_NOT_LOADED` /
+`degraded_host` is reserved for a host-scoped 404 or an explicit not-loaded payload.
+
 GET-based Yandex reads are retried on 429/5xx up to three attempts; the degraded result above is
 what remains after a host-scoped 404. POST-based reads (GSC search analytics, URL Inspection, CrUX,
 Metrika `/stat/v1/data`) are not retried at all.
@@ -269,7 +284,7 @@ promotion leaves `pending`, which is treated as in-flight until an operator rele
 | `gsc sitemap submit is not wired yet` | GSC sitemap adapter absent | Submit in Search Console until it lands |
 | `yandex recrawl is not wired yet` | Recrawl adapter absent | Queue in Yandex Webmaster until it lands |
 | `<tool> is a write tool and is disabled by default` | MCP write tool called without `allow_write=true` | Pass `allow_write=true` only after reviewing the plan |
-| `recrawl writes are not available in this build` / `sitemap writes are not available in this build` | MCP call with `allow_write=true`, but the MCP write layer is not wired | Use the CLI write surface; MCP writes remain disabled |
+| `recrawl writes are not available in this build` / `sitemap writes are not available in this build` | MCP call with `allow_write=true`, but the engine service exposes no write handler yet | Use the CLI write surface; these MCP writes remain disabled |
 
 `WRITE_DISABLED` also comes from the secret store, with a different message:
 
@@ -279,10 +294,25 @@ promotion leaves `pending`, which is treated as in-flight until an operator rele
 | `the OS keyring rejected the write and file storage is disabled` | Locked/unavailable keyring | Unlock it, or set `LV24_SEO_ALLOW_FILE_SECRETS=1` for the 0600 file fallback |
 | `no writable secret backend` | No keyring and no file fallback | Install the `secrets` extra or enable the file fallback |
 
-MCP has no confirm-token path yet: both write tools return `WRITE_DISABLED` even with
-`allow_write=true`. Only the CLI can perform a write in this build, and only IndexNow reaches a
-provider. Keep `--allow-write` per call; never enable writes globally in an agent config, and never
+MCP write tools implement the same two-phase flow: `allow_write=true` plus `plan_hash` and
+`confirm_token` from the dry run, with `LV24_SEO_WRITE_SECRET` in the server environment. The
+engine service still has no recrawl/sitemap write handler and the lookup runs before the dry run, so
+every call returns `WRITE_DISABLED` and nothing is sent; only the CLI's IndexNow path reaches a
+provider. Keep `allow_write` per call; never enable writes globally in an agent config, and never
 log or commit `LV24_SEO_WRITE_SECRET`.
+
+## STORE_LOCKED / STORE_CORRUPT / STORE_UNAVAILABLE
+
+The store translates raw `sqlite3` failures into typed errors instead of a generic `INTERNAL`
+"report the bug" envelope:
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `STORE_LOCKED` | Another connection held the write lock past the busy timeout. `retryable: true`; nothing was written. | Let the other lv24-seo process (crawl, report, MCP server) finish, then rerun. |
+| `STORE_CORRUPT` | The file is not a usable SQLite database. A byte copy is made first and named `<db>.corrupt-<utc>` (for example `seo.sqlite3.corrupt-20261115T124500Z`); `detail.backup_path` names it. The original is never moved or deleted. | Inspect or archive the backup, move the original aside, rerun to create a new database. |
+| `STORE_UNAVAILABLE` | SQLite could not open or write the path: permissions, missing parent directory, read-only file, disk full or I/O error. | Check the directory and free space; `lv24-seo doctor --json` now fails when a declared data directory is unusable. |
+
+The message and `detail` never contain row data, tokens or SQL parameters.
 
 ## Empty or partial reports
 
@@ -300,9 +330,10 @@ Expected lag:
 
 | Source | Lag |
 |---|---|
-| GSC search analytics | 2–3 days (`--lag-days 2` is the report default) |
+| GSC search analytics | 2–3 days (`--lag-days 2` is the report default); `data_age_days` is floored at 3 |
 | Yandex Webmaster queries | ~4 days |
 | Yandex Metrika | Near real time for the requested date window |
+| Bing Webmaster | Age of the newest dated row in the feed |
 | CrUX | 28-day rolling p75 |
 | PSI | Lab run, current request |
 
@@ -315,6 +346,8 @@ Common warning strings and their fixes:
 | `yandex_webmaster: host_id missing` | Set `providers.yandex_webmaster.host_id` |
 | `yandex_metrika: counter missing` | Set `providers.yandex_metrika.counter` |
 | `host_not_loaded` + `degraded_host` | Wait, or fix the host id |
+| `empty_history` (limitation) | The host answered but has no buckets/events yet; not an outage |
+| `off-origin sitemap loc excluded` | A sitemap listed a URL outside the site; it was dropped, not fetched |
 | `no provider rows; traffic and opportunities are empty` | Configure at least one engine and property |
 | `store: not configured; snapshot was not saved` | Run `init` so the data directory exists |
 | `write ledger: no data directory` … | Run `init`; a store-less apply has no replay protection |
@@ -351,7 +384,7 @@ lv24-seo properties --json
 
 | Source | What it contains | What it never contains |
 |---|---|---|
-| `doctor --json` | Python version, platform, config path, effective data directory and its scope, cwd/data-dir writability, token presence, an ambiguity warning for a relative data directory | Tokens, network results |
+| `doctor --json` | Python version, platform, config path, effective data directory and its scope, `meta.data_dir_declared`, cwd/data-dir writability, token presence, an ambiguity warning for a relative data directory. A **declared** data directory that is missing or unwritable is fatal (`ok: false`, `meta.healthy: false`) | Tokens, network results |
 | `auth status --json` | Provider, secret name, `present`, `source`, `expires_at` | Secret values |
 | `config show --json` | Effective config with secret-looking keys masked as `***` | Tokens, passwords, API keys |
 | Error envelope | `code`, `message`, `next_action`, `retryable`, optional `detail` | Request bodies, headers, token fields; input-validation details can echo the value you passed (including a URL query) |
@@ -394,7 +427,7 @@ The first three rows describe the `0.0.1` alpha; re-check `lv24-seo --help` afte
 | Symptom | Cause | Fix |
 |---|---|---|
 | `install` says the file “is not valid JSON” but it looks valid | UTF-8 BOM at the start of the file (common with Windows PowerShell 5.1 `Set-Content -Encoding utf8`) | Rewrite as UTF-8 without BOM, or delete the file and rerun `install` |
-| `No such command 'mcp'` | The `mcp serve` subcommand is not wired in this build | Use the checkout launcher in [MCP client setup](mcp-clients.md#launcher-status-in-the-current-alpha) |
+| `No such command 'mcp'` | The `mcp serve` subcommand is not wired in this build | Use the checkout launcher in [MCP client setup](mcp-clients.md#launcher-status) |
 | `uvx` says `lv24-seo was not found in the package registry` | The package is not published yet | Use the checkout launcher |
 | Server fails to start from a GUI client | The app does not inherit the shell `PATH`, so `uvx` is not found | Put the absolute path (`where uvx` / `which uvx`) in `command` |
 | VS Code lists nothing after `install --client vscode` | `install` writes `mcpServers`; VS Code's `.vscode/mcp.json` uses `servers` | Rename the key or use the VS Code block in [MCP client setup](mcp-clients.md#vs-code-copilot-chat) |

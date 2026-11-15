@@ -24,9 +24,12 @@ Legend: **R** = read, **W** = write (gated), *free* = no payment required.
    drops rows by design. Store both groupings separately, labelled.
 2. Paginate with `startRow` until a short page. A final page that exactly fills the 50,000-row cap is
    reported as `truncated: true` with `rows_cap_50000`: a full page is not proof that no row exists
-   behind the cap, so exact-cap data is never claimed complete.
-3. Cache daily pulls in SQLite; never re-query a month repeatedly (the "load quota" is opaque).
-4. A service account cannot complete interactive verification for `sc-domain:` — a human publishes the
+   behind the cap, so exact-cap data is never claimed complete. A truncated GSC result omits `total`
+   (`null`): an exact row count next to `truncated: true` would read as a complete answer.
+3. `data_age_days` is floored at the documented 3-day lag, so a window ending today is never
+   presented as fresh data even when the local clock says it is 0 days old.
+4. Cache daily pulls in SQLite; never re-query a month repeatedly (the "load quota" is opaque).
+5. A service account cannot complete interactive verification for `sc-domain:` — a human publishes the
    DNS TXT once (or `sites.add` is called by an already-verified principal).
 
 **Not available:** general URL submission (the Indexing API only supports `JobPosting`/`BroadcastEvent`),
@@ -43,7 +46,7 @@ rich-result validation (no public API), query data beyond 16 months, real-time d
 | Read | `summary`, `sqi-history`, `indexing/history`, `indexing/samples`, `search-urls/in-search/history`, `search-urls/events/history`, `search-queries/popular`, `search-queries/all/history`, `diagnostics`, `links/internal/broken`, `sitemaps` |
 | Write | `POST /user/{uid}/hosts/{host}/recrawl/queue` (**W**, hard daily quota), `POST /sitemaps/{id}/recrawl` (**W**), `POST /user-added-sitemaps/` (**W**) |
 | Query data | top **3,000** queries per period, ≤500 per page; **no query × page join** |
-| Latency | ~4 days; the service can return `HOST_NOT_LOADED` / empty history during maintenance |
+| Latency | ~4 days; the service can return `HOST_NOT_LOADED` during maintenance |
 
 **Hard rules**
 
@@ -52,6 +55,13 @@ rich-result validation (no public API), query data beyond 16 months, real-time d
 3. `401` = token dead, `403` = host not verified for this account. Never re-auth on 403.
 4. Recrawl: read `GET /recrawl/quota` first, queue only up to the remaining quota, store task ids.
 5. Percent-encode Cyrillic URLs; send a descriptive `User-Agent` and `Accept: application/json`.
+6. An **empty** indexing or search-URL history is a real answer, not an outage: the host replied,
+   there are simply no buckets or events in the window. It returns `rows: []`, `total: 0` and
+   `limitations: ["empty_history"]`, never `degraded_host`. Only a host-scoped `404` or an explicit
+   `HOST_NOT_LOADED` payload is degraded.
+7. Pagination totals come from explicit grand-total keys only (`total`, `total_queries`,
+   `total_count`). A bare `count` is the size of the current page, so treating it as the total would
+   stop paging early and hide rows.
 
 **Not available via API:** per-URL sitemap error detail, diagnostic recommendation text, Webmaster
 notification settings, Yandex Business card/reviews.
@@ -75,6 +85,10 @@ notification settings, Yandex Business card/reviews.
 4. Goal ids come from `GET /management/v1/counters/{id}/goals` once and are stored in config.
 5. The client uses documented `GET /stat/v1/data` with query parameters. Offline contract
    tests check the method and parameters; live property acceptance still needs owner credentials.
+6. `limit` is the page size, not the result size. The table is walked with `offset` until
+   `total_rows` is reached, a short page arrives, or a cap stops the walk: at most **10,000 rows**
+   and **100 pages** per call. A full page with no `total_rows` is reported as `truncated: true`
+   instead of looking complete; a request without dimensions is treated as a single row.
 
 ## 4. Bing Webmaster + IndexNow
 
@@ -83,6 +97,7 @@ notification settings, Yandex Business card/reviews.
 | Bing API | `https://ssl.bing.com/webmaster/api.svc/json/` — `GetQueryStats`, `GetRankAndTrafficStats`, `GetCrawlIssues`, `SubmitUrlbatch`, `SubmitFeed` |
 | Auth | one API key per user (Bing Webmaster → Settings → API access) |
 | Free quota | free; ~10k URL submits/day/domain, 500 per batch |
+| Freshness | `data_age_days` is the age of the newest dated row in that feed: `Date` for `GetQueryStats`, `DateDetected` for `GetCrawlIssues`. An empty or undated feed reports `0`, which is not proof of freshness. |
 | IndexNow | `https://api.indexnow.org/indexnow` (also `yandex.com/indexnow`), key file `https://host/<key>.txt` (8–128 hex) |
 | Limits | 10k URLs per POST; engines apply their own daily caps; **Google does not participate** |
 
@@ -114,6 +129,21 @@ sessions and key events. Join to GSC on the URL path, not on the query. Threshol
   page text is capped at 20,000 characters; `word_count` is computed from the full visible text.
   Ordinary pages use a 5 MB body budget, while sitemap documents get 50 MB per document and the
   50,000-URL protocol cap.
+* robots.txt patterns are matched linearly (glob segments, not a `.*` regex), so a hostile file
+  cannot trigger exponential backtracking. Patterns are capped at 1,024 characters and paths at
+  4,096. A `429` is not treated as a page answer: the fetcher retries **once**, honouring
+  `Retry-After` (seconds or HTTP-date, clamped to 30 s, 1 s default). A `429` on `robots.txt`
+  itself defers the crawl instead of failing open.
+* Redirect chains are flagged only above **two hops** (`len(chain) - 1 > 2`); a single redirect is
+  normal housekeeping and is not reported. The issue detail carries `hops`.
+* Soft-404 needs two independent signals: a not-found *phrase* in the title (for example
+  "page not found", "страница не найдена") **and** an empty body (under 30 words) or an explicit
+  `404`/`410` marker. A guide titled "How to fix 404 errors" is not a soft 404. A near-empty page
+  without any phrase is reported separately as `thin`.
+* Sitemaps are read same-origin: every `<loc>` and child sitemap must share the site origin
+  (scheme + host + port). Anything else is dropped and reported once as `off_origin_loc`, which
+  the service turns into a warning; it is never fetched. (The reader can widen scope only through
+  an explicit `allow_url` predicate, which the service sets to the site origin.)
 * Crawl scope: the seed and every redirect hop are checked against the start origin
   (scheme + host + port) and `robots.txt` **before** the request is sent; an off-origin or
   disallowed hop is never requested and is reported as `robots_blocked` with a coverage note.

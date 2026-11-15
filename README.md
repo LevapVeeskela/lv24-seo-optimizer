@@ -162,7 +162,7 @@ audit → plan → fix → verify.
 |---|---|
 | **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions |
 | **MCP tools** | 11 tools across GSC, Yandex, crawl, reports and gated writes — see the table below |
-| **CLI** | 17 top-level commands (10 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `mcp` |
+| **CLI** | 17 top-level commands (10 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `mcp`; read commands accept `--strict` to exit `5` on truncated data |
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
 | **Automation** | cron / systemd timer / Windows Task Scheduler generators and a GitHub Actions recipe |
 
@@ -171,8 +171,10 @@ audit → plan → fix → verify.
 Eleven tools, three resources and three prompts. Nine are read-class: seven pure read-only tools that
 never change provider or local state, plus `seo_crawl_site` and `seo_weekly_report`, which persist
 local snapshots and therefore carry `readOnlyHint: false` (they are not destructive). The two
-provider writes require `allow_write=true`, are annotated `destructiveHint: true`, and return
-`WRITE_DISABLED` in 0.5.2 because the write adapters are not wired yet.
+provider writes require `allow_write=true`, are annotated `destructiveHint: true`, and use the same
+two-phase `plan_hash` / `confirm_token` flow and `LV24_SEO_WRITE_SECRET` as the CLI; in this build
+the engine still has no recrawl/sitemap write handler, so every call returns `WRITE_DISABLED` and
+nothing is sent.
 
 | Tool | Kind | `readOnlyHint` | `destructiveHint` | What it does |
 |---|---|---|---|---|
@@ -180,13 +182,13 @@ provider writes require `allow_write=true`, are annotated `destructiveHint: true
 | `gsc_search_analytics` | read | `true` | `false` | GSC query/page/country/device rows |
 | `yandex_query_stats` | read | `true` | `false` | Top Yandex queries for the host |
 | `yandex_indexing_state` | read | `true` | `false` | Indexing history, events and problems |
-| `seo_crawl_site` | read + local state | `false` | `false` | Bounded crawl; stores pages and issues |
+| `seo_crawl_site` | read + local state | `false` | `false` | Bounded crawl; stores pages and issues (off-loop, 600 s budget) |
 | `seo_weekly_report` | read + local state | `false` | `false` | Weekly digest; stores a report snapshot |
 | `seo_report_diff` | read | `true` | `false` | Diff two stored weekly snapshots |
 | `seo_indexing_triage` | read | `true` | `false` | Group indexing problems into an action list |
 | `seo_opportunities` | read | `true` | `false` | Striking-distance and decay opportunities |
-| `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (gated; `WRITE_DISABLED` in 0.5.2) |
-| `seo_sitemap_submit` | write | `false` | `true` | Submit or delete a sitemap (gated; `WRITE_DISABLED` in 0.5.2) |
+| `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (two-phase gate; `WRITE_DISABLED` in this build) |
+| `seo_sitemap_submit` | write | `false` | `true` | Submit or delete a sitemap (two-phase gate; `WRITE_DISABLED` in this build) |
 
 Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `weekly_seo_review`,
 `indexing_triage`, `content_opportunities`. The full inputs, outputs and limitations are in

@@ -7,10 +7,17 @@ Output envelope (`meta.version` is the package version, e.g. `0.1.2`):
 { "ok": true, "data": {}, "meta": { "version": "0.1.2", "duration_ms": 812 }, "warnings": [] }
 ```
 
-Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` partial · `1` unexpected.
+Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` strict truncation · `1` unexpected.
 
 `--json` makes the command print exactly one envelope. Without it you get a short human summary on
 stdout; no ANSI colours.
+
+`--strict` is available on the read commands (`stats`, `gsc query`, `yandex queries`,
+`yandex indexing`, `crawl`, `report weekly`, `report diff`). It always sets `meta.strict: true`;
+when the payload is also truncated, the command exits `5` and `meta.limitations` explains what is
+missing (a generic `truncated: …` note is added when the provider did not name a limitation).
+Complete data still exits `0`, and without `--strict` truncation stays `meta.truncated` with exit
+`0`. Use it as a CI gate when a capped answer must fail the build.
 
 ## Setup
 
@@ -24,10 +31,13 @@ lv24-seo properties [--json]                  # provider -> target + token prese
 
 `init` refuses to overwrite an existing `seo.toml` unless `--force` is passed.
 
-`doctor --json` reports `meta.data_dir` and `meta.data_dir_source` (`config` when the effective
-directory is absolute, `working directory` when it is relative) and adds a warning when a relative
-directory is ambiguous next to a config file. A relative directory does not fail the check; see
-[configuration](config.md#data-directory). `doctor` makes no network calls.
+`doctor --json` reports `meta.data_dir`, `meta.data_dir_source` (`config` when the effective
+directory is absolute, `working directory` when it is relative) and `meta.data_dir_declared`.
+A relative directory does not fail the check; see
+[configuration](config.md#data-directory). When a data directory **is declared** (a config file
+resolves or `LV24_SEO_DATA_DIR` is set), the `data_dir` check becomes fatal: a missing or unwritable
+directory returns `ok: false` with `meta.healthy: false` and exit `1`, instead of a green
+`healthy: true`. `doctor` makes no network calls.
 
 ## Authentication
 
@@ -44,21 +54,26 @@ lv24-seo auth logout --provider <name>
 ## Data
 
 ```bash
-lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 [--dimensions query,page] [--limit 100]
-lv24-seo yandex queries [--limit 100] [--json]
-lv24-seo yandex indexing [--json]
-lv24-seo crawl [--start URL] [--max-urls 500] [--json]
+lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 [--dimensions query,page] [--limit 100] [--strict]
+lv24-seo yandex queries [--limit 100] [--strict] [--json]
+lv24-seo yandex indexing [--strict] [--json]
+lv24-seo crawl [--start URL] [--max-urls 500] [--strict] [--json]
 ```
 
 GSC needs explicit `--start/--end` (there is no `--days` shorthand and no `--property`
 override — the property comes from `seo.toml`). A GSC page that exactly fills the row cap is reported
 as `truncated: true` with `rows_cap_50000` (default cap) or a caller-cap warning: a full page is not
-proof that no row exists behind the cap, so an exact-cap result is never claimed complete.
+proof that no row exists behind the cap, so an exact-cap result is never claimed complete. A
+truncated GSC result also omits `total` (`null`) — an exact count next to `truncated: true` would
+read as a complete answer. `data_age_days` is floored at the documented 3-day lag.
 
 `crawl` respects `robots.txt`, follows same-host links breadth-first, runs all rules and stores
 pages/issues in SQLite when a store is configured. A sitemap that fails to load reports only the
 exception type in warnings and `limitations[]` — never the URL or query string, which can carry a
-token.
+token. Redirect chains are flagged only above two hops; a soft 404 needs a not-found phrase plus an
+empty body or an explicit `404`/`410` marker; robots patterns are matched linearly; a `429` is
+retried once with `Retry-After`; sitemap `<loc>` values outside the site are reported as
+`off_origin_loc`. Details in [data sources](data-sources.md#7-own-crawl-and-logs).
 
 `crawl` also returns `data.sitemap_coverage`: the sitemap (what the site advertises) compared
 with what the crawl saw, in six buckets — `unlinked` (in the sitemap, OK, but no crawled page
@@ -74,7 +89,7 @@ characters (`word_count` stays exact), and sitemap documents get a 50 MB body bu
 ## Dashboard stats
 
 ```bash
-lv24-seo stats [--days 7] [--lag-days 2] [--json]
+lv24-seo stats [--days 7] [--lag-days 2] [--strict] [--json]
 ```
 
 Read-only snapshot for the desktop dashboard. It never writes snapshots, pages or issues and does
@@ -131,7 +146,7 @@ the equally long window immediately before it.
 ## Reports
 
 ```bash
-lv24-seo report weekly [--days 7] [--lag-days 2] [--send] [--out reports/] [--json]
+lv24-seo report weekly [--days 7] [--lag-days 2] [--send] [--out reports/] [--strict] [--json]
 ```
 
 - `--days` current window (1..3660; larger values fail with `INVALID_INPUT`), `--lag-days`
@@ -154,7 +169,7 @@ material gate runs first, so with `only_on_change` enabled a pure locale switch 
 suppressed when the period has no material change.
 
 ```bash
-lv24-seo report diff [--base START..END] [--head START..END] [--markdown] [--json]
+lv24-seo report diff [--base START..END] [--head START..END] [--markdown] [--strict] [--json]
 ```
 
 Diffs two **stored** weekly snapshots (default: the two newest periods) without calling any
@@ -162,7 +177,10 @@ provider: headline metric changes, issue counts per severity, opportunities adde
 limitations added/lifted. A metric present in only one snapshot is listed as unknown (never
 zero), and `comparable`/`meta.complete` is `false` when either snapshot had no headline
 comparison or the period lengths differ. `--markdown` prints only GitHub-flavoured Markdown for a
-PR comment or CI summary; warnings go to stderr, so stdout stays valid Markdown. Output is
+PR comment or CI summary; warnings go to stderr, so stdout stays valid Markdown. Every value that
+comes from provider data (queries, pages, property ids, limitation text) is Markdown-escaped, so a
+crawled title cannot inject a link, emphasis or `@` mention. The Markdown path exits with the
+envelope code, so `--strict` on truncated data exits `5` after printing the diff. Output is
 deterministic so it diffs cleanly between runs. Needs `init` and at least two `report weekly` runs
 for different periods.
 
@@ -184,6 +202,12 @@ and data directory.
 
 Only simple cron expressions (`M H * * *` and `M H * * DOW`) can be converted to systemd/Windows.
 
+`schedule install --target cron` replaces only its own `# >>> lv24-seo:<job> >>>` block. If that
+block lost its end marker, repair is conservative: only lines that look like lv24-seo entries
+(`CRON_TZ=` near the top, a `# lv24-seo` comment, or a cron command invoking `lv24-seo`) are
+removed, every other line is kept, and the envelope warns that the crontab was repaired so you can
+review `crontab -l`. A terminated block is still replaced as a whole.
+
 ## Agent integration
 
 ```bash
@@ -201,9 +225,16 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
   IndexNow actually submits; GSC sitemap submit and Yandex recrawl refuse with `WRITE_DISABLED`
   when the provider path is not wired, instead of pretending. With an initialised workspace the
   apply uses the SQLite idempotency ledger, so replaying the same token returns
-  `status: skipped` / `reason: duplicate` and the provider is called once. Without a workspace the
-  command still applies but warns that replay protection is off for the token's five-minute
-  lifetime; a dry run opens no ledger and creates no database.
+  `status: skipped` / `reason: duplicate` and the provider is called once. The ledger lives in the
+  workspace selected by `--config`, so `--config /srv/site/seo.toml` opens `/srv/site/data` even
+  when the shell is elsewhere; without a workspace the command still applies but warns that replay
+  protection is off for the token's five-minute lifetime. A dry run opens no ledger and creates no
+  database.
+- Storage failures are typed, not generic `INTERNAL`: `STORE_LOCKED` (another process holds the
+  write lock; `retryable: true`), `STORE_CORRUPT` (the file is not SQLite; a byte copy is preserved
+  as `<db>.corrupt-<utc>` and `detail.backup_path` names it) and `STORE_UNAVAILABLE` (permissions,
+  missing directory, disk). All three carry a `next_action`; see
+  [troubleshooting](guides/troubleshooting.md#store_locked--store_corrupt--store_unavailable).
 - Logging is opt-in: `LV24_SEO_LOG_LEVEL=INFO` (or `DEBUG`, `WARNING`, …) makes the CLI and
   `lv24-seo mcp serve` install the redacting handler. Unset means the process leaves logging to its
   caller; importing the library or calling `create_server()` never replaces root handlers. Output is
