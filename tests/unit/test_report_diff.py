@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -284,3 +285,22 @@ def test_mcp_tool_diffs_stored_snapshots_on_the_owner_loop(tmp_path: Path) -> No
     assert clicks["pct_delta"] == 50.0
     assert bad_envelope["ok"] is False
     assert bad_envelope["error"]["code"] == "INVALID_INPUT"
+
+
+def test_markdown_escapes_opportunity_and_limitation_text() -> None:
+    base = _snapshot("2026-10-26", "2026-11-01")
+    head = _snapshot(
+        "2026-11-02",
+        "2026-11-08",
+        opportunities=[("decay", "[click](https://evil.example) @team", "/a_b")],
+        limitations=["@here [docs](https://evil.example) *urgent*"],
+    )
+
+    markdown = render_diff_markdown(diff_snapshots(base, head))
+
+    assert "](https://evil.example)" not in markdown
+    assert re.search(r"(?<!\\)@team", markdown) is None
+    assert re.search(r"(?<!\\)@here", markdown) is None
+    assert "*urgent*" not in markdown
+    assert "\\[click\\]" in markdown
+    assert "/a\\_b" in markdown

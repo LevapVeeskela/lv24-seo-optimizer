@@ -17,6 +17,10 @@ A host-scoped call that finds no loaded data returns an empty :class:`ProviderRe
 temporarily unavailable host is a data state, not a tool failure. Yandex answers ``404`` both
 for an unknown ``host_id`` and for a host that is not loaded yet, and the shared HTTP layer does
 not expose error bodies, so a host-scoped ``404`` is also reported as degraded.
+
+An *empty* indexing or search-URL history is different: the host answered, so the list is
+genuinely empty. Those results carry :data:`~lv24_seo.providers.base.EMPTY_HISTORY` and
+``total=0`` instead of pretending the host is down.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from lv24_seo.core.errors import (
 from lv24_seo.core.http import HttpClient
 from lv24_seo.providers.base import (
     DEGRADED_HOST,
+    EMPTY_HISTORY,
     NO_PER_URL_SITEMAP_ERRORS,
     NO_QUERY_PAGE_JOIN,
     TOP_3000_QUERIES,
@@ -139,7 +144,12 @@ class YandexWebmasterClient:
         return _result(property_id=scope, rows=[row], fetched_at=fetched_at)
 
     def indexing_history(self, host_id: str) -> ProviderResult[Row]:
-        """Daily indexing buckets (date plus HTTP status counters)."""
+        """Daily indexing buckets (date plus HTTP status counters).
+
+        An empty history means the host is loaded but has no daily buckets yet; that is an
+        empty answer with the :data:`~lv24_seo.providers.base.EMPTY_HISTORY` limitation, not a
+        degraded host. Only a ``404`` or an explicit ``HOST_NOT_LOADED`` payload is degraded.
+        """
         scope = _require_host_id(host_id)
         fetched_at = now_utc()
         payload, missing = self._get_host_scoped(
@@ -150,11 +160,16 @@ class YandexWebmasterClient:
 
         rows = _copy_rows(_rows_from(payload, "history", "indexing_history"))
         if not rows:
-            return _degraded(scope, fetched_at)
+            return _empty_history(scope, fetched_at)
         return _result(property_id=scope, rows=rows, fetched_at=fetched_at)
 
     def search_urls_events(self, host_id: str) -> ProviderResult[Row]:
-        """History of search-URL events (pages entering or leaving the index)."""
+        """History of search-URL events (pages entering or leaving the index).
+
+        An empty event list is a real answer: the host is loaded and nothing was recorded in
+        the window. It is reported with the ``EMPTY_HISTORY`` limitation, never as a degraded
+        host.
+        """
         scope = _require_host_id(host_id)
         fetched_at = now_utc()
         payload, missing = self._get_host_scoped(
@@ -165,7 +180,7 @@ class YandexWebmasterClient:
 
         rows = _copy_rows(_rows_from(payload, "events", "history", "search_urls_events"))
         if not rows:
-            return _degraded(scope, fetched_at)
+            return _empty_history(scope, fetched_at)
         return _result(property_id=scope, rows=rows, fetched_at=fetched_at)
 
     def diagnostics(self, host_id: str) -> ProviderResult[Row]:
@@ -357,6 +372,19 @@ def _degraded(property_id: str, fetched_at: datetime) -> ProviderResult[Row]:
         data_age_days=0,
         limitations=(DEGRADED_HOST,),
         warnings=(HOST_NOT_LOADED_WARNING,),
+    )
+
+
+def _empty_history(property_id: str, fetched_at: datetime) -> ProviderResult[Row]:
+    """A loaded host with no recorded buckets: empty, complete and labelled as such."""
+    return ProviderResult(
+        source=SOURCE,
+        property_id=property_id,
+        fetched_at=fetched_at,
+        data_age_days=0,
+        rows=[],
+        total=0,
+        limitations=(EMPTY_HISTORY,),
     )
 
 
@@ -567,8 +595,13 @@ def _indicator(
 
 
 def _reported_total(payload: object) -> int | None:
+    """Grand total reported by the payload.
+
+    Only explicit grand-total keys count. A bare ``count`` is the size of *this page* in the
+    Yandex Webmaster API, and treating it as the total stops pagination early and hides rows.
+    """
     body = _mapping(payload)
-    for key in ("total", "total_queries", "total_count", "count"):
+    for key in ("total", "total_queries", "total_count"):
         total = _as_int(body.get(key))
         if total is not None:
             return total

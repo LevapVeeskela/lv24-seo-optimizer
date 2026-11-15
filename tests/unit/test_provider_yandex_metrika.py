@@ -219,6 +219,142 @@ def test_stat_data_without_total_rows_is_not_truncated() -> None:
     assert result.warnings == ()
 
 
+def test_stat_data_pages_by_offset_up_to_total_rows() -> None:
+    seen: list[tuple[int, int]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        form = parse_qs(request.url.query.decode())
+        offset = int(form["offset"][0])
+        limit = int(form["limit"][0])
+        seen.append((offset, limit))
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"dimensions": [{"name": f"/{index}"}], "metrics": [float(index)]}
+                    for index in range(offset, min(offset + limit, 5))
+                ],
+                "total_rows": 5,
+                "sampled": offset > 0,
+            },
+        )
+
+    result = _metrika(handler).stat_data(
+        counter=123456,
+        metrics=["ym:s:visits"],
+        dimensions=["ym:s:startURLPath"],
+        date1=date(2026, 11, 1),
+        date2=date(2026, 11, 7),
+        limit=2,
+    )
+
+    assert seen == [(0, 2), (2, 2), (4, 2)]
+    assert [row["startURLPath"] for row in result.rows] == ["/0", "/1", "/2", "/3", "/4"]
+    assert result.total == 5
+    assert result.truncated is False
+    # Sampling seen on any page labels the whole table.
+    assert result.limitations == (SAMPLED,)
+
+
+def test_stat_data_full_page_without_total_rows_is_truncated() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"dimensions": [{"name": "/a"}], "metrics": [1]},
+                    {"dimensions": [{"name": "/b"}], "metrics": [2]},
+                ],
+            },
+        )
+
+    result = _metrika(handler).stat_data(
+        counter=123456,
+        metrics=["ym:s:visits"],
+        dimensions=["ym:s:startURLPath"],
+        date1=date(2026, 11, 1),
+        date2=date(2026, 11, 7),
+        limit=2,
+    )
+
+    assert calls == 1
+    assert len(result.rows) == 2
+    assert result.total is None
+    assert result.truncated is True
+
+
+def test_stat_data_respects_the_row_cap() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        form = parse_qs(request.url.query.decode())
+        offset = int(form["offset"][0])
+        limit = int(form["limit"][0])
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"dimensions": [{"name": f"/{index}"}], "metrics": [1]}
+                    for index in range(offset, min(offset + limit, 10))
+                ],
+                "total_rows": 10,
+            },
+        )
+
+    result = _metrika(handler).stat_data(
+        counter=123456,
+        metrics=["ym:s:visits"],
+        dimensions=["ym:s:startURLPath"],
+        date1=date(2026, 11, 1),
+        date2=date(2026, 11, 7),
+        limit=2,
+        max_rows=5,
+    )
+
+    assert len(result.rows) == 5
+    assert result.total == 10
+    assert result.truncated is True
+
+
+def test_stat_data_bounds_the_page_walk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tiny page size must not turn one call into an unbounded request loop."""
+    monkeypatch.setattr(metrika_client_module, "_MAX_STAT_PAGES", 3)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        form = parse_qs(request.url.query.decode())
+        offset = int(form["offset"][0])
+        limit = int(form["limit"][0])
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"dimensions": [{"name": f"/{index}"}], "metrics": [1]}
+                    for index in range(offset, offset + limit)
+                ],
+                "total_rows": 1000,
+            },
+        )
+
+    result = _metrika(handler).stat_data(
+        counter=123456,
+        metrics=["ym:s:visits"],
+        dimensions=["ym:s:startURLPath"],
+        date1=date(2026, 11, 1),
+        date2=date(2026, 11, 7),
+        limit=2,
+    )
+
+    assert calls == 3
+    assert len(result.rows) == 6
+    assert result.total == 1000
+    assert result.truncated is True
+
+
 def test_data_age_is_measured_from_the_end_of_date2(monkeypatch: pytest.MonkeyPatch) -> None:
     fixed = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
     monkeypatch.setattr(metrika_client_module, "now_utc", lambda: fixed)

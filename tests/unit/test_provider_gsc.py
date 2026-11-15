@@ -219,7 +219,9 @@ def test_search_analytics_paginates_and_marks_truncated() -> None:
     assert [body["rowLimit"] for body in bodies] == [2, 2]
     assert [row["query"] for row in result.rows] == ["one", "two", "three"]
     assert result.truncated is True
-    assert result.total == 3
+    # A capped answer has no grand total: an exact count next to truncated=true would read
+    # as full coverage.
+    assert result.total is None
     assert ROWS_CAP_50000 not in result.limitations
     assert result.warnings
     assert "3 rows" in result.warnings[0]
@@ -261,7 +263,7 @@ def test_search_analytics_full_page_at_the_cap_is_reported_as_capped() -> None:
     )
 
     assert calls == 1
-    assert result.total == 3
+    assert result.total is None
     assert result.truncated is True
     assert result.limitations == ()
     assert result.warnings
@@ -299,6 +301,27 @@ def test_search_analytics_stops_on_short_batch() -> None:
     assert calls == 1
     assert len(result.rows) == 1
     assert result.truncated is False
+    assert result.total == 1
+
+
+def test_search_data_age_never_claims_a_window_fresher_than_the_gsc_lag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GSC data is 2-3 days behind; a window ending today must not report age 0."""
+    fetched_at = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(gsc_client, "now_utc", lambda: fetched_at)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"rows": []})
+
+    client = _gsc(handler)
+    fresh = client.search_analytics(start_date=date(2026, 11, 9), end_date=date(2026, 11, 9))
+    old = client.search_analytics(start_date=date(2026, 11, 1), end_date=date(2026, 11, 1))
+
+    assert gsc_client.GSC_REPORT_LAG_DAYS >= 2
+    assert fresh.data_age_days == gsc_client.GSC_REPORT_LAG_DAYS
+    # A window that is already older than the lag keeps its measured age.
+    assert old.data_age_days == 8
 
 
 def test_inspect_url_maps_inspection_result() -> None:

@@ -28,6 +28,8 @@ import socket
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC
+from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from itertools import pairwise
 from types import TracebackType
@@ -45,6 +47,18 @@ _DEFAULT_MAX_REDIRECTS = 5
 _DEFAULT_MAX_BYTES = 5_000_000
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 _RULE_FIELDS = frozenset({"disallow", "allow", "crawl-delay"})
+
+# Rate limiting: one bounded retry that honours Retry-After. A crawler that hammers a 429 is
+# both rude and likely to be blocked for longer than the header asked for.
+_MAX_RATE_LIMIT_RETRIES = 1
+_DEFAULT_RATE_LIMIT_DELAY = 1.0
+_MAX_RETRY_AFTER_SECONDS = 30.0
+
+# robots.txt patterns are attacker-controlled. Matching is linear (no regex backtracking) and
+# the pattern is capped so a hostile file cannot burn CPU: consecutive ``*`` collapse to one
+# and the body is truncated at a fixed length. Real robots rules are far shorter than the cap.
+_MAX_ROBOTS_PATTERN_LENGTH = 1024
+_MAX_ROBOTS_PATH_LENGTH = 4096
 
 
 @dataclass(slots=True)
@@ -165,6 +179,7 @@ class Fetcher:
         started = time.perf_counter()
         chain = [url]
         current = url
+        rate_limit_retries = 0
 
         initial = _http_url(url)
         if initial is None:
@@ -189,6 +204,13 @@ class Fetcher:
                 with self._client.stream(
                     "GET", request_url, headers=headers, extensions=extensions
                 ) as response:
+                    if response.status_code == 429 and rate_limit_retries < _MAX_RATE_LIMIT_RETRIES:
+                        # Honour Retry-After instead of treating a throttle as a page answer.
+                        # The response is closed by the context manager; the retry re-enters.
+                        rate_limit_retries += 1
+                        self._last_end = time.perf_counter()
+                        self._sleep(_retry_after_seconds(response.headers.get("Retry-After")))
+                        continue
                     if response.is_redirect:
                         target = _resolve_redirect(current, response.headers["Location"])
                         if target is None:
@@ -238,14 +260,18 @@ class Fetcher:
     def fetch_robots(self, base_url: str) -> RobotsPolicy:
         """Load ``{base_url}/robots.txt``.
 
-        A missing robots.txt (404/other 4xx) allows everything. A 5xx status or a
-        network-level failure *defers* the crawl (RFC 9309 §2.3.1: an unavailable
+        A missing robots.txt (404/other 4xx) allows everything. A 5xx status, a ``429``
+        throttle or a network-level failure *defers* the crawl (RFC 9309 §2.3.1: an unavailable
         robots.txt must not fail open), reported via ``RobotsPolicy.deferred``.
         """
         robots_url = f"{base_url.strip().rstrip('/')}/robots.txt"
         result = self.fetch(robots_url)
         if result.status != 200:
-            if result.status >= 500 or (result.status == 0 and result.error != "blocked_private"):
+            if (
+                result.status == 429
+                or result.status >= 500
+                or (result.status == 0 and result.error != "blocked_private")
+            ):
                 return RobotsPolicy(disallow=["/"], allow=[], sitemaps=[], deferred=True)
             return RobotsPolicy(disallow=[], allow=[], sitemaps=[])
         text = result.body.decode("utf-8", errors="replace")
@@ -487,16 +513,77 @@ def _rule_path(raw: str) -> str:
 
 
 def _matches(pattern: str, path: str) -> bool:
-    return _rule_regex(pattern).match(path) is not None
+    body, anchored = _robots_pattern(pattern)
+    return _glob_match(body, path[:_MAX_ROBOTS_PATH_LENGTH], anchored=anchored)
 
 
 @lru_cache(maxsize=512)
-def _rule_regex(pattern: str) -> re.Pattern[str]:
-    """Translate a robots pattern (``*`` and trailing ``$``) into a regex."""
+def _robots_pattern(pattern: str) -> tuple[str, bool]:
+    """Normalise a robots pattern for the linear matcher; ``(body, anchored)``.
+
+    ``$`` anchors the end. Consecutive ``*`` are equivalent in glob semantics and collapse to
+    one, and the body is truncated to :data:`_MAX_ROBOTS_PATTERN_LENGTH`: both cuts can only
+    broaden a prefix rule, so an oversized hostile pattern cannot fail open.
+    """
     end_anchor = pattern.endswith("$")
     body = pattern[:-1] if end_anchor else pattern
-    translated = "".join(".*" if char == "*" else re.escape(char) for char in body)
-    return re.compile(f"^{translated}{'$' if end_anchor else ''}")
+    collapsed = re.sub(r"\*+", "*", body)
+    return collapsed[:_MAX_ROBOTS_PATTERN_LENGTH], end_anchor
+
+
+def _glob_match(pattern: str, text: str, *, anchored: bool) -> bool:
+    """Glob match with ``*`` only; the pattern is a prefix match unless ``anchored``.
+
+    Implemented as an ordered search for the literal segments between wildcards, so the cost
+    is ``O(segments * len(text))`` at C speed and never the exponential backtracking a
+    ``.*``-per-star regex suffers on a hostile pattern. Greedy earliest matches are optimal
+    for ``*``-only patterns because wildcards cannot overlap.
+    """
+    segments = pattern.split("*")
+    position = 0
+    if not pattern.startswith("*"):
+        head = segments[0]
+        if not text.startswith(head):
+            return False
+        position = len(head)
+        segments = segments[1:]
+    if not segments:
+        # No wildcard at all: the head matched as a prefix; an anchor requires the full text.
+        return not anchored or len(text) == position
+    for segment in segments[:-1]:
+        found = text.find(segment, position)
+        if found < 0:
+            return False
+        position = found + len(segment)
+    tail = segments[-1]
+    if anchored:
+        start = len(text) - len(tail)
+        return start >= position and text.endswith(tail)
+    return text.find(tail, position) >= 0
+
+
+def _retry_after_seconds(value: str | None) -> float:
+    """Delay requested by ``Retry-After`` (seconds or HTTP-date), bounded and defaulted."""
+    if value is None:
+        return _DEFAULT_RATE_LIMIT_DELAY
+    raw = value.strip()
+    if not raw:
+        return _DEFAULT_RATE_LIMIT_DELAY
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = None
+    if seconds is None:
+        try:
+            when = parsedate_to_datetime(raw)
+        except (TypeError, ValueError):
+            return _DEFAULT_RATE_LIMIT_DELAY
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        seconds = when.timestamp() - time.time()
+    if not math.isfinite(seconds):
+        return _DEFAULT_RATE_LIMIT_DELAY
+    return min(max(0.0, seconds), _MAX_RETRY_AFTER_SECONDS)
 
 
 def _http_url(url: str) -> httpx.URL | None:

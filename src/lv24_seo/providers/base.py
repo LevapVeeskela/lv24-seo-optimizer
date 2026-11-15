@@ -26,6 +26,7 @@ NO_PER_URL_SITEMAP_ERRORS = "no_per_url_sitemap_errors"
 TOKEN_EXPIRING = "token_expiring"  # noqa: S105 - a limitation code, not a secret
 PAID_PROVIDER = "paid_provider"
 PARTIAL_RESPONSE = "partial_response"
+EMPTY_HISTORY = "empty_history"
 
 # Canonical source identifiers. Collectors key ``sources`` by these, the store
 # persists them verbatim, and the report layer maps them to engine sections.

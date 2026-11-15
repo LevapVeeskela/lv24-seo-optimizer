@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from lv24_seo.core.errors import AUTH_REQUIRED, INVALID_INPUT, SeoError
 from lv24_seo.core.http import HttpClient
 from lv24_seo.providers.bing import BingClient, indexnow_submit
+from lv24_seo.providers.bing import client as bing_client_module
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -256,3 +258,72 @@ def test_indexnow_requires_a_key() -> None:
         indexnow_submit(host="example.com", key="  ", urls=["https://example.com/a"])
 
     assert caught.value.code == AUTH_REQUIRED
+
+
+def _wcf_date(value: datetime) -> str:
+    """Bing/WCF JSON date: milliseconds since the Unix epoch."""
+    return f"/Date({int(value.timestamp() * 1000)})/"
+
+
+def test_query_stats_data_age_comes_from_the_newest_row_date(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetched_at = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(bing_client_module, "now_utc", lambda: fetched_at)
+    newest = datetime(2026, 11, 10, 0, 0, tzinfo=UTC)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "d": [
+                    {
+                        "Query": "old",
+                        "Clicks": 1,
+                        "Date": _wcf_date(datetime(2026, 10, 1, tzinfo=UTC)),
+                    },
+                    {"Query": "new", "Clicks": 2, "Date": _wcf_date(newest)},
+                ]
+            },
+        )
+
+    result = _bing(handler).query_stats()
+
+    # 2026-11-10T00:00Z -> 2026-11-15T12:00Z is five whole days; a hardcoded 0 would
+    # present week-old query data as fresh.
+    assert result.data_age_days == 5
+    assert result.total == 2
+
+
+def test_query_stats_without_dates_is_zero_not_invented(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetched_at = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(bing_client_module, "now_utc", lambda: fetched_at)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"d": [{"Query": "seo", "Clicks": 1}]})
+
+    assert _bing(handler).query_stats().data_age_days == 0
+
+
+def test_crawl_issues_data_age_comes_from_the_newest_detection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetched_at = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(bing_client_module, "now_utc", lambda: fetched_at)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "d": [
+                    {"Url": "https://example.com/a", "DateDetected": "2026-10-01T10:00:00"},
+                    {"Url": "https://example.com/b", "DateDetected": "2026-11-13T10:00:00"},
+                ]
+            },
+        )
+
+    result = _bing(handler).crawl_issues()
+
+    assert result.data_age_days == 2

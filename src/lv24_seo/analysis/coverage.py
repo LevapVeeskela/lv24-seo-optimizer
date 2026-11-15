@@ -81,6 +81,7 @@ def sitemap_crawl_diff(
 ) -> CoverageDiff:
     """Compare the advertised sitemap inventory with crawl observations."""
     advertised = _ordered_unique(normalize_url(url) for url in sitemap_urls)
+    crawled = _ordered_unique(normalize_url(page.url) for page in pages)
     by_url = _pages_by_url(pages)
     linked = _linked_targets(pages)
     in_sitemap = set(advertised)
@@ -102,7 +103,8 @@ def sitemap_crawl_diff(
             found["unlinked"].append(url)
 
     if advertised:
-        for url, page in sorted(by_url.items()):
+        for url in crawled:
+            page = by_url[url]
             if url in in_sitemap or not _indexable_html(page):
                 continue
             final = normalize_url(page.final_url or page.url)
@@ -110,7 +112,7 @@ def sitemap_crawl_diff(
                 continue
             found["missing_from_sitemap"].append(url)
 
-    diff = CoverageDiff(sitemap_urls=len(advertised), crawled_urls=len(by_url))
+    diff = CoverageDiff(sitemap_urls=len(advertised), crawled_urls=len(crawled))
     capped = max(0, limit)
     for name in BUCKETS:
         values = sorted(found[name])
@@ -173,9 +175,19 @@ def _ordered_unique(values: Iterable[str]) -> list[str]:
 
 
 def _pages_by_url(pages: Sequence[PageData]) -> dict[str, PageData]:
+    """Index every page by its requested URL and by its final URL after redirects.
+
+    A sitemap lists the URL it advertises, while the crawl records where that URL ended up.
+    Indexing only ``page.url`` makes a sitemap entry for the redirect target look unvisited;
+    indexing both keeps one page addressable by either spelling. The requested URL wins when
+    two pages collide.
+    """
     by_url: dict[str, PageData] = {}
     for page in pages:
         by_url.setdefault(normalize_url(page.url), page)
+    for page in pages:
+        if page.final_url:
+            by_url.setdefault(normalize_url(page.final_url), page)
     return by_url
 
 

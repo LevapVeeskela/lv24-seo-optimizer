@@ -35,6 +35,7 @@ from lv24_seo.report.i18n import translator
 from lv24_seo.report.models import Report, ReportSection
 
 __all__ = [
+    "escape_markdown",
     "render_email_text",
     "render_html",
     "render_markdown",
@@ -186,6 +187,7 @@ _LIMITATION_KEYS: dict[str, str] = {
     "token_expiring": "notes.limitation.token_expiring",
     "paid_provider": "notes.limitation.paid_provider",
     "partial_response": "notes.limitation.partial_response",
+    "empty_history": "notes.limitation.empty_history",
 }
 # Builder warnings that are system statements, not provider prose. They are
 # localized; anything else stays verbatim.
@@ -313,6 +315,7 @@ _ENGLISH: dict[str, str] = {
     "notes.limitation.token_expiring": "The provider token expires soon.",
     "notes.limitation.paid_provider": "This provider requires a paid plan.",
     "notes.limitation.partial_response": "The provider returned a partial response.",
+    "notes.limitation.empty_history": "The provider has no history for this window yet.",
     "warning.no_metrics": "No metrics for either period; delta rows are all zero.",
     "warning.previous_no_metrics": (
         "The previous period has no metrics, so deltas cannot be significant."
@@ -1859,9 +1862,36 @@ def _period(report: Report) -> str:
     return start or end
 
 
+# Characters that turn report data into Markdown syntax: a query or URL could otherwise
+# inject a link, emphasis, a code span or a GitHub @mention into a PR comment. Backslashes
+# are escaped first (as their own characters) so the output stays literal when re-rendered.
+_MARKDOWN_ESCAPES = str.maketrans(
+    {
+        "\\": "\\\\",
+        "`": "\\`",
+        "*": "\\*",
+        "_": "\\_",
+        "[": "\\[",
+        "]": "\\]",
+        "(": "\\(",
+        ")": "\\)",
+        "@": "\\@",
+    }
+)
+
+
+def escape_markdown(value: object) -> str:
+    """Escape Markdown control characters in untrusted text.
+
+    ``[]()*_@`` and backticks are escaped; angle brackets are handled separately by
+    :func:`_markdown_text` so raw HTML never survives either.
+    """
+    return _stringify(value).translate(_MARKDOWN_ESCAPES)
+
+
 def _markdown_text(value: Any) -> str:
-    """Escape angle brackets so report data cannot become raw HTML."""
-    return _stringify(value).replace(">", "&gt;").replace("<", "&lt;")
+    """Escape angle brackets and Markdown syntax so report data stays literal text."""
+    return escape_markdown(value).replace(">", "&gt;").replace("<", "&lt;")
 
 
 def _markdown_cell(value: Any) -> str:

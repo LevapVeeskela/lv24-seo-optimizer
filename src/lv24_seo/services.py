@@ -54,7 +54,7 @@ from lv24_seo.crawl.html import parse_html
 from lv24_seo.crawl.models import FetchResult, Issue, PageData, RuleContext
 from lv24_seo.crawl.rules import run_all
 from lv24_seo.crawl.sitemap import MAX_BYTES as SITEMAP_MAX_BYTES
-from lv24_seo.crawl.sitemap import SitemapReader
+from lv24_seo.crawl.sitemap import OFF_ORIGIN_LOC, SitemapReader
 from lv24_seo.providers.base import (
     SOURCE_BING,
     SOURCE_CRUX,
@@ -1116,7 +1116,13 @@ class SeoService:
                 kwargs["max_bytes"] = SITEMAP_MAX_BYTES
             return fetcher.fetch(url, **kwargs)
 
-        reader = SitemapReader(_scoped_fetch, max_urls=max_urls, max_depth=2, max_docs=20)
+        reader = SitemapReader(
+            _scoped_fetch,
+            allow_url=_sitemap_in_scope,
+            max_urls=max_urls,
+            max_depth=2,
+            max_docs=20,
+        )
         collected: list[str] = []
         truncated = False
         reader_errors: list[str] = []
@@ -1136,6 +1142,10 @@ class SeoService:
                     continue
                 if error == "robots_blocked":
                     notes.append(f"off-origin sitemap target excluded: {candidate}")
+                    continue
+                if error == OFF_ORIGIN_LOC:
+                    # A <loc> outside the site is a scope note, not a fetch failure.
+                    notes.append(f"off-origin sitemap loc excluded: {candidate}")
                     continue
                 reader_errors.append(f"{candidate}: {error}")
             truncated = truncated or doc.truncated

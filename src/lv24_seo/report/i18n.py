@@ -208,6 +208,7 @@ _EN_CATALOG: dict[str, str] = {
     "notes.limitation.token_expiring": "The provider token expires soon.",
     "notes.limitation.paid_provider": "This provider requires a paid plan.",
     "notes.limitation.partial_response": "The provider returned a partial response.",
+    "notes.limitation.empty_history": "The provider has no history for this window yet.",
     "warning.title": "Warnings",
     "warning.no_metrics": "No metrics for either period; delta rows are all zero.",
     "warning.previous_no_metrics": (
@@ -356,6 +357,7 @@ _RU_CATALOG: dict[str, str] = {
     "notes.limitation.token_expiring": "Срок действия токена провайдера скоро истекает.",
     "notes.limitation.paid_provider": "Этот провайдер требует платного тарифа.",
     "notes.limitation.partial_response": "Провайдер вернул частичный ответ.",
+    "notes.limitation.empty_history": "У провайдера пока нет истории за это окно.",
     "warning.title": "Предупреждения",
     "warning.no_metrics": "За оба периода нет метрик; строки изменений нулевые.",
     "warning.previous_no_metrics": (
@@ -500,6 +502,7 @@ _ZH_CATALOG: dict[str, str] = {
     "notes.limitation.token_expiring": "提供商令牌即将过期。",
     "notes.limitation.paid_provider": "该提供商需要付费方案。",
     "notes.limitation.partial_response": "提供商返回了部分响应。",
+    "notes.limitation.empty_history": "提供商暂无该时间窗口的历史数据。",
     "warning.title": "警告",
     "warning.no_metrics": "两个周期均无指标，变化行全部为零。",
     "warning.previous_no_metrics": "上一周期没有指标，因此变化无法判定为显著。",

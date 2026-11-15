@@ -12,6 +12,7 @@ from lv24_seo.core.errors import AUTH_INVALID, AUTH_REQUIRED, SeoError
 from lv24_seo.core.http import HttpClient
 from lv24_seo.providers.base import (
     DEGRADED_HOST,
+    EMPTY_HISTORY,
     NO_PER_URL_SITEMAP_ERRORS,
     NO_QUERY_PAGE_JOIN,
     TOP_3000_QUERIES,
@@ -351,12 +352,24 @@ def test_host_scoped_404_returns_degraded_result() -> None:
     assert result.limitations == (DEGRADED_HOST,)
 
 
-def test_empty_history_returns_degraded_result() -> None:
+def test_empty_history_is_empty_not_degraded() -> None:
     result = _client(_with_user({"history": []})).indexing_history(HOST)
 
     assert result.empty is True
-    assert result.warnings == ("host_not_loaded",)
-    assert result.limitations == (DEGRADED_HOST,)
+    assert result.rows == []
+    assert result.total == 0
+    assert result.truncated is False
+    assert result.warnings == ()
+    assert result.limitations == (EMPTY_HISTORY,)
+
+
+def test_empty_search_url_events_are_empty_not_degraded() -> None:
+    result = _client(_with_user({"events": []})).search_urls_events(HOST)
+
+    assert result.empty is True
+    assert result.total == 0
+    assert result.warnings == ()
+    assert result.limitations == (EMPTY_HISTORY,)
 
 
 def test_recrawl_quota_maps_quota_and_keeps_raw_payload() -> None:

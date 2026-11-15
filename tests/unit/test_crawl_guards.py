@@ -7,6 +7,8 @@ explicit resolvers.
 
 from __future__ import annotations
 
+import time
+
 import httpx
 
 from lv24_seo.crawl.fetcher import Fetcher, RobotsPolicy, is_allowed, parse_robots
@@ -197,3 +199,112 @@ def test_graph_reports_confirmed_broken_unvisited_and_failed() -> None:
     assert stats.broken == ["https://example.com/gone"]
     assert stats.unvisited == ["https://example.com/new"]
     assert stats.failed == []
+
+
+def test_robots_wildcard_and_anchor_semantics_stay_correct() -> None:
+    policy = parse_robots(
+        "User-agent: *\nDisallow: /*.pdf$\nAllow: /docs/*.pdf$\nDisallow: /tmp*/x\n"
+    )
+
+    assert is_allowed(policy, "/a.pdf") is False
+    assert is_allowed(policy, "/a.pdf?x=1") is True  # $ anchors before the query string
+    assert is_allowed(policy, "/docs/a.pdf") is True  # longer Allow wins
+    assert is_allowed(policy, "/tmp123/x") is False
+    assert is_allowed(policy, "/tmpx/y") is True
+
+
+def test_hostile_robots_pattern_completes_quickly() -> None:
+    """A star-heavy pattern must not trigger exponential regex backtracking."""
+    hostile = "/*" + "a*" * 200 + "b"
+    policy = parse_robots(f"User-agent: *\nDisallow: {hostile}\n")
+    path = "/" + "a" * 4000
+
+    started = time.perf_counter()
+    allowed = is_allowed(policy, path)
+    elapsed = time.perf_counter() - started
+
+    assert allowed is True  # there is no "b", so the rule does not match
+    assert elapsed < 1.0
+
+
+def test_oversized_robots_pattern_is_capped() -> None:
+    literal = "/" + "a" * 5000
+    policy = parse_robots(f"User-agent: *\nDisallow: {literal}\n")
+
+    assert is_allowed(policy, literal) is False  # truncated to 1024 chars, still a prefix
+    assert is_allowed(policy, "/" + "a" * 1023) is False
+    assert is_allowed(policy, "/b") is True
+
+
+def test_fetcher_honours_retry_after_on_429() -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, headers={"Retry-After": "2"})
+        return httpx.Response(200, text="ok")
+
+    fetcher = Fetcher(
+        transport=httpx.MockTransport(handler),
+        resolver=lambda _host: ["93.184.215.14"],
+        sleep=sleeps.append,
+    )
+    try:
+        result = fetcher.fetch("https://example.com/page")
+    finally:
+        fetcher.close()
+
+    assert result.status == 200
+    assert calls == 2
+    assert sleeps == [2.0]
+
+
+def test_fetcher_caps_retry_after_and_returns_the_throttle() -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, headers={"Retry-After": "9999"})
+
+    fetcher = Fetcher(
+        transport=httpx.MockTransport(handler),
+        resolver=lambda _host: ["93.184.215.14"],
+        sleep=sleeps.append,
+    )
+    try:
+        result = fetcher.fetch("https://example.com/page")
+    finally:
+        fetcher.close()
+
+    assert result.status == 429
+    assert result.error is None
+    assert calls == 2
+    assert sleeps == [30.0]
+
+
+def test_robots_429_defers_instead_of_fail_open() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, headers={"Retry-After": "0"})
+
+    fetcher = Fetcher(
+        transport=httpx.MockTransport(handler),
+        resolver=lambda _host: ["93.184.215.14"],
+        sleep=lambda _seconds: None,
+    )
+    try:
+        policy = fetcher.fetch_robots("https://example.com")
+    finally:
+        fetcher.close()
+
+    assert calls == 2  # one bounded retry, then the throttle is honoured
+    assert policy.deferred is True
+    assert is_allowed(policy, "/") is False

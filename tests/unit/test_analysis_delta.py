@@ -86,36 +86,31 @@ def test_zero_previous_has_no_invented_percentage() -> None:
     assert clicks.direction == "up"
     assert clicks.significant is False
     assert clicks.good is False
-    assert rows["impressions"].pct_delta is None
-    assert rows["impressions"].direction == "flat"
+    # ``impressions`` is absent from both snapshots, so no row is invented for it.
+    assert set(rows) == {"clicks"}
 
 
-def test_missing_position_base_is_never_significant() -> None:
-    position = _by_metric(compute_delta({"position": 5.0}, {}))["position"]
+def test_metric_missing_from_one_snapshot_is_skipped_not_zero() -> None:
+    rows = compute_delta({"position": 5.0}, {})
+    assert rows == []
 
-    assert position.pct_delta is None
-    assert position.abs_delta == 5.0
-    assert position.significant is False
-    assert position.good is False
+    # A metric present on one side only never becomes a -100% "movement".
+    rows = compute_delta(
+        {"impressions": 100.0},
+        {"clicks": 100.0, "impressions": 100.0},
+    )
+    assert [row.metric for row in rows] == ["impressions"]
+    assert rows[0].direction == "flat"
+    assert rows[0].significant is False
 
 
-def test_missing_keys_are_treated_as_zero() -> None:
-    rows = _by_metric(
-        compute_delta(
-            {"impressions": 100.0},
-            {"clicks": 100.0, "impressions": 100.0},
-        )
+def test_none_and_non_finite_values_are_treated_as_missing() -> None:
+    rows = compute_delta(
+        {"clicks": None, "impressions": float("nan")},  # type: ignore[dict-item]
+        {"clicks": 100.0, "impressions": 100.0},
     )
 
-    clicks = rows["clicks"]
-    assert clicks.current == 0.0
-    assert clicks.previous == 100.0
-    assert clicks.abs_delta == -100.0
-    assert clicks.pct_delta == pytest.approx(-100.0)
-    assert clicks.significant is True
-    assert clicks.good is False
-    assert rows["impressions"].direction == "flat"
-    assert rows["ctr"].pct_delta is None
+    assert rows == []
 
 
 def test_unknown_metrics_are_ignored() -> None:
@@ -124,7 +119,7 @@ def test_unknown_metrics_are_ignored() -> None:
         {"clicks": 100.0, "bounce_rate": 40.0},
     )
 
-    assert [row.metric for row in rows] == ["clicks", "impressions", "ctr", "position"]
+    assert [row.metric for row in rows] == ["clicks"]
 
 
 def test_position_improves_when_it_decreases() -> None:
@@ -155,10 +150,11 @@ def test_headline_formats_percentages_and_position() -> None:
 
 
 def test_headline_marks_missing_base_as_na_and_handles_empty() -> None:
-    rows = compute_delta({"clicks": 50.0}, {})
+    rows = compute_delta({"clicks": 50.0}, {"clicks": 0.0})
 
-    assert headline(rows) == "clicks n/a, impressions n/a, ctr n/a, position 0.0"
+    assert headline(rows) == "clicks n/a"
     assert headline([]) == ""
+    assert compute_delta({"clicks": 50.0}, {}) == []
 
 
 def test_headline_formats_zero_delta_as_zero() -> None:

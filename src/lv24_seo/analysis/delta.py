@@ -8,7 +8,8 @@ Honesty rules:
 
 - percentages are never invented: when the previous value is zero,
   ``pct_delta`` is ``None`` and the row cannot be significant;
-- metrics missing from either snapshot are treated as zero;
+- a metric missing from either snapshot is skipped: absence is not zero, and a
+  delta computed against a made-up zero would invent a movement;
 - unknown metric keys are ignored.
 
 SEO semantics: clicks, impressions and CTR are better when they grow, while
@@ -66,13 +67,19 @@ def compute_delta(
     *,
     thresholds: DeltaThresholds | None = None,
 ) -> list[DeltaRow]:
-    """Return one :class:`DeltaRow` per known metric, in canonical order."""
+    """Return one :class:`DeltaRow` per metric present in *both* snapshots.
+
+    Metrics absent from either side are skipped instead of being compared against an invented
+    zero, so an empty or partial snapshot cannot manufacture a "significant" movement.
+    """
     limits = thresholds or DeltaThresholds()
     rows: list[DeltaRow] = []
 
     for metric in _METRICS:
-        current_value = float(current.get(metric, 0.0))
-        previous_value = float(previous.get(metric, 0.0))
+        current_value = _metric_value(current, metric)
+        previous_value = _metric_value(previous, metric)
+        if current_value is None or previous_value is None:
+            continue
         abs_delta = current_value - previous_value
         pct_delta = _pct_delta(current_value, previous_value)
         direction = _direction(abs_delta)
@@ -113,6 +120,17 @@ def summary(rows: Sequence[DeltaRow]) -> dict[str, Any]:
         "good_count": sum(1 for row in rows if row.significant and row.good),
         "bad_count": sum(1 for row in rows if row.significant and not row.good),
     }
+
+
+def _metric_value(snapshot: Mapping[str, float], metric: str) -> float | None:
+    """Return a usable metric value, or ``None`` when the snapshot does not carry it."""
+    if metric not in snapshot:
+        return None
+    value: object = snapshot[metric]
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def _pct_delta(current: float, previous: float) -> float | None:
