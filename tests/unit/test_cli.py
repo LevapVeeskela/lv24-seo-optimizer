@@ -692,3 +692,64 @@ def test_install_print_for_vscode_uses_servers_key() -> None:
     server = document["servers"]["lv24-seo"]
     assert server["type"] == "stdio"
     assert server["command"] == "uvx"
+
+
+# -- ENG-08: --strict ------------------------------------------------------------------------
+
+
+def _strict_args(workspace: Path) -> tuple[str, ...]:
+    return (
+        "gsc",
+        "query",
+        "--start",
+        "2026-11-01",
+        "--end",
+        "2026-11-07",
+        "--config",
+        str(workspace),
+        "--json",
+    )
+
+
+def test_strict_exits_five_for_truncated_data(
+    monkeypatch: pytest.MonkeyPatch, workspace: Path
+) -> None:
+    class TruncatedService(FakeService):
+        def gsc_query(self, **_: Any) -> dict[str, Any]:
+            return ok({"rows": []}, meta={"truncated": True})
+
+    monkeypatch.setattr(cli_main, "SeoService", TruncatedService)
+
+    result = _invoke(*_strict_args(workspace), "--strict")
+
+    assert result.exit_code == 5
+    payload = _payload(result)
+    assert payload["ok"] is True
+    assert payload["meta"]["strict"] is True
+    assert payload["meta"]["truncated"] is True
+    assert payload["meta"]["limitations"], "strict truncation must explain what is missing"
+    assert "truncated" in payload["meta"]["limitations"][0]
+
+
+def test_strict_with_complete_data_is_a_normal_success(
+    fake_service: type[FakeService], workspace: Path
+) -> None:
+    assert fake_service  # the fixture wires the fake service
+
+    payload = _json(_invoke(*_strict_args(workspace), "--strict"))
+
+    assert payload["meta"]["strict"] is True
+    assert not payload["meta"].get("truncated")
+
+
+def test_without_strict_truncation_still_exits_zero(
+    fake_service: type[FakeService], workspace: Path
+) -> None:
+    fake_service.response = ok({"rows": []}, meta={"truncated": True})
+
+    result = _invoke(*_strict_args(workspace))
+
+    assert result.exit_code == 0
+    payload = _payload(result)
+    assert payload["meta"]["truncated"] is True
+    assert "strict" not in payload["meta"]

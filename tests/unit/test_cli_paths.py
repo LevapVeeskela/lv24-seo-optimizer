@@ -129,6 +129,30 @@ def test_doctor_is_quiet_when_the_config_pins_the_data_dir(
     assert payload["meta"]["data_dir_source"] == "config"
 
 
+def test_doctor_fails_when_a_declared_data_dir_is_unusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ENG-11: a declared but unusable data_dir is fatal, not a green `healthy: true`."""
+    site = tmp_path / "srv" / "site"
+    site.mkdir(parents=True)
+    (site / "data").write_text("this is a file, not a directory", encoding="utf-8")
+    config_path = site / "seo.toml"
+    config_path.write_text(
+        '[project]\nname = "Example"\n[storage]\ndata_dir = "./data"\n', encoding="utf-8"
+    )
+    _foreign(tmp_path, monkeypatch)
+
+    result = _invoke("doctor", "--config", str(config_path), "--json")
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert payload["meta"]["healthy"] is False
+    assert payload["meta"]["data_dir_declared"] is True
+    data_check = next(check for check in payload["meta"]["checks"] if check["id"] == "data_dir")
+    assert data_check["ok"] is False
+
+
 def test_config_show_reports_the_anchored_data_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

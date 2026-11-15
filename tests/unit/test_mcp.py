@@ -11,15 +11,18 @@ import importlib
 import json
 import socket
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
 
 import lv24_seo.mcp.server as server_module
 from lv24_seo.core.config import SeoConfig
-from lv24_seo.core.envelope import ok
+from lv24_seo.core.envelope import fail, ok
 from lv24_seo.core.errors import (
+    AUTH_REQUIRED,
     CONFIG_INVALID,
+    CONFIRM_REQUIRED,
     INTERNAL,
     INVALID_INPUT,
     UPSTREAM_UNAVAILABLE,
@@ -28,6 +31,7 @@ from lv24_seo.core.errors import (
 )
 from lv24_seo.mcp.registry import TOOLS
 from lv24_seo.mcp.server import create_server, serve
+from lv24_seo.store import Store
 
 # -- helpers ---------------------------------------------------------------------------------
 
@@ -204,14 +208,18 @@ class WriteService(ReadService):
     def __init__(self) -> None:
         super().__init__()
         self.recrawl: tuple[str, list[str]] | None = None
+        self.recrawl_calls = 0
         self.sitemap: tuple[str, str, str] | None = None
+        self.sitemap_calls = 0
 
     def recrawl_request(self, *, host_id: str, urls: list[str]) -> dict[str, Any]:
         self.recrawl = (host_id, urls)
+        self.recrawl_calls += 1
         return ok({"queued": len(urls), "quota_left": 10, "task_ids": []})
 
     def sitemap_submit(self, *, property: str, sitemap_url: str, action: str) -> dict[str, Any]:
         self.sitemap = (property, sitemap_url, action)
+        self.sitemap_calls += 1
         return ok({"provider": "gsc", "status": action})
 
 
@@ -273,6 +281,8 @@ def test_input_schemas_are_generated_from_typed_parameters() -> None:
     assert recrawl["properties"]["allow_write"]["type"] == "boolean"
     assert recrawl["properties"]["allow_write"]["default"] is False
     assert recrawl["properties"]["urls"]["anyOf"][0]["type"] == "array"
+    assert recrawl["properties"]["plan_hash"]["default"] == ""
+    assert recrawl["properties"]["confirm_token"]["default"] == ""
 
 
 # -- WP7.2: read tools -----------------------------------------------------------------------
@@ -453,14 +463,26 @@ def test_missing_service_method_is_upstream_unavailable() -> None:
 
 # -- WP7.3: write gating ---------------------------------------------------------------------
 
+WRITE_SECRET = "mcp-unit-test-write-secret"  # gitleaks:allow -- synthetic fixture
+RECRAWL_ARGS: dict[str, Any] = {
+    "host_id": "https:example.com:443",
+    "urls": ["https://example.com/a"],
+}
+
+
+def _dry_run(server: Any, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
+    result = _call(server, name, {**arguments, "allow_write": True})
+    payload = _payload(result)
+    assert result.is_error is False, payload
+    assert payload["meta"]["dry_run"] is True
+    assert payload["data"]["status"] == "dry_run"
+    assert payload["data"]["confirm_token"]
+    return payload["data"]
+
 
 def test_recrawl_refuses_without_allow_write() -> None:
     service = WriteService()
-    result = _call(
-        create_server(service),
-        "seo_recrawl_request",
-        {"host_id": "https:example.com:443", "urls": ["https://example.com/a"]},
-    )
+    result = _call(create_server(service), "seo_recrawl_request", RECRAWL_ARGS)
     payload = _payload(result)
 
     assert result.is_error is True
@@ -485,16 +507,15 @@ def test_sitemap_refuses_without_allow_write() -> None:
     assert service.sitemap is None
 
 
-def test_write_tools_refuse_when_the_service_has_no_write_method() -> None:
+def test_write_tools_refuse_when_the_service_has_no_write_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
     server = create_server(ReadService())
     recrawl = _call(
         server,
         "seo_recrawl_request",
-        {
-            "host_id": "https:example.com:443",
-            "urls": ["https://example.com/a"],
-            "allow_write": True,
-        },
+        {**RECRAWL_ARGS, "allow_write": True},
     )
     sitemap = _call(
         server,
@@ -510,39 +531,189 @@ def test_write_tools_refuse_when_the_service_has_no_write_method() -> None:
     assert _payload(sitemap)["error"]["code"] == WRITE_DISABLED
 
 
-def test_write_tools_call_an_exposed_method_when_explicitly_allowed() -> None:
+def test_write_dry_run_returns_a_plan_and_token_without_calling_the_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
+    service = WriteService()
+
+    data = _dry_run(create_server(service), "seo_recrawl_request", RECRAWL_ARGS)
+
+    assert data["plan"]["action"] == "recrawl"
+    assert data["plan"]["target"] == "https:example.com:443"
+    assert data["plan"]["payload"]["urls"] == ["https://example.com/a"]
+    assert data["plan_hash"]
+    assert data["ttl_seconds"] == 300
+    assert service.recrawl is None
+    assert service.recrawl_calls == 0
+
+
+def test_write_apply_calls_the_provider_once_and_rejects_a_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
+    service = WriteService()
+    store = Store(tmp_path / "seo.db")
+    service._store = store  # type: ignore[attr-defined]
+    try:
+        server = create_server(service)
+        dry = _dry_run(server, "seo_recrawl_request", RECRAWL_ARGS)
+        arguments = {
+            **RECRAWL_ARGS,
+            "allow_write": True,
+            "plan_hash": dry["plan_hash"],
+            "confirm_token": dry["confirm_token"],
+        }
+
+        first = _call(server, "seo_recrawl_request", arguments)
+        second = _call(server, "seo_recrawl_request", arguments)
+    finally:
+        store.close()
+
+    first_payload = _payload(first)
+    second_payload = _payload(second)
+    assert first.is_error is False
+    assert first_payload["data"]["queued"] == 1
+    assert first_payload["meta"]["write_status"] == "applied"
+    assert second.is_error is False
+    assert second_payload["data"]["status"] == "skipped"
+    assert second_payload["data"]["reason"] == "duplicate"
+    assert service.recrawl_calls == 1, "a replayed token must not reach the provider again"
+    assert service.recrawl == ("https:example.com:443", ["https://example.com/a"])
+
+
+def test_write_apply_needs_the_write_secret() -> None:
+    service = WriteService()
+    result = _call(
+        create_server(service),
+        "seo_recrawl_request",
+        {**RECRAWL_ARGS, "allow_write": True},
+    )
+    payload = _payload(result)
+
+    assert result.is_error is True
+    assert payload["error"]["code"] == WRITE_DISABLED
+    assert "LV24_SEO_WRITE_SECRET" in payload["error"]["message"]
+    assert service.recrawl_calls == 0
+
+
+def test_write_apply_rejects_a_changed_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
     service = WriteService()
     server = create_server(service)
+    dry = _dry_run(server, "seo_recrawl_request", RECRAWL_ARGS)
 
-    recrawl = _call(
+    result = _call(
         server,
         "seo_recrawl_request",
         {
             "host_id": "https:example.com:443",
-            "urls": ["https://example.com/a", "https://example.com/a"],
+            "urls": ["https://example.com/other"],
             "allow_write": True,
-        },
-    )
-    sitemap = _call(
-        server,
-        "seo_sitemap_submit",
-        {
-            "property": "sc-domain:example.com",
-            "sitemap_url": "https://example.com/sitemap.xml",
-            "action": "submit",
-            "allow_write": True,
+            "plan_hash": dry["plan_hash"],
+            "confirm_token": dry["confirm_token"],
         },
     )
 
-    assert recrawl.is_error is False
-    assert _payload(recrawl)["data"]["queued"] == 1
-    assert service.recrawl == ("https:example.com:443", ["https://example.com/a"])
-    assert sitemap.is_error is False
+    assert _payload(result)["error"]["code"] == CONFIRM_REQUIRED
+    assert service.recrawl_calls == 0
+
+
+def test_write_apply_rejects_a_mismatched_plan_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
+    service = WriteService()
+    server = create_server(service)
+    dry = _dry_run(server, "seo_recrawl_request", RECRAWL_ARGS)
+
+    result = _call(
+        server,
+        "seo_recrawl_request",
+        {
+            **RECRAWL_ARGS,
+            "allow_write": True,
+            "plan_hash": "0" * 64,
+            "confirm_token": dry["confirm_token"],
+        },
+    )
+
+    assert _payload(result)["error"]["code"] == CONFIRM_REQUIRED
+    assert service.recrawl_calls == 0
+
+
+def test_sitemap_write_uses_the_two_phase_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
+    service = WriteService()
+    store = Store(tmp_path / "seo.db")
+    service._store = store  # type: ignore[attr-defined]
+    arguments = {
+        "property": "sc-domain:example.com",
+        "sitemap_url": "https://example.com/sitemap.xml",
+        "action": "submit",
+    }
+    try:
+        server = create_server(service)
+        dry = _dry_run(server, "seo_sitemap_submit", arguments)
+        result = _call(
+            server,
+            "seo_sitemap_submit",
+            {
+                **arguments,
+                "allow_write": True,
+                "plan_hash": dry["plan_hash"],
+                "confirm_token": dry["confirm_token"],
+            },
+        )
+    finally:
+        store.close()
+
+    payload = _payload(result)
+    assert result.is_error is False
+    assert payload["data"]["provider"] == "gsc"
+    assert payload["meta"]["action"] == "sitemap_submit"
     assert service.sitemap == (
         "sc-domain:example.com",
         "https://example.com/sitemap.xml",
         "submit",
     )
+
+
+def test_a_failed_provider_write_releases_the_ledger_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FailingWrite(WriteService):
+        def recrawl_request(self, *, host_id: str, urls: list[str]) -> dict[str, Any]:
+            self.recrawl_calls += 1
+            return fail(
+                SeoError(
+                    code=UPSTREAM_UNAVAILABLE,
+                    message="provider is down",
+                    retryable=True,
+                )
+            )
+
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
+    service = FailingWrite()
+    store = Store(tmp_path / "seo.db")
+    service._store = store  # type: ignore[attr-defined]
+    try:
+        server = create_server(service)
+        dry = _dry_run(server, "seo_recrawl_request", RECRAWL_ARGS)
+        arguments = {
+            **RECRAWL_ARGS,
+            "allow_write": True,
+            "plan_hash": dry["plan_hash"],
+            "confirm_token": dry["confirm_token"],
+        }
+        first = _call(server, "seo_recrawl_request", arguments)
+        second = _call(server, "seo_recrawl_request", arguments)
+    finally:
+        store.close()
+
+    assert _payload(first)["error"]["code"] == UPSTREAM_UNAVAILABLE
+    assert _payload(second)["error"]["code"] == UPSTREAM_UNAVAILABLE
+    assert service.recrawl_calls == 2, "a failed write must release its claim for a retry"
 
 
 def test_write_tools_validate_inputs_after_the_gate() -> None:
@@ -683,3 +854,39 @@ def test_serve_validates_the_port_before_running(monkeypatch: pytest.MonkeyPatch
 
     assert excinfo.value.code == INVALID_INPUT
     assert calls == []
+
+
+# -- ENG-15: one exit-code mapping -----------------------------------------------------------
+
+
+def test_mcp_serve_cli_uses_the_shared_exit_code_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typer.testing import CliRunner
+
+    from lv24_seo.cli.main import app
+
+    def fake_serve(*args: Any, **kwargs: Any) -> None:
+        raise SeoError(code=AUTH_REQUIRED, message="Google Search Console token is missing")
+
+    monkeypatch.setattr("lv24_seo.mcp.serve", fake_serve)
+
+    result = CliRunner().invoke(app, ["mcp", "serve"])
+
+    assert result.exit_code == 3, result.output
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == AUTH_REQUIRED
+
+
+def test_mcp_server_main_uses_the_shared_exit_code_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_serve(*args: Any, **kwargs: Any) -> None:
+        raise SeoError(code=AUTH_REQUIRED, message="Google Search Console token is missing")
+
+    monkeypatch.setattr(server_module, "serve", fake_serve)
+
+    with pytest.raises(SystemExit) as excinfo:
+        server_module.main([])
+
+    assert excinfo.value.code == 3

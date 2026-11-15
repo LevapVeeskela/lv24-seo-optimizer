@@ -32,24 +32,24 @@ import inspect
 import json
 import logging
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from functools import wraps
 from typing import Any, Protocol, cast, get_type_hints
 
 from mcp.types import ToolAnnotations
 
 from lv24_seo.core.config import SeoConfig, load_config, redacted_dump
-from lv24_seo.core.envelope import fail, ok
+from lv24_seo.core.envelope import envelope_exit_code, fail, ok
 from lv24_seo.core.errors import (
     CONFIG_INVALID,
     INTERNAL,
     INVALID_INPUT,
+    UPSTREAM_UNAVAILABLE,
     SeoError,
-    exit_code_for,
 )
 from lv24_seo.core.logging import configure_logging_from_env
 from lv24_seo.mcp.registry import TOOLS, ToolSpec, tool_annotations, tools_as_json
-from lv24_seo.mcp.tools import TOOL_BUILDERS, ToolState, compact_json
+from lv24_seo.mcp.tools import TOOL_BUILDERS, ToolState, compact_json, envelope_result
 from lv24_seo.services import SeoService
 
 __all__ = ["close_workspaces", "create_server", "serve"]
@@ -63,6 +63,12 @@ _OPEN_WORKSPACES: list[Any] = []
 SERVER_NAME = "lv24-seo"
 TRANSPORT_STDIO = "stdio"
 TRANSPORT_HTTP = "streamable-http"
+#: Tools that must never block the event loop: a crawl can run for minutes.
+OFFLOAD_TOOLS = frozenset({"seo_crawl_site"})
+#: Hard budget for one off-loop tool call. The worker thread cannot be killed, but the server
+#: answers the client and keeps serving other tools; the crawl finishes and closes its own
+#: store connection in the background.
+CRAWL_TIMEOUT_SECONDS = 600.0
 _HTTP_ALIASES = frozenset({"http", TRANSPORT_HTTP, "streamable_http"})
 _INSTRUCTIONS = (
     "lv24-seo is a free-first SEO control plane. Start with `seo_weekly_report` for a broad "
@@ -155,12 +161,35 @@ def _register_tools(server: McpServer, state: ToolState) -> None:
 
     for spec in TOOLS:
         tool = TOOL_BUILDERS[spec.name](state)
+        wrapped = (
+            _offload_tool(tool, timeout=CRAWL_TIMEOUT_SECONDS)
+            if spec.name in OFFLOAD_TOOLS and state.crawl_workspace is not None
+            else _owner_loop_tool(tool)
+        )
         server.tool(
             name=spec.name,
             title=spec.title,
             description=spec.summary,
             annotations=_annotations(spec),
-        )(_owner_loop_tool(tool))
+        )(wrapped)
+
+
+def _preserve_signature(
+    wrapper: Callable[..., Any], tool: Callable[..., Any]
+) -> Callable[..., Any]:
+    """Copy the tool's resolved annotations and signature onto an async wrapper.
+
+    The MCP SDK builds the JSON input schema from the registered callable, so the wrapper must
+    look exactly like the original tool (``include_extras=True`` keeps ``Annotated`` metadata).
+    """
+    try:
+        hints = get_type_hints(tool, include_extras=True)
+    except Exception:
+        hints = dict(getattr(tool, "__annotations__", {}))
+    wrapper.__annotations__ = hints
+    with contextlib.suppress(TypeError, ValueError):
+        wrapper.__signature__ = inspect.signature(tool, eval_str=True)  # type: ignore[attr-defined]
+    return wrapper
 
 
 def _owner_loop_tool(tool: Callable[..., Any]) -> Callable[..., Any]:
@@ -174,22 +203,49 @@ def _owner_loop_tool(tool: Callable[..., Any]) -> Callable[..., Any]:
     an ``async`` adapter keeps every tool body on the event-loop thread: the
     synchronous core runs serially there and blocks the loop while it runs, so
     concurrent ``tools/call`` requests are serialised instead of racing in
-    SQLite. Resolve annotations before wrapping so SDK schema generation stays
-    exact (``include_extras=True`` preserves ``Annotated`` metadata).
+    SQLite.
     """
 
     @wraps(tool)
     async def invoke(*args: Any, **kwargs: Any) -> Any:
         return tool(*args, **kwargs)
 
-    try:
-        hints = get_type_hints(tool, include_extras=True)
-    except Exception:
-        hints = dict(getattr(tool, "__annotations__", {}))
-    invoke.__annotations__ = hints
-    with contextlib.suppress(TypeError, ValueError):
-        invoke.__signature__ = inspect.signature(tool, eval_str=True)  # type: ignore[attr-defined]
-    return invoke
+    return _preserve_signature(invoke, tool)
+
+
+def _offload_tool(tool: Callable[..., Any], *, timeout: float) -> Callable[..., Any]:
+    """Run a long tool on a worker thread with a hard budget (ENG-12).
+
+    A crawl of thousands of URLs used to run on the event-loop thread, so one ``tools/call``
+    blocked every other client until it finished. The worker gets its own workspace store (see
+    ``ToolState.crawl_workspace``), so it never touches the loop-bound SQLite connection.
+
+    Python cannot kill a running thread: after the budget the client receives a retryable
+    ``UPSTREAM_UNAVAILABLE`` envelope and the server keeps serving other tools while the crawl
+    finishes in the background and closes its own connection.
+    """
+
+    @wraps(tool)
+    async def invoke(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(tool, *args, **kwargs), timeout)
+        except TimeoutError:
+            logger.warning("MCP tool %s exceeded its %gs budget", tool.__name__, timeout)
+            return envelope_result(
+                fail(
+                    SeoError(
+                        code=UPSTREAM_UNAVAILABLE,
+                        message=f"{tool.__name__} exceeded the {timeout:g}s server budget",
+                        next_action=(
+                            "retry with a smaller max_urls, or run `lv24-seo crawl` in a "
+                            "terminal for a full-site crawl"
+                        ),
+                        retryable=True,
+                    )
+                )
+            )
+
+    return _preserve_signature(invoke, tool)
 
 
 def _register_resources(
@@ -303,13 +359,45 @@ def _register_prompts(server: McpServer) -> None:
     )(content_opportunities)
 
 
-def create_server(service: SeoService | None = None) -> McpServer:
+def _crawl_workspace_factory(
+    config: SeoConfig,
+) -> Callable[[], contextlib.AbstractContextManager[SeoService]]:
+    """Build a crawl-only workspace whose ``Store`` lives on the calling thread.
+
+    A ``sqlite3`` connection may only be used from the thread that opened it, so the crawl
+    worker cannot reuse the server's connection. Opening a short-lived store per crawl keeps
+    persistence working off the event loop; the connection is closed when the crawl ends.
+    """
+
+    @contextlib.contextmanager
+    def open_crawl_service() -> Iterator[SeoService]:
+        from lv24_seo.composition import open_store
+
+        store = open_store(config)
+        try:
+            yield SeoService(config, store=store)
+        finally:
+            if store is not None:
+                store.close()
+
+    return open_crawl_service
+
+
+def create_server(
+    service: SeoService | None = None,
+    *,
+    crawl_workspace: Callable[[], contextlib.AbstractContextManager[SeoService]] | None = None,
+) -> McpServer:
     """Build the MCP server and register exactly the eleven registry tools.
 
     ``service`` defaults to a lazily wired :class:`~lv24_seo.services.SeoService`
     built from :func:`~lv24_seo.core.config.load_config`. Tests and embedders may
     pass any object that implements the read methods they exercise; tools report an
     honest ``UPSTREAM_UNAVAILABLE`` failure for methods it does not implement.
+
+    ``crawl_workspace`` opts a caller-supplied service into off-loop crawling: it must build a
+    service with its own store on the calling thread. When this function opens the workspace
+    itself, the factory is created automatically from that workspace config.
     """
     if _SERVER_CLASS is None:
         raise SeoError(
@@ -329,12 +417,16 @@ def create_server(service: SeoService | None = None) -> McpServer:
         workspace = open_workspace()
         config = workspace.config
         service = workspace.service
+        if crawl_workspace is None:
+            crawl_workspace = _crawl_workspace_factory(config)
 
     try:
         timezone = getattr(service, "timezone", None)
         state = ToolState(
             service=service,
             timezone=timezone if isinstance(timezone, str) and timezone else "Europe/Minsk",
+            ledger=None if workspace is None else workspace.store,
+            crawl_workspace=crawl_workspace,
         )
         server = _SERVER_CLASS(name=SERVER_NAME, instructions=_INSTRUCTIONS)
         _register_tools(server, state)
@@ -479,8 +571,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         asyncio.run(serve(args.transport, port=args.port))
     except SeoError as exc:
-        sys.stderr.write(compact_json(fail(exc)) + "\n")
-        raise SystemExit(exit_code_for(exc)) from None
+        payload = fail(exc)
+        sys.stderr.write(compact_json(payload) + "\n")
+        raise SystemExit(envelope_exit_code(payload)) from None
 
 
 if __name__ == "__main__":  # pragma: no cover - process entry point
