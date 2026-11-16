@@ -180,7 +180,7 @@ audit → plan → fix → verify.
 
 ### MCP tools
 
-Twelve tools, three resources and three prompts. Nine are read-class: seven pure read-only tools that
+Twelve tools, three resources and three prompts. Ten are read-class: seven pure read-only tools that
 never change provider or local state, plus `seo_crawl_site`, `seo_weekly_report` and
 `yandex_indexing_state`, which persist local snapshots or indexing events and therefore carry
 `readOnlyHint: false` (they are not destructive). The two provider writes require `allow_write=true`,
