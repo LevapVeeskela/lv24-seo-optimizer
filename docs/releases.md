@@ -7,8 +7,8 @@ The pipeline is **release plumbing only**: it verifies the exact tagged commit (
 offline tests, schema drift, installed-wheel smoke), builds the sdist/wheel, publishes them to
 PyPI with OIDC Trusted Publishing, publishes the thin `@lv24/seo` npm launcher with npm OIDC
 trusted publishing, and publishes `server.json` to the MCP Registry. No long-lived NPM_TOKEN or
-PyPI token exists. The current published release is `0.5.3`; `0.6.0` is a release candidate on
-`main` (notes: [`releases/0.6.0.md`](releases/0.6.0.md)) and is not tagged or published yet.
+PyPI token exists. The current release is `0.6.0` (notes: [`releases/0.6.0.md`](releases/0.6.0.md));
+`0.5.3` was the previous P0 hardening release.
 
 | Artifact | Built by | Published by | Cost |
 |---|---|---|---|

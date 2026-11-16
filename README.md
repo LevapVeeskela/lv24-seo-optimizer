@@ -55,7 +55,7 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (0.6.0 release candidate; `0.5.3` is the current published release).** Working today: six
+**Beta (v0.6.0).** Working today: six
 provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule
 crawler, SQLite history, analysis (deltas, opportunities, indexing triage, multi-engine fusion,
 nginx log analysis with UA-only bot triage), per-provider `stats`, report builders +
@@ -63,7 +63,7 @@ HTML/text/Markdown renderers with an attributed change digest, the finding/task 
 backup bundles, SMTP/Telegram delivery with idempotency, the 20-command CLI, the MCP server
 (12 tools, 3 resources, 3 prompts) and scheduler generators. Canonical source ids, GSC-only
 headline deltas, partial provider isolation and window/daily storage separation are enforced with
-regression tests. `0.6.0` is the insights release candidate (logs, digest, tasks, backup); `0.5.3`
+regression tests. `0.6.0` is the insights release (logs, digest, tasks, backup); `0.5.3`
 was the P0 hardening release. See [`docs/releases/0.6.0.md`](docs/releases/0.6.0.md) and
 [`docs/releases/0.5.3.md`](docs/releases/0.5.3.md).
 
@@ -107,16 +107,16 @@ lv24-seo install --client claude|opencode|vscode|cursor
 
 ## Desktop app
 
-The same engine ships as **LV24 SEO Optimizer Desktop 0.3.0** — a Tauri v2 shell with a dashboard,
+The same engine ships as **LV24 SEO Optimizer Desktop 0.4.0** — a Tauri v2 shell with a dashboard,
 weekly report view, configuration editor/diff/validation and a recommendations-to-agent workflow. It
-bundles a pinned `lv24-seo` sidecar (`0.5.3` in the current desktop build) and adds no provider logic
+bundles a pinned `lv24-seo` sidecar (`0.6.0` in the current desktop build) and adds no provider logic
 of its own.
 
 | Platform | Assets | Auto-update |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.3.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.3.0_x64-portable.zip` | NSIS only |
-| Linux x64 | `LV24.SEO.Optimizer_0.3.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.3.0_amd64.deb`, `LV24.SEO.Optimizer-0.3.0-1.x86_64.rpm` | AppImage only |
-| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.3.0_aarch64.dmg`, `LV24.SEO.Optimizer_0.3.0_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.4.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.4.0_x64-portable.zip` | NSIS only |
+| Linux x64 | `LV24.SEO.Optimizer_0.4.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.4.0_amd64.deb`, `LV24.SEO.Optimizer-0.4.0-1.x86_64.rpm` | AppImage only |
+| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.4.0_aarch64.dmg`, `LV24.SEO.Optimizer_0.4.0_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
 
 deb, rpm and the portable ZIP are manual-only (MSI is not produced); `0.1.0` has no updater. The
 `0.2.x` releases publish `latest.json` and `SHA256SUMS.txt`.
@@ -225,9 +225,9 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
-* [Release notes 0.6.0](docs/releases/0.6.0.md) — release candidate: logs, digest, tasks, backup
+* [Release notes 0.6.0](docs/releases/0.6.0.md) — insights release: logs, digest, tasks, backup
 * [Release notes 0.5.3](docs/releases/0.5.3.md) — P0 hardening release
-* [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop) — Tauri shell, 0.3.0 assets and update matrix
+* [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop) — Tauri shell, 0.4.0 assets and update matrix
 * [Desktop plan](docs/plans/2026-11-14-seo-desktop.md) — shell scope and milestones
 * [Security](SECURITY.md) — token handling, read-only defaults, write gating
 * [Research 2026](docs/research/2026-11-landscape.md) — API limits, existing MCP servers, tool landscape

@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (0.6.0 release candidate; опубликован 0.5.3).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.6.0).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -47,15 +47,15 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 
 ## Десктоп
 
-Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.3.0** — оболочка Tauri v2 с
+Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.4.0** — оболочка Tauri v2 с
 дашбордом, просмотром недельного отчёта, редактором конфигурации и сценарием «рекомендации →
-агенту». Она несёт закреплённый сайдкар `lv24-seo` (`0.5.3` в текущей сборке десктопа) и не
+агенту». Она несёт закреплённый сайдкар `lv24-seo` (`0.6.0` в текущей сборке десктопа) и не
 добавляет собственной логики провайдеров.
 
 | Платформа | Файлы | Автообновление |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.3.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.3.0_x64-portable.zip` | только NSIS |
-| Linux x64 | `LV24.SEO.Optimizer_0.3.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.3.0_amd64.deb`, `LV24.SEO.Optimizer-0.3.0-1.x86_64.rpm` | только AppImage |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.4.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.4.0_x64-portable.zip` | только NSIS |
+| Linux x64 | `LV24.SEO.Optimizer_0.4.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.4.0_amd64.deb`, `LV24.SEO.Optimizer-0.4.0-1.x86_64.rpm` | только AppImage |
 | macOS 13+ arm64/x64 | DMG, `.app.tar.gz` (+ `.sig`) | только `.app` |
 
 deb, rpm и portable ZIP ставятся вручную (MSI не выпускается); у `0.1.0` нет обновлятора. Релизы
@@ -110,11 +110,11 @@ destructive). Два write-инструмента требуют `allow_write=tr
 
 ## Статус
 
-Бета (0.6.0 release candidate; опубликован 0.5.3). Открытые честные ограничения: OAuth-токен GSC
+Бета (v0.6.0). Открытые честные ограничения: OAuth-токен GSC
 (service account — позже), `sitemap submit` / `recrawl` отвечают `WRITE_DISABLED` (IndexNow
 реально отправляет), `crawl.concurrency` зарезервирован (краулер последовательный с
 `Crawl-delay`), анализ логов определяет ботов только по User-Agent, а восстановление из
-`backup create` пока не реализовано. Новое в 0.6.0 RC — в
+`backup create` пока не реализовано. Новое в 0.6.0 — в
 [`docs/releases/0.6.0.md`](docs/releases/0.6.0.md); исправления 0.5.3 — в
 [`docs/releases/0.5.3.md`](docs/releases/0.5.3.md).
 

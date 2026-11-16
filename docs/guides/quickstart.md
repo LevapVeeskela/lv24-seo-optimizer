@@ -1,6 +1,6 @@
 # Quickstart
 
-Verified against the 0.6.0 release-candidate CLI (`lv24-seo <command> --help` is the authority when
+Verified against the 0.6.0 CLI (`lv24-seo <command> --help` is the authority when
 in doubt).
 
 ## 1. Install
