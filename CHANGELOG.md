@@ -49,6 +49,13 @@ lifecycle. The CLI now has **22 top-level commands**; the MCP surface, SQLite sc
   tool input or output changed. The SQLite schema stays at version 4 and `schemas/tools.json` is
   unchanged.
 
+### Fixed
+
+- Yandex Metrika `stat/v1/data` uses the documented 1-based `offset`; the previous `0` made every
+  dashboard call return HTTP 400, so the provider looked configured but reported no data.
+- CLI JSON output is ASCII-escaped and human output degrades unencodable glyphs, so redirected
+  Windows output on cp1251/cp866 no longer aborts with `UnicodeEncodeError` on a `⚠` warning.
+
 ## [0.7.0] - 2026-11-16
 
 Release notes: [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
