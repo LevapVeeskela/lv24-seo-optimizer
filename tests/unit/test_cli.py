@@ -73,8 +73,8 @@ def workspace(tmp_path: Path) -> Path:
     return path
 
 
-def _invoke(*args: str, input: str | None = None) -> Any:
-    return RUNNER.invoke(cli_main.app, list(args), input=input)
+def _invoke(*args: str, input: str | None = None, env: dict[str, str] | None = None) -> Any:
+    return RUNNER.invoke(cli_main.app, list(args), input=input, env=env)
 
 
 def _stdout(result: Any) -> str:
@@ -476,7 +476,8 @@ def test_export_tools_writes_valid_json(tmp_path: Path) -> None:
 
 
 def test_cwv_collect_help_lists_the_documented_options() -> None:
-    result = _invoke("cwv", "collect", "--help")
+    # Pin the rich table width: CI terminals are narrower and wrap/truncate option names.
+    result = _invoke("cwv", "collect", "--help", env={"COLUMNS": "160"})
 
     assert result.exit_code == 0
     help_text = _stdout(result)
