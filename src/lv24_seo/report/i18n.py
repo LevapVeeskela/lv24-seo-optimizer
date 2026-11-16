@@ -139,6 +139,7 @@ _EN_CATALOG: dict[str, str] = {
     "section.notes": "Data notes",
     "section.warnings": "Warnings",
     "section.digest": "Attributed change digest",
+    "section.cwv": "Core Web Vitals by template",
     # Traffic
     "traffic.rows": "Landing pages",
     "traffic.sessions": "Sessions",
@@ -222,6 +223,28 @@ _EN_CATALOG: dict[str, str] = {
     "notes.limitation.digest_evidence_malformed": (
         "Change digest: some evidence rows were ignored because they lacked an identifier."
     ),
+    "notes.limitation.cwv_no_rows": "Core Web Vitals: no stored metric rows were provided.",
+    "notes.limitation.cwv_template_missing": (
+        "Core Web Vitals: rows without a URL template (including origin-level data) were skipped."
+    ),
+    "notes.limitation.cwv_device_missing": ("Core Web Vitals: rows without a device were skipped."),
+    "notes.limitation.cwv_no_comparison": (
+        "Core Web Vitals: no previous p75 baseline, so only current values are shown."
+    ),
+    "notes.limitation.cwv_partial_comparison": (
+        "Core Web Vitals: only some URLs had a previous p75, so the comparison covers "
+        "part of the sample."
+    ),
+    "notes.limitation.cwv_p75_worst_page": (
+        "Core Web Vitals: a template p75 is the worst page p75 in that template; "
+        "percentiles are not averaged across URLs."
+    ),
+    "notes.limitation.cwv_values_ignored": (
+        "Core Web Vitals: some rows were ignored because their metric or p75 value was invalid."
+    ),
+    "notes.limitation.cwv_lab_ignored": (
+        "Core Web Vitals: lab (Lighthouse) rows were ignored; only field p75 data is grouped."
+    ),
     # Attributed change digest
     "digest.count.one": "{count} material change",
     "digest.count.few": "{count} material changes",
@@ -266,6 +289,39 @@ _EN_CATALOG: dict[str, str] = {
         "Collect crawl issues, indexing events and page state for the affected URLs; "
         "no cause is attributed."
     ),
+    # Core Web Vitals by template
+    "cwv.template": "Template",
+    "cwv.device": "Device",
+    "cwv.p75": "p75",
+    "cwv.sample": "Sample",
+    "cwv.coverage": "Coverage",
+    "cwv.regressed": "Regressed",
+    "cwv.no_regression": "No template regressed against the previous window.",
+    "cwv.no_comparison": "No comparison window: only current p75 values are shown.",
+    "cwv.none": "No stored Core Web Vitals rows.",
+    "cwv.no_templates": (
+        "Stored CWV rows cannot be grouped: a URL template and device are required."
+    ),
+    "cwv.truncated": "Showing {shown} of {total} templates.",
+    "cwv.data_age": "Oldest CWV data: {date}",
+    "cwv.regressed_summary": "Regressed: {template} · {device} ({metric} {change})",
+    "cwv.count.one": "{count} template",
+    "cwv.count.few": "{count} templates",
+    "cwv.count.many": "{count} templates",
+    "cwv.count.other": "{count} templates",
+    "cwv.device.phone": "Phone",
+    "cwv.device.desktop": "Desktop",
+    "cwv.device.tablet": "Tablet",
+    "cwv.status.good": "Good",
+    "cwv.status.needs_improvement": "Needs improvement",
+    "cwv.status.poor": "Poor",
+    "cwv.status.unknown": "Unknown",
+    "cwv.metric.lcp": "LCP",
+    "cwv.metric.inp": "INP",
+    "cwv.metric.cls": "CLS",
+    "cwv.metric.fcp": "FCP",
+    "cwv.metric.ttfb": "TTFB",
+    "cwv.metric.fid": "FID",
     "warning.title": "Warnings",
     "warning.no_metrics": "No metrics for either period; delta rows are all zero.",
     "warning.previous_no_metrics": (
@@ -296,6 +352,7 @@ _EN_CATALOG: dict[str, str] = {
     "unit.rows": "rows",
     "unit.sessions": "sessions",
     "unit.positions": "positions",
+    "unit.ms": "ms",
     "unit.pp": "pp",
 }
 
@@ -345,6 +402,7 @@ _RU_CATALOG: dict[str, str] = {
     "section.notes": "Примечания к данным",
     "section.warnings": "Предупреждения",
     "section.digest": "Разбор изменений",
+    "section.cwv": "Core Web Vitals по шаблонам",
     # Traffic
     "traffic.rows": "Страницы входа",
     "traffic.sessions": "Сеансы",
@@ -428,6 +486,29 @@ _RU_CATALOG: dict[str, str] = {
     "notes.limitation.digest_evidence_malformed": (
         "Разбор изменений: часть строк доказательств пропущена из-за отсутствия идентификатора."
     ),
+    "notes.limitation.cwv_no_rows": "Core Web Vitals: сохранённые строки метрик не переданы.",
+    "notes.limitation.cwv_template_missing": (
+        "Core Web Vitals: строки без шаблона URL (включая данные уровня origin) пропущены."
+    ),
+    "notes.limitation.cwv_device_missing": "Core Web Vitals: строки без устройства пропущены.",
+    "notes.limitation.cwv_no_comparison": (
+        "Core Web Vitals: нет предыдущего p75 для сравнения, показаны только текущие значения."
+    ),
+    "notes.limitation.cwv_partial_comparison": (
+        "Core Web Vitals: предыдущий p75 был не у всех URL, поэтому сравнение "
+        "покрывает часть выборки."
+    ),
+    "notes.limitation.cwv_p75_worst_page": (
+        "Core Web Vitals: p75 шаблона — это худший p75 страницы в шаблоне; "
+        "перцентили не усредняются по URL."
+    ),
+    "notes.limitation.cwv_values_ignored": (
+        "Core Web Vitals: часть строк пропущена из-за недопустимой метрики или значения p75."
+    ),
+    "notes.limitation.cwv_lab_ignored": (
+        "Core Web Vitals: лабораторные строки (Lighthouse) пропущены; "
+        "группируются только полевые p75."
+    ),
     # Attributed change digest
     "digest.count.one": "{count} значимое изменение",
     "digest.count.few": "{count} значимых изменения",
@@ -475,6 +556,39 @@ _RU_CATALOG: dict[str, str] = {
         "Соберите проблемы краула, события индексации и состояние страниц для затронутых "
         "URL; причина не указывается."
     ),
+    # Core Web Vitals by template
+    "cwv.template": "Шаблон",
+    "cwv.device": "Устройство",
+    "cwv.p75": "p75",
+    "cwv.sample": "Выборка",
+    "cwv.coverage": "Покрытие",
+    "cwv.regressed": "Ухудшение",
+    "cwv.no_regression": "Ни один шаблон не ухудшился относительно прошлого окна.",
+    "cwv.no_comparison": "Нет окна сравнения: показаны только текущие значения p75.",
+    "cwv.none": "Сохранённых строк Core Web Vitals нет.",
+    "cwv.no_templates": (
+        "Сохранённые строки CWV нельзя сгруппировать: нужны шаблон URL и устройство."
+    ),
+    "cwv.truncated": "Показано {shown} из {total} шаблонов.",
+    "cwv.data_age": "Самое старое измерение CWV: {date}",
+    "cwv.regressed_summary": "Ухудшение: {template} · {device} ({metric} {change})",
+    "cwv.count.one": "{count} шаблон",
+    "cwv.count.few": "{count} шаблона",
+    "cwv.count.many": "{count} шаблонов",
+    "cwv.count.other": "{count} шаблонов",
+    "cwv.device.phone": "Телефон",
+    "cwv.device.desktop": "Компьютер",
+    "cwv.device.tablet": "Планшет",
+    "cwv.status.good": "Хорошо",
+    "cwv.status.needs_improvement": "Требует улучшения",
+    "cwv.status.poor": "Плохо",
+    "cwv.status.unknown": "Неизвестно",
+    "cwv.metric.lcp": "LCP",
+    "cwv.metric.inp": "INP",
+    "cwv.metric.cls": "CLS",
+    "cwv.metric.fcp": "FCP",
+    "cwv.metric.ttfb": "TTFB",
+    "cwv.metric.fid": "FID",
     "warning.title": "Предупреждения",
     "warning.no_metrics": "За оба периода нет метрик; строки изменений нулевые.",
     "warning.previous_no_metrics": (
@@ -505,6 +619,7 @@ _RU_CATALOG: dict[str, str] = {
     "unit.rows": "строки",
     "unit.sessions": "сеансы",
     "unit.positions": "позиции",
+    "unit.ms": "мс",
     "unit.pp": "п.п.",
 }
 
@@ -554,6 +669,7 @@ _ZH_CATALOG: dict[str, str] = {
     "section.notes": "数据说明",
     "section.warnings": "警告",
     "section.digest": "变化归因摘要",
+    "section.cwv": "按模板划分的 Core Web Vitals",
     # Traffic
     "traffic.rows": "着陆页",
     "traffic.sessions": "会话数",
@@ -625,6 +741,24 @@ _ZH_CATALOG: dict[str, str] = {
     "notes.limitation.digest_no_evidence": "变化归因：未提供抓取、索引或页面状态证据。",
     "notes.limitation.digest_no_matching_evidence": "变化归因：现有证据未能匹配所有显著变化。",
     "notes.limitation.digest_evidence_malformed": "变化归因：部分证据行因缺少标识而被忽略。",
+    "notes.limitation.cwv_no_rows": "Core Web Vitals：未提供已存储的指标行。",
+    "notes.limitation.cwv_template_missing": (
+        "Core Web Vitals：缺少 URL 模板（包括来源级数据）的行已跳过。"
+    ),
+    "notes.limitation.cwv_device_missing": "Core Web Vitals：缺少设备的行已跳过。",
+    "notes.limitation.cwv_no_comparison": (
+        "Core Web Vitals：没有上一周期的 p75 基线，仅显示当前值。"
+    ),
+    "notes.limitation.cwv_partial_comparison": (
+        "Core Web Vitals：只有部分网址有上一周期的 p75，因此对比仅覆盖部分样本。"
+    ),
+    "notes.limitation.cwv_p75_worst_page": (
+        "Core Web Vitals：模板 p75 是该模板中最差页面的 p75；百分位数不跨网址平均。"
+    ),
+    "notes.limitation.cwv_values_ignored": ("Core Web Vitals：部分行因指标或 p75 值无效而被忽略。"),
+    "notes.limitation.cwv_lab_ignored": (
+        "Core Web Vitals：实验室（Lighthouse）行已忽略；仅分组实测 p75。"
+    ),
     # Attributed change digest
     "digest.count.one": "{count} 项显著变化",
     "digest.count.few": "{count} 项显著变化",
@@ -661,6 +795,37 @@ _ZH_CATALOG: dict[str, str] = {
     "digest.next_action.unexplained": (
         "收集受影响网址的抓取问题、索引事件和页面状态；不归因原因。"
     ),
+    # Core Web Vitals by template
+    "cwv.template": "模板",
+    "cwv.device": "设备",
+    "cwv.p75": "p75",
+    "cwv.sample": "样本",
+    "cwv.coverage": "覆盖率",
+    "cwv.regressed": "已退化",
+    "cwv.no_regression": "与上一窗口相比，没有模板退化。",
+    "cwv.no_comparison": "没有对比窗口：仅显示当前 p75 值。",
+    "cwv.none": "没有已存储的 Core Web Vitals 行。",
+    "cwv.no_templates": "已存储的 CWV 行无法分组：需要 URL 模板和设备。",
+    "cwv.truncated": "显示 {shown}/{total} 个模板。",
+    "cwv.data_age": "最早的 CWV 数据：{date}",
+    "cwv.regressed_summary": "退化：{template} · {device}（{metric} {change}）",
+    "cwv.count.one": "{count} 个模板",
+    "cwv.count.few": "{count} 个模板",
+    "cwv.count.many": "{count} 个模板",
+    "cwv.count.other": "{count} 个模板",
+    "cwv.device.phone": "手机",
+    "cwv.device.desktop": "桌面",
+    "cwv.device.tablet": "平板",
+    "cwv.status.good": "良好",
+    "cwv.status.needs_improvement": "需要改进",
+    "cwv.status.poor": "较差",
+    "cwv.status.unknown": "未知",
+    "cwv.metric.lcp": "LCP",
+    "cwv.metric.inp": "INP",
+    "cwv.metric.cls": "CLS",
+    "cwv.metric.fcp": "FCP",
+    "cwv.metric.ttfb": "TTFB",
+    "cwv.metric.fid": "FID",
     "warning.title": "警告",
     "warning.no_metrics": "两个周期均无指标，变化行全部为零。",
     "warning.previous_no_metrics": "上一周期没有指标，因此变化无法判定为显著。",
@@ -689,6 +854,7 @@ _ZH_CATALOG: dict[str, str] = {
     "unit.rows": "行",
     "unit.sessions": "会话数",
     "unit.positions": "个位置",
+    "unit.ms": "毫秒",
     "unit.pp": "个百分点",
 }
 

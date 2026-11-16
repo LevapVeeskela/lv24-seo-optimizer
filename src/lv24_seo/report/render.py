@@ -201,6 +201,14 @@ _LIMITATION_KEYS: dict[str, str] = {
     "digest_no_evidence": "notes.limitation.digest_no_evidence",
     "digest_no_matching_evidence": "notes.limitation.digest_no_matching_evidence",
     "digest_evidence_malformed": "notes.limitation.digest_evidence_malformed",
+    "cwv_no_rows": "notes.limitation.cwv_no_rows",
+    "cwv_template_missing": "notes.limitation.cwv_template_missing",
+    "cwv_device_missing": "notes.limitation.cwv_device_missing",
+    "cwv_no_comparison": "notes.limitation.cwv_no_comparison",
+    "cwv_partial_comparison": "notes.limitation.cwv_partial_comparison",
+    "cwv_p75_worst_page": "notes.limitation.cwv_p75_worst_page",
+    "cwv_values_ignored": "notes.limitation.cwv_values_ignored",
+    "cwv_lab_ignored": "notes.limitation.cwv_lab_ignored",
 }
 # Builder warnings that are system statements, not provider prose. They are
 # localized; anything else stays verbatim.
@@ -234,6 +242,7 @@ _WEEKLY_KEYS: frozenset[str] = frozenset(
         "digest",
         "gsc",
         "traffic",
+        "cwv",
         "opportunities",
         "issues",
         "sources",
@@ -342,7 +351,30 @@ _ENGLISH: dict[str, str] = {
     "notes.limitation.digest_evidence_malformed": (
         "Change digest: some evidence rows were ignored because they lacked an identifier."
     ),
+    "notes.limitation.cwv_no_rows": "Core Web Vitals: no stored metric rows were provided.",
+    "notes.limitation.cwv_template_missing": (
+        "Core Web Vitals: rows without a URL template (including origin-level data) were skipped."
+    ),
+    "notes.limitation.cwv_device_missing": ("Core Web Vitals: rows without a device were skipped."),
+    "notes.limitation.cwv_no_comparison": (
+        "Core Web Vitals: no previous p75 baseline, so only current values are shown."
+    ),
+    "notes.limitation.cwv_partial_comparison": (
+        "Core Web Vitals: only some URLs had a previous p75, so the comparison covers "
+        "part of the sample."
+    ),
+    "notes.limitation.cwv_p75_worst_page": (
+        "Core Web Vitals: a template p75 is the worst page p75 in that template; "
+        "percentiles are not averaged across URLs."
+    ),
+    "notes.limitation.cwv_values_ignored": (
+        "Core Web Vitals: some rows were ignored because their metric or p75 value was invalid."
+    ),
+    "notes.limitation.cwv_lab_ignored": (
+        "Core Web Vitals: lab (Lighthouse) rows were ignored; only field p75 data is grouped."
+    ),
     "section.digest": "Attributed change digest",
+    "section.cwv": "Core Web Vitals by template",
     "digest.cause": "Candidate cause",
     "digest.confidence": "Confidence",
     "digest.evidence": "Evidence",
@@ -714,6 +746,17 @@ class _DigestItem:
     next_action: str
 
 
+@dataclass(frozen=True, slots=True)
+class _CwvItem:
+    template: str
+    device_label: str
+    metrics: str
+    sample: str
+    regressed: bool
+    regression_metric: str
+    regression_change: str
+
+
 @dataclass(slots=True)
 class _Issues:
     total: int = 0
@@ -772,6 +815,10 @@ class _View:
     digest: list[_DigestItem]
     digest_empty: str
     digest_meta: str
+    cwv: list[_CwvItem]
+    cwv_empty: str
+    cwv_meta: str
+    cwv_scope: str
     notes: list[str]
     warnings: list[str]
     extras: list[_GenericSection]
@@ -1289,6 +1336,171 @@ def _build_digest(report: Report, msgs: _Messages) -> tuple[list[_DigestItem], s
     return items, empty, _digest_meta_text(section, len(items), msgs)
 
 
+def _cwv_metric_label(metric: str, msgs: _Messages) -> str:
+    if metric in {"lcp", "inp", "cls", "fcp", "ttfb", "fid"}:
+        return msgs.t(f"cwv.metric.{metric}")
+    return _humanize(metric).upper()
+
+
+def _cwv_status_label(status: str, msgs: _Messages) -> str:
+    if status in {"good", "needs_improvement", "poor", "unknown"}:
+        return msgs.t(f"cwv.status.{status}")
+    return msgs.t("cwv.status.unknown")
+
+
+def _cwv_value(metric: str, value: float, unit: str, msgs: _Messages) -> str:
+    if unit == "score" or metric == "cls":
+        return msgs.number(value, digits=2)
+    return f"{msgs.number(value)} {msgs.t('unit.ms')}"
+
+
+def _cwv_delta(
+    metric: str,
+    unit: str,
+    delta: float | None,
+    delta_pct: float | None,
+    msgs: _Messages,
+) -> str:
+    if delta_pct is not None:
+        return msgs.percent(delta_pct, signed=True, digits=1)
+    if delta is None:
+        return ""
+    digits = 2 if unit == "score" or metric == "cls" else 0
+    text = msgs.number(delta, digits=digits)
+    return f"+{text}" if delta > 0 else text
+
+
+def _cwv_metric_text(row: Mapping[str, Any], msgs: _Messages) -> str:
+    metric = _prose(row.get("metric")).casefold()
+    p75 = _number(row.get("p75"))
+    if not metric or p75 is None:
+        return ""
+    unit = _prose(row.get("unit")).casefold() or ("score" if metric == "cls" else "ms")
+    status = _prose(row.get("status")).casefold()
+    delta = _cwv_delta(
+        metric,
+        unit,
+        _number(row.get("delta")),
+        _number(row.get("delta_pct")),
+        msgs,
+    )
+    status_label = _cwv_status_label(status, msgs)
+    tail = f"{status_label}, {delta}" if delta else status_label
+    return (
+        f"{_cwv_metric_label(metric, msgs)} {msgs.t('cwv.p75')} "
+        f"{_cwv_value(metric, p75, unit, msgs)} ({tail})"
+    )
+
+
+def _cwv_device_label(device: str, msgs: _Messages) -> str:
+    if device in {"phone", "desktop", "tablet"}:
+        return msgs.t(f"cwv.device.{device}")
+    return _humanize(device) or msgs.t("cwv.status.unknown")
+
+
+def _cwv_empty_text(report: Report, msgs: _Messages) -> str:
+    codes = {_prose(value).casefold() for value in report.limitations}
+    section = report.section("cwv")
+    if section is not None:
+        codes.update(_prose(note).casefold() for note in section.notes)
+    if "cwv_no_rows" in codes:
+        return msgs.t("cwv.none")
+    if "cwv_template_missing" in codes or "cwv_device_missing" in codes:
+        return msgs.t("cwv.no_templates")
+    return msgs.t("cwv.none")
+
+
+def _cwv_meta_text(section: ReportSection, shown: int, msgs: _Messages) -> str:
+    parts: list[str] = []
+    if section.truncated and section.total is not None:
+        parts.append(
+            msgs.t(
+                "cwv.truncated",
+                shown=msgs.number(float(shown)),
+                total=msgs.number(float(section.total)),
+            )
+        )
+    if section.data_age:
+        parts.append(msgs.t("cwv.data_age", date=msgs.date(section.data_age)))
+    return " \u00b7 ".join(parts)
+
+
+def _build_cwv(report: Report, msgs: _Messages) -> tuple[list[_CwvItem], str, str, str]:
+    """Read the ``cwv`` section defensively; malformed rows are skipped, never guessed."""
+    section = report.section("cwv")
+    if section is None:
+        return [], "", "", ""
+    items: list[_CwvItem] = []
+    any_comparison = False
+    for row in _mapping_rows(section.rows):
+        template = _prose(row.get("template"))
+        if not template:
+            continue
+        raw_metrics = row.get("metrics")
+        metric_rows = (
+            [item for item in raw_metrics if isinstance(item, Mapping)]
+            if isinstance(raw_metrics, (list, tuple))
+            else []
+        )
+        metric_texts = tuple(text for item in metric_rows if (text := _cwv_metric_text(item, msgs)))
+        if not metric_texts:
+            continue
+        device = _prose(row.get("device")).casefold()
+        sample_parts: list[str] = []
+        sample = _count_value(row.get("sample"))
+        if sample is not None:
+            sample_parts.append(f"{msgs.t('cwv.sample')} {msgs.number(float(sample))}")
+        coverage = _number(row.get("coverage"))
+        if coverage is not None:
+            sample_parts.append(
+                f"{msgs.t('cwv.coverage')} {msgs.percent(coverage, digits=0, scale='ratio')}"
+            )
+        regression_pct = _number(row.get("regression_pct"))
+        if regression_pct is not None or any(
+            _number(item.get("previous_p75")) is not None for item in metric_rows
+        ):
+            any_comparison = True
+        regressed = row.get("regressed") is True
+        regression_metric = _prose(row.get("regression_metric")).casefold()
+        regression_change = ""
+        if regressed and regression_metric:
+            regression_change = (
+                msgs.percent(regression_pct, signed=True, digits=1)
+                if regression_pct is not None
+                else msgs.t("cwv.regressed")
+            )
+        items.append(
+            _CwvItem(
+                template=template,
+                device_label=_cwv_device_label(device, msgs),
+                metrics=" \u00b7 ".join(metric_texts),
+                sample=" \u00b7 ".join(sample_parts),
+                regressed=regressed,
+                regression_metric=(
+                    _cwv_metric_label(regression_metric, msgs) if regression_metric else ""
+                ),
+                regression_change=regression_change,
+            )
+        )
+
+    scope = ""
+    worst = next((item for item in items if item.regressed and item.regression_metric), None)
+    if worst is not None:
+        scope = msgs.t(
+            "cwv.regressed_summary",
+            template=worst.template,
+            device=worst.device_label,
+            metric=worst.regression_metric,
+            change=worst.regression_change,
+        )
+    elif any_comparison:
+        scope = msgs.t("cwv.no_regression")
+    elif items:
+        scope = msgs.t("cwv.no_comparison")
+    empty = "" if items else _cwv_empty_text(report, msgs)
+    return items, empty, _cwv_meta_text(section, len(items), msgs), scope
+
+
 def _canonical_source(name: str) -> str:
     key = _inline(name).casefold().replace("-", "_").replace(" ", "_")
     return _ENGINE_ALIASES.get(key, key)
@@ -1655,6 +1867,7 @@ def _build_view(report: Report, msgs: _Messages) -> _View:
         issues = _build_issues(report, msgs)
         sources = _collect_sources(report, msgs)
         digest, digest_empty, digest_meta = _build_digest(report, msgs)
+        cwv, cwv_empty, cwv_meta, cwv_scope = _build_cwv(report, msgs)
         notes, warnings = _build_notes(report, msgs)
         if any(source.scope for source in sources):
             _append_unique(
@@ -1670,6 +1883,7 @@ def _build_view(report: Report, msgs: _Messages) -> _View:
             or bool(opportunities)
             or issues.total > 0
             or source_rows
+            or bool(cwv)
             or _has_metric_values(report)
         )
         has_comparison = any(kpi.value is not None and kpi.previous is not None for kpi in kpis)
@@ -1686,6 +1900,10 @@ def _build_view(report: Report, msgs: _Messages) -> _View:
         digest = []
         digest_empty = ""
         digest_meta = ""
+        cwv = []
+        cwv_empty = ""
+        cwv_meta = ""
+        cwv_scope = ""
         notes, warnings = _build_notes(report, msgs)
         extras = [_generic_section(section, msgs) for section in report.sections]
         intro = _inline(report.headline)
@@ -1716,6 +1934,10 @@ def _build_view(report: Report, msgs: _Messages) -> _View:
         digest=digest,
         digest_empty=digest_empty,
         digest_meta=digest_meta,
+        cwv=cwv,
+        cwv_empty=cwv_empty,
+        cwv_meta=cwv_meta,
+        cwv_scope=cwv_scope,
         notes=notes,
         warnings=warnings,
         extras=extras,
@@ -1917,6 +2139,28 @@ def _text_digest(lines: list[str], view: _View, msgs: _Messages, width: int) -> 
         )
 
 
+def _text_cwv(lines: list[str], view: _View, msgs: _Messages, width: int) -> None:
+    if not view.cwv and not view.cwv_empty:
+        return
+    lines.append("")
+    lines.extend(_wrap_lines(msgs.t("section.cwv"), width))
+    if view.cwv_meta:
+        lines.extend(_wrap_lines(view.cwv_meta, width))
+    if not view.cwv:
+        lines.extend(_wrap_lines(view.cwv_empty, width))
+        return
+    if view.cwv_scope:
+        lines.extend(_wrap_lines(view.cwv_scope, width))
+    for index, item in enumerate(view.cwv, start=1):
+        head = f"{index}. {item.template} \u00b7 {item.device_label}"
+        if item.regressed:
+            head = f"{head} \u00b7 {msgs.t('cwv.regressed')}"
+        lines.extend(_wrap_lines(head, width))
+        lines.extend(_wrap_lines(item.metrics, width, indent="   "))
+        if item.sample:
+            lines.extend(_wrap_lines(item.sample, width, indent="   "))
+
+
 def _text_issues(lines: list[str], view: _View, msgs: _Messages, width: int) -> None:
     lines.append("")
     lines.extend(_wrap_lines(msgs.t("section.issues"), width))
@@ -1998,6 +2242,7 @@ def _render_text(report: Report, *, locale: str, width: int) -> str:
     if report.kind == "weekly":
         _text_kpis(lines, view, msgs, width)
         _text_digest(lines, view, msgs, width)
+        _text_cwv(lines, view, msgs, width)
         if view.critical_count:
             _text_issues(lines, view, msgs, width)
             _text_opportunities(lines, view, msgs, width)
@@ -2278,6 +2523,86 @@ def _digest_markdown(section: ReportSection) -> str:
     return "\n".join(lines)
 
 
+def _cwv_md_value(metric: str, value: float, unit: str) -> str:
+    if unit == "score" or metric == "cls":
+        return f"{value:.2f}"
+    return f"{_format_number(value)} ms"
+
+
+def _cwv_md_delta(entry: Mapping[str, Any], metric: str, unit: str) -> str:
+    pct = _number(entry.get("delta_pct"))
+    if pct is not None:
+        return f"{pct:+.1f}%"
+    delta = _number(entry.get("delta"))
+    if delta is None:
+        return ""
+    if unit == "score" or metric == "cls":
+        return f"{delta:+.2f}"
+    return f"{delta:+.0f} ms"
+
+
+def _cwv_md_metrics(raw: object) -> str:
+    if not isinstance(raw, (list, tuple)):
+        return ""
+    parts: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            continue
+        metric = _prose(entry.get("metric")).casefold()
+        p75 = _number(entry.get("p75"))
+        if not metric or p75 is None:
+            continue
+        unit = _prose(entry.get("unit")).casefold() or ("score" if metric == "cls" else "ms")
+        status = _prose(entry.get("status")).casefold() or "unknown"
+        delta = _cwv_md_delta(entry, metric, unit)
+        tail = f"{status}, {delta}" if delta else status
+        parts.append(f"{metric.upper()} {_cwv_md_value(metric, p75, unit)} ({tail})")
+    return "; ".join(parts)
+
+
+def _cwv_markdown(section: ReportSection) -> str:
+    """Canonical English Markdown for CWV: one table row per template+device."""
+    lines = [f"## {_markdown_text(_prose(section.title) or 'Core Web Vitals by template')}"]
+    summary = _stringify(section.summary)
+    if summary.strip():
+        lines.extend(["", _markdown_text(summary)])
+    table: list[str] = []
+    for row in _mapping_rows(section.rows):
+        template = _prose(row.get("template"))
+        metrics = _cwv_md_metrics(row.get("metrics"))
+        if not template or not metrics:
+            continue
+        sample = _count_value(row.get("sample"))
+        coverage = _number(row.get("coverage"))
+        regression = ""
+        if row.get("regressed") is True:
+            metric = _prose(row.get("regression_metric")).upper()
+            pct = _number(row.get("regression_pct"))
+            regression = f"{metric} {pct:+.1f}%" if pct is not None else f"{metric} worse"
+        cells = [
+            template,
+            _prose(row.get("device")),
+            metrics,
+            "" if sample is None else _format_number(float(sample)),
+            "" if coverage is None else _format_percent(coverage * 100.0, digits=0),
+            regression,
+        ]
+        table.append("| " + " | ".join(_markdown_cell(cell) for cell in cells) + " |")
+    meta: list[str] = []
+    if section.truncated and section.total is not None:
+        meta.append(f"Showing {len(table)} of {section.total} templates")
+    if section.data_age:
+        meta.append(f"Oldest CWV data: {section.data_age}")
+    if meta:
+        joined = " \u00b7 ".join(meta)
+        lines.extend(["", f"_{_markdown_text(joined)}_"])
+    if table:
+        header = "| Template | Device | p75 | Sample | Coverage | Regression |"
+        separator = "| --- | --- | --- | --- | --- | --- |"
+        lines.extend(["", header, separator, *table])
+    return "\n".join(lines)
+
+
 def render_markdown(report: Report) -> str:
     """Render *report* as a Markdown document."""
     blocks: list[str] = []
@@ -2298,6 +2623,8 @@ def render_markdown(report: Report) -> str:
     for section in report.sections:
         if section.key == "digest":
             blocks.append(_digest_markdown(section))
+        elif section.key == "cwv":
+            blocks.append(_cwv_markdown(section))
         else:
             blocks.append(_markdown_section(section))
 
@@ -2453,6 +2780,41 @@ def _html_digest(view: _View, msgs: _Messages) -> str:
             parts.append(
                 f'<div style="margin-top:2px;font-size:12px;line-height:1.5;color:{_SOFT};">'
                 f"{_e(msgs.t('digest.next_action'))}: {_e(item.next_action)}</div>"
+            )
+        parts.append("</div>")
+    return "".join(parts)
+
+
+def _html_cwv(view: _View, msgs: _Messages) -> str:
+    if not view.cwv and not view.cwv_empty:
+        return ""
+    parts = [f'<h2 style="{_H2_STYLE}">{_e(msgs.t("section.cwv"))}</h2>']
+    if view.cwv_meta:
+        parts.append(_html_paragraph(view.cwv_meta, _SMALL_STYLE))
+    if not view.cwv:
+        parts.append(_html_paragraph(view.cwv_empty, _P_STYLE))
+        return "".join(parts)
+    if view.cwv_scope:
+        parts.append(_html_paragraph(view.cwv_scope, _SMALL_STYLE))
+    for item in view.cwv:
+        badge = (
+            f' <span style="{_BADGE_STYLE}">{_e(msgs.t("cwv.regressed"))}</span>'
+            if item.regressed
+            else ""
+        )
+        parts.append(
+            f'<div style="padding:10px 0;border-bottom:1px solid {_BORDER};">'
+            f'<div style="font-size:15px;line-height:1.4;font-weight:600;color:{_TEXT};'
+            f'word-break:break-word;">{_e(item.template)}'
+            f' <span style="font-size:12px;font-weight:400;color:{_MUTED};">'
+            f"{_e(item.device_label)}</span>{badge}</div>"
+            f'<div style="margin-top:4px;font-size:12px;line-height:1.5;color:{_SOFT};'
+            f'word-break:break-word;">{_e(item.metrics)}</div>'
+        )
+        if item.sample:
+            parts.append(
+                f'<div style="margin-top:2px;font-size:12px;line-height:1.5;'
+                f'color:{_MUTED};">{_e(item.sample)}</div>'
             )
         parts.append("</div>")
     return "".join(parts)
@@ -2649,6 +3011,9 @@ def render_html(report: Report, *, title: str | None = None, locale: str = "en")
         digest_html = _html_digest(view, msgs)
         if digest_html:
             body_parts.append(digest_html)
+        cwv_html = _html_cwv(view, msgs)
+        if cwv_html:
+            body_parts.append(cwv_html)
         if view.critical_count:
             body_parts.extend(
                 [
