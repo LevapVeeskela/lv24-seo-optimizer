@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from collections.abc import Callable, Sequence
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
@@ -23,7 +24,7 @@ import typer
 from lv24_seo.core.envelope import envelope_exit_code, fail
 from lv24_seo.core.errors import INTERNAL, SeoError
 
-__all__ = ["emit", "run_envelope", "tool_version"]
+__all__ = ["configure_stdio", "emit", "run_envelope", "tool_version"]
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,24 @@ def tool_version() -> str:
         from lv24_seo import __version__
 
         return __version__
+
+
+def configure_stdio() -> None:
+    """Force UTF-8 on the CLI streams so redirected output cannot hit a legacy codepage.
+
+    Windows consoles and PowerShell redirection default to cp1251/cp866; a provider
+    warning containing a non-ASCII glyph (for example ``⚠``) would otherwise abort the
+    command with ``UnicodeEncodeError`` after the work has already been done. Streams
+    without ``reconfigure`` (tests, already-wrapped captures) are left untouched.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            logger.debug("could not reconfigure a CLI stream to UTF-8", exc_info=True)
 
 
 def run_envelope(action: Callable[[], dict[str, Any]]) -> dict[str, Any]:
@@ -60,6 +79,19 @@ def run_envelope(action: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         )
 
 
+def _echo(text: str) -> None:
+    """Write one line, degrading unencodable glyphs instead of aborting the command.
+
+    ``typer.echo`` may hold a cp1251 stream on Windows even after ``configure_stdio``;
+    a provider warning with ``⚠`` must not turn a completed report into a crash.
+    """
+    try:
+        typer.echo(text)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        typer.echo(text.encode(encoding, "replace").decode(encoding, "replace"))
+
+
 def emit(
     payload: dict[str, Any],
     *,
@@ -73,19 +105,20 @@ def emit(
         meta.setdefault("version", tool_version())
 
     if as_json:
-        typer.echo(json.dumps(payload, ensure_ascii=False))
+        # ASCII escapes keep JSON valid on legacy Windows codepages; parsers decode them.
+        _echo(json.dumps(payload, ensure_ascii=True))
     else:
         for line in lines:
-            typer.echo(line)
+            _echo(line)
         for warning in payload.get("warnings") or []:
-            typer.echo(f"warning: {warning}")
+            _echo(f"warning: {warning}")
         if not payload.get("ok"):
             error = payload.get("error") or {}
             code = error.get("code") or INTERNAL
             message = error.get("message") or "unknown error"
-            typer.echo(f"error: {code}: {message}")
+            _echo(f"error: {code}: {message}")
             next_action = error.get("next_action")
             if next_action:
-                typer.echo(f"next: {next_action}")
+                _echo(f"next: {next_action}")
 
     raise typer.Exit(code=envelope_exit_code(payload) if exit_code is None else exit_code)

@@ -34,7 +34,7 @@ from lv24_seo.automation.scheduler import ScheduleSpec
 from lv24_seo.automation.scheduler import install as install_schedule
 from lv24_seo.automation.scheduler import status as schedule_status
 from lv24_seo.automation.scheduler import uninstall as uninstall_schedule
-from lv24_seo.cli import emit, run_envelope, tool_version
+from lv24_seo.cli import configure_stdio, emit, run_envelope, tool_version
 from lv24_seo.cli.auth import auth_app
 from lv24_seo.cli.backup_cmd import backup_app
 from lv24_seo.cli.logs_cmd import logs_app
@@ -66,6 +66,13 @@ app = typer.Typer(
     no_args_is_help=True,
     help="Free-first SEO control plane for humans and AI agents.",
 )
+
+
+@app.callback()
+def _configure_cli() -> None:
+    """Run before every command so redirected output stays UTF-8 on Windows."""
+    configure_stdio()
+
 
 config_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Inspect configuration.")
 gsc_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Google Search Console.")
