@@ -7,9 +7,11 @@ Covers the three read surfaces Wave 1 needs:
 * ``searchAnalytics.query`` - clicks/impressions by query, page, country, device or date;
 * ``urlInspection.index:inspect`` - index status for a single URL.
 
-The adapter is deliberately stateless apart from the token: pagination, row caps and
-limitation codes are reported through :class:`~lv24_seo.providers.base.ProviderResult` so
-the CLI/report layer never has to guess how complete the data is.
+The adapter is deliberately stateless apart from the token provider: pagination, row caps
+and limitation codes are reported through
+:class:`~lv24_seo.providers.base.ProviderResult` so the CLI/report layer never has to guess
+how complete the data is. The provider is asked for a token before every request, which lets
+a long-lived MCP process survive service-account access-token expiry.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from lv24_seo.providers.base import (
     data_age_days,
     now_utc,
 )
+from lv24_seo.providers.gsc.auth import GscTokenProvider, StaticTokenProvider
 
 GSC_SOURCE = "gsc"
 DEFAULT_BASE_URL = "https://www.googleapis.com/webmasters/v3"
@@ -48,25 +51,28 @@ _END_OF_DAY = time(hour=23, minute=59)
 
 
 class GscClient:
-    """Synchronous Google Search Console client bound to one access token."""
+    """Synchronous Google Search Console client bound to one token provider."""
 
     def __init__(
         self,
         *,
-        access_token: str,
+        access_token: str = "",
+        token_provider: GscTokenProvider | None = None,
         http: HttpClient | None = None,
         property_id: str = "",
         base_url: str = DEFAULT_BASE_URL,
         inspection_url: str = DEFAULT_INSPECTION_URL,
     ) -> None:
-        token = access_token.strip()
-        if not token:
-            raise SeoError(
-                code=AUTH_REQUIRED,
-                message="Google Search Console access token is missing",
-                next_action=_AUTH_NEXT_ACTION,
-            )
-        self._access_token = token
+        if token_provider is None:
+            token = access_token.strip()
+            if not token:
+                raise SeoError(
+                    code=AUTH_REQUIRED,
+                    message="Google Search Console access token is missing",
+                    next_action=_AUTH_NEXT_ACTION,
+                )
+            token_provider = StaticTokenProvider(token)
+        self._tokens = token_provider
         self._http = http if http is not None else HttpClient()
         self._property_id = property_id.strip()
         self._base_url = base_url.rstrip("/")
@@ -215,7 +221,8 @@ class GscClient:
         )
 
     def _auth_headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._access_token}"}
+        # Asked per request: a service-account provider refreshes an expired token here.
+        return {"Authorization": f"Bearer {self._tokens.access_token()}"}
 
     def _require_property(self, site_url: str | None = None) -> str:
         site = (site_url if site_url is not None else self._property_id).strip()

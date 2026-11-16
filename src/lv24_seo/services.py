@@ -68,6 +68,13 @@ from lv24_seo.providers.base import (
 from lv24_seo.providers.bing import BingClient
 from lv24_seo.providers.crux import CruxClient
 from lv24_seo.providers.gsc import GscClient
+from lv24_seo.providers.gsc.auth import (
+    SERVICE_ACCOUNT_FILE_NEXT_ACTION,
+    ServiceAccountTokenProvider,
+    load_service_account_file,
+    service_account_file_problem,
+    token_provider_from_token,
+)
 from lv24_seo.providers.psi import PsiClient
 from lv24_seo.providers.yandex_metrika import YandexMetrikaClient
 from lv24_seo.providers.yandex_webmaster import YandexWebmasterClient
@@ -320,7 +327,18 @@ class SeoService:
         entries = [self._provider_entry(*spec) for spec in self._provider_specs()]
 
         for entry in entries:
-            if entry["configured"] and entry["requires_token"] and not entry["token_present"]:
+            if not (entry["configured"] and entry["requires_token"]):
+                continue
+            if entry["token_present"]:
+                continue
+            problem = (
+                self._gsc_service_account_problem()
+                if entry["provider"] == "gsc" and self._gsc_service_account_file()
+                else None
+            )
+            if problem is not None:
+                warnings.append(f"gsc: {problem}")
+            else:
                 warnings.append(f"{entry['provider']}: token missing")
 
         data = {
@@ -376,7 +394,7 @@ class SeoService:
         requires_token: bool,
     ) -> dict[str, Any]:
         configured = block is not None and bool(target.strip())
-        present = self._secret_present(secret_name)
+        present, source = self._credential_state(provider, secret_name)
         state = "present" if present else "missing"
         return {
             "provider": provider,
@@ -385,6 +403,7 @@ class SeoService:
             "requires_token": requires_token,
             "token": state,
             "token_present": present,
+            "token_source": source,
             "ready": configured and (present or not requires_token),
         }
 
@@ -415,12 +434,18 @@ class SeoService:
         for provider, collect in collectors:
             block, _, secret_name, target, requires_token = specs[provider]
             configured = block is not None and bool(target.strip())
-            ready = configured and (self._secret_present(secret_name) or not requires_token)
+            ready = configured and (
+                self._credential_present(provider, secret_name) or not requires_token
+            )
             entry = _stats_entry(provider, configured=configured, ready=ready)
             if not configured:
                 entry["status"] = "not_configured"
             elif not ready:
                 entry["status"] = "missing_token"
+                if provider == "gsc" and self._gsc_service_account_file():
+                    problem = self._gsc_service_account_problem()
+                    if problem is not None:
+                        warnings.append(f"gsc: {problem}")
             else:
                 try:
                     client = self._client_for(provider, warnings)
@@ -2571,7 +2596,15 @@ class SeoService:
             return self._overrides[name]
         if name in _KEYLESS_CLIENTS:
             return self._wired_client(name)
-        if not self._secret_present(_ENGINE_SECRETS[name]):
+        if name == "gsc" and self._gsc_service_account_file():
+            problem = self._gsc_service_account_problem()
+            if problem is not None:
+                raise SeoError(
+                    code=CONFIG_INVALID,
+                    message=problem,
+                    next_action=SERVICE_ACCOUNT_FILE_NEXT_ACTION,
+                )
+        if not self._credential_present(name, _ENGINE_SECRETS[name]):
             return None
         return self._wired_client(name)
 
@@ -2597,13 +2630,25 @@ class SeoService:
             key = self._secrets.get(_ENGINE_SECRETS["psi"]) or ""
             return PsiClient(api_key=key)
 
-        token = self._require_secret(name)
         if name == "gsc":
             gsc = providers_cfg.gsc
+            property_id = gsc.property if gsc is not None else ""
+            # Resolution order: config/env service_account_file, then the gsc_token secret.
+            # The file wins even when a stale access token is still stored.
+            account_file = self._gsc_service_account_file()
+            if account_file:
+                return GscClient(
+                    token_provider=ServiceAccountTokenProvider(
+                        load_service_account_file(account_file)
+                    ),
+                    property_id=property_id,
+                )
             return GscClient(
-                access_token=token,
-                property_id=gsc.property if gsc is not None else "",
+                token_provider=token_provider_from_token(self._require_secret("gsc")),
+                property_id=property_id,
             )
+
+        token = self._require_secret(name)
         if name == "yandex_webmaster":
             return YandexWebmasterClient(token=token)
         if name == "yandex_metrika":
@@ -2629,6 +2674,29 @@ class SeoService:
     def _secret_present(self, secret_name: str) -> bool:
         value = self._secrets.get(secret_name)
         return value is not None and bool(value.strip())
+
+    def _gsc_service_account_file(self) -> str:
+        gsc = self._config.providers.gsc
+        return gsc.service_account_file.strip() if gsc is not None else ""
+
+    def _gsc_service_account_problem(self) -> str | None:
+        return service_account_file_problem(self._gsc_service_account_file())
+
+    def _credential_state(self, provider: str, secret_name: str) -> tuple[bool, str]:
+        """Presence plus a non-secret source label for ``properties``.
+
+        A configured GSC service-account file wins over a stored token, mirroring the
+        resolution order used to build the client. The check only stats the file; the
+        JSON is read once when the client is constructed.
+        """
+        if provider == "gsc" and self._gsc_service_account_file():
+            return (self._gsc_service_account_problem() is None, "service_account_file")
+        if self._secret_present(secret_name):
+            return (True, "secret")
+        return (False, "missing")
+
+    def _credential_present(self, provider: str, secret_name: str) -> bool:
+        return self._credential_state(provider, secret_name)[0]
 
     # -- shared helpers ----------------------------------------------------------------------
 

@@ -71,9 +71,9 @@ build until the release workflow runs. See
 [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md) and
 [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
 
-Still honest gaps before `v1.0`: GSC service-account auth (OAuth token only today),
-sitemap submit / Yandex recrawl return an explicit `WRITE_DISABLED` (IndexNow really submits),
-and `raw_retention_days` is reserved (no raw archives are written yet). See
+Still honest gaps before `v1.0`: sitemap submit / Yandex recrawl return an explicit
+`WRITE_DISABLED` (IndexNow really submits), and `raw_retention_days` is reserved (no raw archives
+are written yet). GSC supports both a plain OAuth access token and a service-account JSON key. See
 [`docs/plans/2026-11-10-implementation-plan.md`](docs/plans/2026-11-10-implementation-plan.md) for
 the wave status.
 
@@ -225,7 +225,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 
 | Source | Free tier | Used for | Write operations |
 |---|---|---|---|
-| Google Search Console | yes (access token; service-account flow planned) | queries, pages, countries, devices; URL Inspection adapter | sitemap submit disabled |
+| Google Search Console | yes (OAuth access token or service-account JSON key) | queries, pages, countries, devices; URL Inspection adapter | sitemap submit disabled |
 | Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics | recrawl disabled |
 | Yandex Metrika | yes | sessions and users; filtered reports through adapter; separate `metrika` auth provider (`yandex_metrika_token`) | — |
 | Bing Webmaster + IndexNow | yes | queries, crawl issues, instant URL ping | IndexNow submit |

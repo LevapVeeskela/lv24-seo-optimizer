@@ -46,9 +46,11 @@ _PROVIDER_SECRETS: dict[str, str] = {
 
 _LOGIN_STEPS: dict[str, tuple[str, ...]] = {
     "gsc": (
-        "Create an OAuth client (Desktop) or a service account in Google Cloud.",
+        "Create an OAuth client (Desktop) for a manual access token, or a service account for "
+        "unattended runs.",
         "Add the client or service-account email to the Search Console property as Full/Owner.",
-        "Paste the access token when prompted by `lv24-seo auth set --provider gsc --stdin`.",
+        "For a service account, point LV24_SEO_GSC_SERVICE_ACCOUNT_FILE at the JSON key's "
+        "absolute path; for a manual token run `lv24-seo auth set --provider gsc --stdin`.",
     ),
     "yandex": (
         "Create an app at https://oauth.yandex.ru/ with the webmaster:hostinfo scope.",

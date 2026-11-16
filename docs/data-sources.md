@@ -31,6 +31,11 @@ Legend: **R** = read, **W** = write (gated), *free* = no payment required.
 4. Cache daily pulls in SQLite; never re-query a month repeatedly (the "load quota" is opaque).
 5. A service account cannot complete interactive verification for `sc-domain:` — a human publishes the
    DNS TXT once (or `sites.add` is called by an already-verified principal).
+6. Auth resolution tries the service-account file first (`providers.gsc.service_account_file`, with
+   `LV24_SEO_GSC_SERVICE_ACCOUNT_FILE` overriding it), then the `gsc_token` secret. The path must be
+   absolute; the engine reads the key once, signs an RS256 JWT with `webmasters.readonly`, caches the
+   access token and refreshes it 60 seconds before expiry. A plain `gsc_token` is a bearer access
+   token and is not refreshed.
 
 **Not available:** general URL submission (the Indexing API only supports `JobPosting`/`BroadcastEvent`),
 rich-result validation (no public API), query data beyond 16 months, real-time data.

@@ -8,9 +8,10 @@ All notable changes to this project are documented here. Format follows
 Release notes: [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md). Status: release candidate; `0.7.0`
 remains the latest published build until the release workflow runs.
 
-Minor release: adds the URL+device CWV writer, richer Yandex Webmaster indicators, non-destructive
-`backup restore --to`, and a plan-by-default `schedule` lifecycle. The CLI now has **22 top-level
-commands**; the MCP surface, SQLite schema and `schemas/tools.json` are unchanged.
+Minor release: adds the URL+device CWV writer, GSC service-account authentication, richer Yandex
+Webmaster indicators, non-destructive `backup restore --to`, and a plan-by-default `schedule`
+lifecycle. The CLI now has **22 top-level commands**; the MCP surface, SQLite schema and
+`schemas/tools.json` are unchanged.
 
 ### Added
 
@@ -19,6 +20,12 @@ commands**; the MCP surface, SQLite schema and `schemas/tools.json` are unchange
   `metric_daily` row with `source=crux`, `scope=<device>` and `key=<url>`. PSI lab rows are returned
   under `data.lab` and never persisted; `tablet` is unsupported by PSI and reported as
   `psi_tablet_unsupported`. `report weekly` now reads stored CWV rows through today.
+- Google Search Console service-account authentication: `providers.gsc.service_account_file` or
+  `LV24_SEO_GSC_SERVICE_ACCOUNT_FILE` (absolute path) is read before the `gsc_token` secret. The
+  engine signs an RS256 JWT, exchanges it at the Google token endpoint and caches/refreshes the
+  access token 60 seconds before expiry; a `gsc_token` that is a service-account JSON object also
+  works, and a plain token keeps the old bearer behaviour. `properties` adds `token_source`;
+  `doctor` adds a non-fatal `gsc_auth` check. `cryptography>=43` is now a required dependency.
 - Yandex Webmaster indicators: `AVG_CLICK_POSITION` (`avg_click_position`), `query_id`,
   `extra_indicators` for unmapped query indicators, `site_problems` in indexing summary and the
   documented `HTTP_2XX`…`OTHER` indexing-history series merged per date. The legacy list form is kept.

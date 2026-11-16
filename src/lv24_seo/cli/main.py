@@ -54,6 +54,7 @@ from lv24_seo.core.secrets import SecretStore
 from lv24_seo.core.write_gate import WRITE_SECRET_ENV, WriteGate, WritePlan
 from lv24_seo.mcp.registry import tools_as_json
 from lv24_seo.providers.bing import indexnow_submit
+from lv24_seo.providers.gsc.auth import service_account_file_problem
 from lv24_seo.report.i18n import normalize_locale
 from lv24_seo.report.models import Report, ReportSection
 from lv24_seo.report.render import render_html, render_text
@@ -252,6 +253,30 @@ def doctor(
         statuses = SecretStore(data_dir=config.storage.data_dir).status()
         present = [status.name for status in statuses if status.present]
         scope_note = _data_dir_scope_note(data_dir, resolved)
+        gsc = config.providers.gsc
+        gsc_file = gsc.service_account_file.strip() if gsc is not None else ""
+        gsc_problem = service_account_file_problem(gsc_file)
+        if gsc_file:
+            gsc_ok = gsc_problem is None
+            gsc_detail = (
+                f"service account file: {Path(gsc_file).expanduser()}"
+                if gsc_ok
+                else str(gsc_problem)
+            )
+        else:
+            if "gsc_token" in present:
+                gsc_ok = True
+                gsc_detail = "token present (gsc_token)"
+            elif gsc is None:
+                gsc_ok = True
+                gsc_detail = "not configured (optional)"
+            else:
+                gsc_ok = False
+                gsc_detail = (
+                    "credential missing; set LV24_SEO_GSC_SERVICE_ACCOUNT_FILE or run "
+                    "`lv24-seo auth set --provider gsc --stdin`"
+                )
+        gsc_file_ok = bool(gsc_file) and gsc_problem is None
         checks = [
             {
                 "id": "python",
@@ -282,12 +307,21 @@ def doctor(
             },
             {
                 "id": "tokens",
-                "ok": bool(present),
+                "ok": bool(present) or gsc_file_ok,
                 "detail": (
                     f"{len(present)} of {len(statuses)} present: {', '.join(present)}"
                     if present
-                    else "none present; run `lv24-seo auth status`"
+                    else (
+                        "GSC uses a service-account file; no stored secrets"
+                        if gsc_file_ok
+                        else "none present; run `lv24-seo auth status`"
+                    )
                 ),
+            },
+            {
+                "id": "gsc_auth",
+                "ok": gsc_ok,
+                "detail": gsc_detail,
             },
         ]
         # A declared data directory is part of the workspace contract: when the config file or

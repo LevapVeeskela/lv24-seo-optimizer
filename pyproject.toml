@@ -28,6 +28,8 @@ dependencies = [
   "pydantic>=2.9.2",
   "platformdirs>=4.3.6",
   "mcp>=1.2.0",
+  # Service-account JWT signing for Google Search Console. Apache-2.0 OR BSD-3-Clause.
+  "cryptography>=43",
   # Windows ships no IANA database for stdlib zoneinfo; without this the
   # scheduler must reject configured zones that cannot be resolved there.
   # MIT-licensed pure-Python data, Windows-only.

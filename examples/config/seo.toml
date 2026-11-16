@@ -18,7 +18,9 @@ default_property = "sc-domain:example.com"
 # domain property, `https://example.com/` for a URL-prefix property.
 property = "sc-domain:example.com"
 # Local default: token in the OS keychain (`lv24-seo auth set --provider gsc --stdin`).
-# In CI the workflow passes LV24_SEO_GSC_SERVICE_ACCOUNT_FILE instead.
+# In CI the workflow passes LV24_SEO_GSC_SERVICE_ACCOUNT_FILE instead. A service-account
+# path may also be written here; it must be absolute and the JSON stays outside the repo:
+# service_account_file = "/etc/lv24-seo/gsc-service-account.json"
 auth = "keychain"
 
 [providers.yandex_webmaster]

@@ -6,8 +6,8 @@
 W6 ✅ · W7 ✅ (10 инструментов, 3 ресурса, 3 промпта) · W8 ✅ (write-gate + IndexNow; sitemap/recrawl адаптеры
 ещё без write-методов) · W9 частично · W10 частично (`server.json`, release workflow, docs; публикация
 PyPI/registry не выполнена). **826 тестов**, 87 файлов src / 17k строк.
-Открытые хвосты: GSC service-account, sitemap/recrawl write-методы, живой e2e, PyPI trusted publisher,
-MCP Registry publish.
+Открытые хвосты: sitemap/recrawl write-методы, живой e2e, PyPI trusted publisher,
+MCP Registry publish. GSC service-account добавлен в 0.8.0.
 
 Связанные документы: [архитектура](../architecture.md) · [источники и лимиты](../data-sources.md) ·
 [MCP](../mcp.md) · [CLI](../cli.md) · [конфиг](../config.md) · [расписание](../scheduling.md) ·
