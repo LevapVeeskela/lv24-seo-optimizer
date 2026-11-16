@@ -20,6 +20,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from lv24_seo.analysis.delta import DeltaRow, DeltaThresholds, compute_delta, headline, summary
+from lv24_seo.analysis.digest import Digest, build_digest
 from lv24_seo.analysis.fusion import EngineSummary, FusionReport, fuse_engines
 from lv24_seo.analysis.indexing import Bucket, triage
 from lv24_seo.analysis.opportunities import Opportunity, find_opportunities
@@ -59,6 +60,7 @@ def build_weekly(
     extra_engines: Sequence[Mapping[str, Any]] = (),
     limitations: Sequence[str] = (),
     thresholds: DeltaThresholds | None = None,
+    digest_evidence: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     generated_at: datetime | None = None,
 ) -> Report:
     """Build the weekly review: deltas, traffic, opportunities, issues and sources.
@@ -77,6 +79,13 @@ def build_weekly(
     per-engine, never merged. ``issues`` are stored crawl findings, newest last
     write wins; an empty list renders an explicit "no issue rows" note, never a
     clean bill of health.
+
+    ``digest_evidence`` opts into the attributed change digest. ``None`` keeps
+    the historical section list; a mapping (even with empty lists) adds the
+    ``digest`` section and is expected to carry ``issue_changes``,
+    ``indexing_events`` and ``pages`` rows from the store. A caller that cannot
+    read one of them passes an empty list, and the digest reports the missing
+    evidence as a limitation instead of guessing a cause.
     """
     delta_rows = (
         compute_delta(current, previous, thresholds=thresholds) if current and previous else []
@@ -98,14 +107,17 @@ def build_weekly(
         else "No provider data available"
     )
 
-    return Report(
-        kind="weekly",
-        property_id=property_id,
-        period_start=_iso_date(period_start),
-        period_end=_iso_date(period_end),
-        headline=headline_text,
-        sections=[
-            _headline_section(delta_rows, current_only_rows),
+    digest = _weekly_digest(
+        delta_rows,
+        evidence=digest_evidence,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    sections = [_headline_section(delta_rows, current_only_rows)]
+    if digest is not None:
+        sections.append(_digest_section(digest, has_comparison=bool(delta_rows)))
+    sections.extend(
+        [
             _traffic_section(fusion),
             _opportunities_section(opportunities, has_rows=bool(gsc_rows)),
             _issues_section(issues),
@@ -119,9 +131,20 @@ def build_weekly(
                 extra_engines=extra_engines,
                 limitations=limitations,
             ),
-        ],
+        ]
+    )
+
+    return Report(
+        kind="weekly",
+        property_id=property_id,
+        period_start=_iso_date(period_start),
+        period_end=_iso_date(period_end),
+        headline=headline_text,
+        sections=sections,
         generated_at=_timestamp(generated_at),
-        limitations=list(limitations),
+        limitations=(
+            list(limitations) if digest is None else _unique([*limitations, *digest.limitations])
+        ),
         warnings=_weekly_warnings(current, previous, gsc_rows, yandex_rows, metrika_rows),
     )
 
@@ -201,6 +224,68 @@ def _headline_section(
         summary=_delta_summary_text(rows),
         rows=([_delta_row(row) for row in rows] if rows else [dict(row) for row in current_only]),
     )
+
+
+def _weekly_digest(
+    rows: Sequence[DeltaRow],
+    *,
+    evidence: Mapping[str, Sequence[Mapping[str, Any]]] | None,
+    period_start: date,
+    period_end: date,
+) -> Digest | None:
+    """Build the digest only when the caller opted in by supplying evidence inputs."""
+    if evidence is None:
+        return None
+    return build_digest(
+        deltas=[_delta_row(row) for row in rows],
+        issue_changes=_evidence_rows(evidence.get("issue_changes")),
+        indexing_events=_evidence_rows(evidence.get("indexing_events")),
+        pages=_evidence_rows(evidence.get("pages")),
+        has_comparison=bool(rows),
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+
+def _digest_section(digest: Digest, *, has_comparison: bool) -> ReportSection:
+    explained = sum(1 for item in digest.items if item.cause != "unexplained")
+    unexplained = len(digest.items) - explained
+    if not has_comparison:
+        summary = "No comparison window: metric changes cannot be attributed"
+    elif not digest.items:
+        summary = "No material metric change to explain"
+    else:
+        summary = (
+            f"{digest.total} material {_plural(digest.total, 'change')}: "
+            f"{explained} with matching evidence, {unexplained} unexplained"
+        )
+        if digest.truncated:
+            summary += f" (showing {len(digest.items)})"
+    return ReportSection(
+        key="digest",
+        title="Attributed change digest",
+        summary=summary,
+        rows=[item.to_dict() for item in digest.items],
+        total=digest.total,
+        truncated=digest.truncated,
+        data_age=digest.data_age,
+    )
+
+
+def _evidence_rows(value: object) -> list[Mapping[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        return []
+    return [row for row in value if isinstance(row, Mapping)]
+
+
+def _unique(values: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            unique.append(value)
+    return unique
 
 
 def _delta_row(row: DeltaRow) -> dict[str, Any]:
