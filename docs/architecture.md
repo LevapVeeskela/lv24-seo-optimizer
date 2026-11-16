@@ -310,4 +310,4 @@ uncheckpointed WAL without `-shm` is reported as `STORE_UNAVAILABLE` instead of 
 read-write. A broken config or unreadable database becomes a per-site `error` object and the rest of
 the portfolio still scans. Rows carry local activity only: crawl runs, report snapshots, open/total/
 critical issues and their latest timestamps. The same core module is intended for the desktop and a
-future MCP tool; 0.7.0 exposes it only through the CLI.
+future MCP tool; 0.8.0 exposes it only through the CLI.

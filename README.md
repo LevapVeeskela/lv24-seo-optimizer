@@ -55,20 +55,21 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.7.0).** Working today: six
+**Beta (v0.8.0, release candidate).** Working today: six
 provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule
 crawler, SQLite history, analysis (deltas, opportunities, indexing triage, multi-engine fusion,
 nginx log analysis with UA-only bot triage, CWV by template), per-provider `stats`, report builders
 + HTML/text/Markdown renderers with an attributed change digest and a Core Web Vitals section, the
 finding/task lifecycle, portable backup bundles with non-destructive and two-phase restore, a
-read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, the 21-command CLI,
+read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, the 22-command CLI,
 the MCP server
-(12 tools, 3 resources, 3 prompts) and scheduler generators. Canonical source ids, GSC-only
-headline deltas, partial provider isolation and window/daily storage separation are enforced with
-regression tests. `0.7.0` is the coverage release (portfolio, restore, indexing events, CWV) and the
-current published build; `0.6.0` was the insights release. See
-[`docs/releases/0.7.0.md`](docs/releases/0.7.0.md) and
-[`docs/releases/0.6.0.md`](docs/releases/0.6.0.md).
+(12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
+GSC-only headline deltas, partial provider isolation and window/daily storage separation are
+enforced with regression tests. `0.8.0` is the CWV-writer release (URL+device CrUX collection, safe
+`backup restore --to`, gated scheduling) and the current build; `0.7.0` remains the latest published
+build until the release workflow runs. See
+[`docs/releases/0.8.0.md`](docs/releases/0.8.0.md) and
+[`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
 
 Still honest gaps before `v1.0`: GSC service-account auth (OAuth token only today),
 sitemap submit / Yandex recrawl return an explicit `WRITE_DISABLED` (IndexNow really submits),
@@ -243,6 +244,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
+* [Release notes 0.8.0](docs/releases/0.8.0.md) — CWV writer, Yandex indicators, safe restore, schedule lifecycle
 * [Release notes 0.7.0](docs/releases/0.7.0.md) — coverage release: portfolio, restore, indexing events, CWV
 * [Release notes 0.6.0](docs/releases/0.6.0.md) — insights release: logs, digest, tasks, backup
 * [Release notes 0.5.3](docs/releases/0.5.3.md) — P0 hardening release

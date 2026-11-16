@@ -194,9 +194,9 @@ Exactly three resources — there is no `seo://property/{id}/baseline`.
 | `content_opportunities` | opportunities → prioritised backlog |
 
 Total: 12 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
-`lv24_seo/mcp/registry.py` — never edit it by hand. The 0.7.0 release adds no MCP tool and changes
-no input: `portfolio list` and `backup restore` are CLI-only, and the new report content is additive
-inside `seo_weekly_report`.
+`lv24_seo/mcp/registry.py` — never edit it by hand. The 0.8.0 release adds no MCP tool and changes
+no input or output: `cwv collect`, `backup restore --to` and the scheduler lifecycle are CLI-only,
+and the weekly report content is unchanged by this release.
 
 ## Error contract
 

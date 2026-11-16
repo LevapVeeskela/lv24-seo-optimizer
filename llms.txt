@@ -6,7 +6,8 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.7.0` (current published build): 6 provider
+- Engine `lv24-seo 0.8.0` (release candidate; `0.7.0` remains the latest published build until the
+  release workflow runs): 6 provider
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
@@ -19,6 +20,10 @@
   only with `--allow-write --confirm TOKEN`.
 - MCP: 12 tools (10 read-class, including 3 local-state writers with `readOnlyHint: false`; 2 gated
   provider writes that return `WRITE_DISABLED` in this build), 3 resources, 3 prompts.
+- New in 0.8.0: `cwv collect` URL+device CrUX writer (PSI lab rows never persisted), richer Yandex
+  Webmaster indicators (`avg_click_position`, `query_id`, `extra_indicators`, `site_problems`,
+  `HTTP_2XX`…`OTHER` series), non-destructive `backup restore --to DIR`, and `schedule install`
+  plan-by-default with `status`/`uninstall`. No new MCP tool; schema stays v4.
 - New in 0.7.0: `portfolio list` (read-only multi-site roll-up), two-phase `backup restore`,
   persisted Yandex indexing events (schema v4), and a Core Web Vitals by template/device section in
   `report weekly`. No new MCP tool.
@@ -44,6 +49,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
+- [Release notes 0.8.0](docs/releases/0.8.0.md): CWV writer, Yandex indicators, safe restore, schedule lifecycle
 - [Release notes 0.7.0](docs/releases/0.7.0.md): coverage release (portfolio, restore, indexing events, CWV)
 - [Release notes 0.6.0](docs/releases/0.6.0.md): insights release (logs, digest, tasks, backup)
 - [Release notes 0.5.3](docs/releases/0.5.3.md): published P0 hardening release

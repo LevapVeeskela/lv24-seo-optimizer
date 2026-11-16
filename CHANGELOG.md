@@ -3,10 +3,48 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.8.0] - 2026-11-16
+
+Release notes: [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md). Status: release candidate; `0.7.0`
+remains the latest published build until the release workflow runs.
+
+Minor release: adds the URL+device CWV writer, richer Yandex Webmaster indicators, non-destructive
+`backup restore --to`, and a plan-by-default `schedule` lifecycle. The CLI now has **22 top-level
+commands**; the MCP surface, SQLite schema and `schemas/tools.json` are unchanged.
+
+### Added
+
+- `cwv collect --url ABS [--url ABS ...] [--device phone|desktop|tablet|all] [--source crux|psi|both]
+  [--limit 1..50] [--json]`: queries CrUX per URL and device and persists every p75 as a
+  `metric_daily` row with `source=crux`, `scope=<device>` and `key=<url>`. PSI lab rows are returned
+  under `data.lab` and never persisted; `tablet` is unsupported by PSI and reported as
+  `psi_tablet_unsupported`. `report weekly` now reads stored CWV rows through today.
+- Yandex Webmaster indicators: `AVG_CLICK_POSITION` (`avg_click_position`), `query_id`,
+  `extra_indicators` for unmapped query indicators, `site_problems` in indexing summary and the
+  documented `HTTP_2XX`…`OTHER` indexing-history series merged per date. The legacy list form is kept.
+- `backup restore --file ABS --to ABS_DIR [--json]`: extracts an archive into a new directory after
+  re-validating every member. The target must not exist, zip-slip paths and symlinks are rejected,
+  the database passes `PRAGMA quick_check`, and no `--allow-write` or confirm token is involved
+  because no existing file is modified. The in-place `--config` restore is unchanged.
+- `schedule status [--kind weekly|daily]`: read-only report of `installed|outdated|partial|missing|
+  unknown` with expected paths and per-artefact `exists`/`matches`.
+- `schedule uninstall [--allow-write]`: plan-only by default; with `--allow-write` removes exactly
+  the managed cron block, the two systemd user units or the named Task Scheduler task. A second run
+  is a no-op and unrelated entries are never touched.
+
+### Changed
+
+- `schedule install` is plan-only by default (`dry_run: true`, `installed: false`) and requires
+  `--allow-write` to touch the host; `--print` stays an alias for the default. Scripts that relied on
+  the old implicit install must add `--allow-write`.
+- The CLI has 22 top-level commands: 15 groups (adds `cwv`) and 7 commands.
+- The MCP surface stays at 12 tools (10 read-class, 2 gated writes), 3 resources and 3 prompts; no
+  tool input or output changed. The SQLite schema stays at version 4 and `schemas/tools.json` is
+  unchanged.
+
 ## [0.7.0] - 2026-11-16
 
-Release notes: [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md). Status: release candidate; `0.6.0`
-remains the latest published build until the release workflow runs.
+Release notes: [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
 
 Minor release: adds a read-only multi-site portfolio, two-phase backup restore, persisted Yandex
 indexing events (schema migration v4) and a Core Web Vitals by template section in `report weekly`.

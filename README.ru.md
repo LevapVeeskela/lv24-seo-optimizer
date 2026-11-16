@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.7.0).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.8.0, release candidate).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -124,14 +124,16 @@ write-адаптеры не подключены.
 
 ## Статус
 
-Бета (v0.7.0). Открытые честные ограничения: OAuth-токен GSC
+Бета (v0.8.0, release candidate). Открытые честные ограничения: OAuth-токен GSC
 (service account — позже), `sitemap submit` / `recrawl` отвечают `WRITE_DISABLED` (IndexNow
 реально отправляет), `crawl.concurrency` зарезервирован (краулер последовательный с
 `Crawl-delay`), анализ логов определяет ботов только по User-Agent, `portfolio list` и
 `backup restore` доступны только в CLI, а CWV-секция строится лишь по сохранённым field-данным
-CrUX/PSI. `0.7.0` — текущая опубликованная сборка, десктоп `0.5.0` несёт движок `0.7.0`.
-Новое в 0.7.0 — в [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md); новое в 0.6.0 — в
-[`docs/releases/0.6.0.md`](docs/releases/0.6.0.md).
+CrUX/PSI. `0.8.0` — текущая сборка (release candidate): writer CWV по URL и устройству, безопасный
+`backup restore --to`, планировщик с явным `--allow-write`. `0.7.0` остаётся последней
+опубликованной сборкой до запуска release workflow; десктоп `0.5.0` несёт движок `0.7.0`, десктоп
+`0.6.0` не выпущен. Новое в 0.8.0 — в [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md); новое в
+0.7.0 — в [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
 
 ## Для агентов
 
