@@ -3,6 +3,48 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.6.0] - 2026-11-16
+
+Release notes: [`docs/releases/0.6.0.md`](docs/releases/0.6.0.md).
+
+Minor release: adds local log analysis, an attributed weekly digest, the finding/task lifecycle
+(schema migration v3) and portable project backups. The CLI now has **20 top-level commands** and the
+MCP server has **12 tools**. Existing envelope keys and tool inputs are unchanged;
+`schemas/tools.json` gains the additive `seo_log_analysis` schema. CI and contract gates are
+unchanged from 0.5.3.
+
+### Added
+
+- `logs analyze --file ABS [--bot googlebot|yandexbot|bingbot|other] [--json]`: one local nginx JSON
+  access log (100 MiB cap, absolute regular file only), `bot_daily` rollups with nearest-rank
+  `p95_ms`, and a `crawl_waste` summary. Read-only: nothing is uploaded, stored or added to SQLite.
+- `seo_log_analysis(file, bot="")`: the 12th MCP tool, read-only and store-less, returning the same
+  `data`, `meta` and `warnings` as the CLI.
+- `report weekly`: an additive `Attributed change digest` section pairs significant GSC headline
+  changes with a candidate cause (`new_crawl_issue`, `resolved_crawl_issue`, `indexing_event`,
+  `page_state`, `unexplained`), confidence, up to three evidence rows and a `next_action`. Items are
+  capped at 8, evidence at 3; digest limitations merge into the report.
+- `tasks list|add|update`: a finding lifecycle keyed by `(kind, property_id, url, rule_id)` with
+  states `open`, `in_progress`, `verified` and `dismissed`, idempotent adds, validated transitions
+  and a bounded newest-first list.
+- `backup create --out ABS [--force]`: one portable `lv24-seo-backup-YYYYMMDDTHHMMSSZ.zip` with a
+  hashed `manifest.json`, a secret-masked `seo.toml` and a consistent SQLite copy made through the
+  backup API; written to a temporary file and renamed atomically. Restore is not implemented.
+
+### Changed
+
+- The CLI has 20 top-level commands: 13 groups (`auth`, `config`, `gsc`, `yandex`, `sitemap`,
+  `indexnow`, `report`, `schedule`, `export`, `logs`, `tasks`, `backup`, `mcp`) and 7 commands
+  (`version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`).
+- The MCP surface has 12 tools: 10 read-class (8 pure read-only, including `seo_log_analysis`, plus
+  the 2 local-state writers) and 2 gated provider writes that still return `WRITE_DISABLED`.
+  Resources and prompts are unchanged (3 and 3).
+- Schema version is 3. Migration 3 adds the `tasks` table on the next open; it is additive and
+  rewrites or deletes no user data. A concurrent first open retries the WAL mode switch briefly
+  instead of failing on `SQLITE_BUSY`.
+- `ReportSection` gained optional `total`, `truncated` and `data_age` fields, serialised only when a
+  section sets them; existing report payloads keep their shape.
+
 ## [0.5.3] - 2026-11-16
 
 Release notes: [`docs/releases/0.5.3.md`](docs/releases/0.5.3.md).
