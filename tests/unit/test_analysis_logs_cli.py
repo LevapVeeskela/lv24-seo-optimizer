@@ -14,7 +14,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from lv24_seo.cli.logs_cmd import register
+from lv24_seo.cli.logs_cmd import logs_app, register
 
 GOOGLEBOT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120 Safari/537.36"
@@ -136,7 +136,8 @@ def test_logs_analyze_plain_text_summary(tmp_path: Path) -> None:
 
 
 def test_register_attaches_the_logs_sub_app() -> None:
-    result = RUNNER.invoke(_app(), ["logs", "analyze", "--help"])
+    app = _app()
 
-    assert result.exit_code == 0
-    assert "--file" in _stdout(result)
+    attached = {group.name: group.typer_instance for group in app.registered_groups}
+    assert attached.get("logs") is logs_app
+    assert "analyze" in {command.name for command in logs_app.registered_commands}
