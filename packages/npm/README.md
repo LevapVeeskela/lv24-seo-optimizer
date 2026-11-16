@@ -20,10 +20,15 @@ into the unpinned (`latest`) lookup.
 
 ## Status
 
-Beta. `@lv24/seo 0.5.3` launches `lv24-seo 0.5.3` and ships 11 MCP tools (9 read-class: 7 pure
+Beta. `@lv24/seo 0.6.0` launches `lv24-seo 0.6.0` and ships 12 MCP tools (10 read-class: 8 pure
 read-only plus the two local-state writers annotated `readOnlyHint: false`), 3 resources, 3 prompts,
-3 skills, the 17-command CLI, scheduler generators and a product-grade weekly email. Recent
+3 skills, the 20-command CLI, scheduler generators and a product-grade weekly email. Recent
 additions:
+
+* **Logs, digest, tasks and backup** — `logs analyze` / `seo_log_analysis` triage one local nginx
+  JSON access log (UA-only bots, 100 MiB cap, read-only); `report weekly` adds an attributed change
+  digest; `tasks` tracks findings through `open`/`in_progress`/`verified`/`dismissed` (schema v3);
+  `backup create` writes a portable zip with the config and SQLite history (restore not implemented).
 
 * **Localized product email** — `report weekly --send` renders a 600px inline-CSS digest in
   `ru`, `en` or `zh`: KPI cards for clicks/impressions/CTR/position, top-3 opportunities,
@@ -54,12 +59,13 @@ additions:
 | `seo_weekly_report` | read + local state | Weekly digest; stores a snapshot, `readOnlyHint: false` |
 | `seo_report_diff` | read | Diff two stored snapshots |
 | `seo_indexing_triage` | read | Group indexing problems into actions |
+| `seo_log_analysis` | read | One local nginx JSON log: bot/day rollups and crawl waste, UA-only |
 | `seo_opportunities` | read | Striking-distance and decay opportunities |
 | `seo_recrawl_request` | write | Yandex recrawl queue, `allow_write=true` |
 | `seo_sitemap_submit` | write | GSC/Bing sitemap, `allow_write=true` |
 
 The two local-state tools are not destructive; the two provider writes are
-annotated `destructiveHint: true`, gated by `allow_write=true`, and return `WRITE_DISABLED` in 0.5.3
+annotated `destructiveHint: true`, gated by `allow_write=true`, and return `WRITE_DISABLED` in 0.6.0
 because the write adapters are not wired yet. Yandex Metrika has its own auth provider:
 `npx @lv24/seo auth set --provider metrika --stdin` stores `yandex_metrika_token`, separate from the
 Webmaster token. Full inputs and limits:
@@ -85,6 +91,9 @@ npx @lv24/seo report weekly --send              # product email/Telegram digest
 npx @lv24/seo report diff --markdown          # diff of two stored weekly snapshots
 npx @lv24/seo stats --days 7 --json           # per-provider dashboard snapshot
 npx @lv24/seo crawl --json                    # issues + sitemap↔crawl coverage diff
+npx @lv24/seo logs analyze --file /var/log/nginx/access.log --json   # bot rollups + crawl waste
+npx @lv24/seo tasks list --json               # local finding lifecycle
+npx @lv24/seo backup create --out "$PWD/backups" --json   # portable config + SQLite zip
 npx @lv24/seo mcp serve                       # stdio MCP server for Claude/OpenCode/Cursor
 npx @lv24/seo export skills --out ./skills    # packaged agent skills
 ```
