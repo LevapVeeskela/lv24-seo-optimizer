@@ -60,8 +60,9 @@ provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, P
 crawler, SQLite history, analysis (deltas, opportunities, indexing triage, multi-engine fusion,
 nginx log analysis with UA-only bot triage, CWV by template), per-provider `stats`, report builders
 + HTML/text/Markdown renderers with an attributed change digest and a Core Web Vitals section, the
-finding/task lifecycle, portable backup bundles with two-phase restore, a read-only multi-site
-portfolio scan, SMTP/Telegram delivery with idempotency, the 21-command CLI, the MCP server
+finding/task lifecycle, portable backup bundles with non-destructive and two-phase restore, a
+read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, the 21-command CLI,
+the MCP server
 (12 tools, 3 resources, 3 prompts) and scheduler generators. Canonical source ids, GSC-only
 headline deltas, partial provider isolation and window/daily storage separation are enforced with
 regression tests. `0.7.0` is the coverage release (portfolio, restore, indexing events, CWV) and the
@@ -100,6 +101,8 @@ lv24-seo tasks list --json                      # local finding lifecycle (open 
 lv24-seo portfolio list --root "$HOME/sites" --json   # read-only roll-up over sibling projects
 mkdir -p backups
 lv24-seo backup create --out "$PWD/backups" --json   # portable zip: config + SQLite history
+lv24-seo backup restore --file "$PWD/backups/lv24-seo-backup-<stamp>.zip" \
+  --to "$PWD/restored" --json                    # new dir; existing files untouched, no token
 lv24-seo backup restore --file "$PWD/backups/lv24-seo-backup-<stamp>.zip" \
   --config "$PWD/seo.toml" --json                # plan; add --allow-write --confirm TOKEN to apply
 lv24-seo export skills --out ./skills           # packaged agent skills from the wheel

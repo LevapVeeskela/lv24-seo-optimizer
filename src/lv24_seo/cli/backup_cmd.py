@@ -20,8 +20,10 @@ from lv24_seo.core.backup import (
     apply_restore,
     create_backup,
     plan_restore,
+    restore_to_directory,
 )
 from lv24_seo.core.envelope import ok
+from lv24_seo.core.errors import INVALID_INPUT, SeoError
 
 backup_app = typer.Typer(
     add_completion=False,
@@ -73,27 +75,85 @@ def backup_restore(
         typer.Option("--file", help="Absolute path to the backup .zip to restore."),
     ],
     config_path: Annotated[
-        Path,
-        typer.Option("--config", help="Absolute path of the seo.toml to restore to."),
-    ],
+        Path | None,
+        typer.Option(
+            "--config",
+            help="Absolute seo.toml to replace in place (needs --allow-write --confirm TOKEN).",
+        ),
+    ] = None,
+    to_directory: Annotated[
+        Path | None,
+        typer.Option(
+            "--to",
+            help="New absolute directory for a non-destructive restore (must not exist).",
+        ),
+    ] = None,
     allow_write: Annotated[
         bool,
         typer.Option(
             "--allow-write",
-            help="Opt in to the restore; without it the command only plans and validates.",
+            help="Opt in to the in-place restore; without it the command only plans and validates.",
         ),
     ] = False,
     confirm: Annotated[
         str | None,
-        typer.Option("--confirm", help="confirm_token returned by the plan."),
+        typer.Option("--confirm", help="confirm_token returned by the in-place plan."),
     ] = None,
     as_json: Annotated[
         bool, typer.Option("--json", help="Machine-readable envelope output.")
     ] = False,
 ) -> None:
-    """Validate a backup and plan a restore; apply only with ``--allow-write --confirm TOKEN``."""
+    """Restore into a new directory (--to) or replace a workspace (--config, gated).
+
+    --to and --config are mutually exclusive. A restore to a new directory never modifies an
+    existing file, so it needs no confirm token; an in-place restore stays two-phase and needs
+    both --allow-write and the plan's token.
+    """
 
     def action() -> dict[str, Any]:
+        if to_directory is not None:
+            if config_path is not None:
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message="--to and --config are mutually exclusive",
+                    next_action=(
+                        "use --to DIR for a non-destructive restore into a new directory, or "
+                        "--config ABS for the gated in-place restore"
+                    ),
+                    retryable=False,
+                )
+            if allow_write or confirm is not None:
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message="--allow-write and --confirm only apply to the in-place restore",
+                    next_action=(
+                        "drop them: --to writes only a new directory and never modifies "
+                        "existing files"
+                    ),
+                    retryable=False,
+                )
+            restored = restore_to_directory(archive_path=archive_file, directory=to_directory)
+            return ok(
+                restored.to_dict(),
+                meta={
+                    "dry_run": False,
+                    "destructive": False,
+                    "writes_new_directory": True,
+                    "format": BACKUP_FORMAT,
+                    "limitations": list(restored.limitations),
+                },
+                warnings=list(restored.warnings),
+            )
+        if config_path is None:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="backup restore needs --to DIR or --config ABS",
+                next_action=(
+                    "pass --to DIR for a non-destructive restore into a new directory, or "
+                    "--config ABS for the gated in-place restore"
+                ),
+                retryable=False,
+            )
         plan = plan_restore(archive_path=archive_file, config_path=config_path)
         if confirm is None:
             warnings = list(plan.warnings)
@@ -154,6 +214,8 @@ def _restore_lines(payload: Mapping[str, Any]) -> list[str]:
     data = payload.get("data") or {}
     if not isinstance(data, Mapping):
         return []
+    if data.get("mode") == "to_directory":
+        return _restore_to_lines(data)
     archive = data.get("archive") or {}
     target = data.get("target") or {}
     database = data.get("database") or {}
@@ -197,4 +259,38 @@ def _restore_lines(payload: Mapping[str, Any]) -> list[str]:
                 "apply: rerun with --allow-write --confirm <token> within 5 minutes",
             ]
         )
+    return lines
+
+
+def _restore_to_lines(data: Mapping[str, Any]) -> list[str]:
+    archive = data.get("archive") or {}
+    target = data.get("target") or {}
+    database = data.get("database") or {}
+    config = data.get("config") or {}
+    if not all(isinstance(item, Mapping) for item in (archive, target, database, config)):
+        return []
+    lines = [
+        f"restore: {archive.get('path', '')}",
+        "mode: new directory (existing files are not modified)",
+        f"status: {data.get('status', '')}",
+        f"archive sha256: {archive.get('sha256', '')}",
+        f"directory: {target.get('directory', '')}",
+        f"config: {config.get('path', '')} "
+        f"({'valid' if config.get('valid') else 'does not validate'})",
+        f"data: {target.get('data_dir', '')}",
+    ]
+    if database.get("in_archive") is False:
+        lines.append("database: not in the archive; no database was created")
+        lines.append("snapshots: unknown (no database in the archive)")
+        return lines
+    lines.append(
+        f"database: {database.get('path', '')} "
+        f"({int(database.get('size') or 0)} bytes, sha256 {database.get('sha256', '')})"
+    )
+    lines.append(f"quick_check: {database.get('quick_check')}")
+    lines.append(
+        f"properties: {database.get('properties')}  "
+        f"snapshots: {database.get('snapshots')}  "
+        f"schema: {database.get('schema_version')}"
+    )
     return lines

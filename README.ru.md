@@ -29,6 +29,8 @@ lv24-seo portfolio list --root "$HOME/sites" --json  # read-only сводка п
 mkdir -p backups
 lv24-seo backup create --out "$PWD/backups" --json   # zip: конфиг + история SQLite
 lv24-seo backup restore --file "$PWD/backups/lv24-seo-backup-<stamp>.zip" \
+  --to "$PWD/restored" --json              # новый каталог; текущие файлы не меняются
+lv24-seo backup restore --file "$PWD/backups/lv24-seo-backup-<stamp>.zip" \
   --config "$PWD/seo.toml" --json          # план; --allow-write --confirm TOKEN — применить
 lv24-seo export skills --out ./skills      # скиллы из wheel-пакета
 ```

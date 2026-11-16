@@ -27,14 +27,20 @@ Guarantees
 
 Restore (``backup restore``)
 ----------------------------
-:func:`plan_restore` validates an archive against a target config and returns a
-:class:`RestorePlan` with a short-lived ``confirm_token``; it never writes to the target.
-:func:`apply_restore` re-verifies every member, snapshots the current database to
-``<db>.pre-restore-<utc>``, then atomically replaces the database and the config. Extraction
-always happens in a temporary directory inside the target data directory, and only the exact
-members named by the manifest are accepted (no absolute paths, ``..`` segments, symlinks or
-extra files). The token is bound to the archive bytes and the target state, so a changed
-archive, a changed workspace or a replay is refused with ``CONFIRM_REQUIRED``.
+Two modes share the same archive validation:
+
+* :func:`restore_to_directory` extracts a verified archive into a **new** directory
+  (``--to``). The target must not exist, so no existing workspace, config or database can be
+  touched; this mode needs no write gate and is the recommended way to inspect an archive.
+* :func:`plan_restore` validates an archive against a target config and returns a
+  :class:`RestorePlan` with a short-lived ``confirm_token``; it never writes to the target.
+  :func:`apply_restore` re-verifies every member, snapshots the current database to
+  ``<db>.pre-restore-<utc>``, then atomically replaces the database and the config.
+
+Extraction always happens in a temporary directory, and only the exact members named by the
+manifest are accepted (no absolute paths, ``..`` segments, symlinks or extra files). The token
+is bound to the archive bytes and the target state, so a changed archive, a changed workspace or
+a replay is refused with ``CONFIRM_REQUIRED``.
 """
 
 from __future__ import annotations
@@ -90,12 +96,14 @@ __all__ = [
     "BackupFile",
     "BackupManifest",
     "BackupResult",
+    "DirectoryRestoreResult",
     "RestorePlan",
     "RestoreResult",
     "apply_restore",
     "create_backup",
     "plan_restore",
     "redact_config_document",
+    "restore_to_directory",
 ]
 
 BACKUP_FORMAT = "lv24-seo-backup"
@@ -1081,12 +1089,197 @@ class RestoreResult:
 
 
 @dataclass(frozen=True, slots=True)
+class DirectoryRestoreResult:
+    """A verified archive extracted into a brand-new directory.
+
+    ``database_path`` is ``None`` when the archive contains no database; no empty database is
+    invented. ``quick_check`` is ``"ok"`` only when a restored database passed
+    ``PRAGMA quick_check`` on its final path.
+    """
+
+    archive_path: Path
+    archive_size: int
+    archive_sha256: str
+    manifest_sha256: str
+    manifest: BackupManifest
+    directory: Path
+    config_path: Path
+    config_valid: bool
+    config_sha256: str
+    database_path: Path | None
+    database_in_archive: bool
+    database_size: int | None
+    database_sha256: str | None
+    quick_check: str | None
+    properties: int | None
+    snapshots: int | None
+    schema_version: int | None
+    latest_snapshot_at: str | None
+    warnings: tuple[str, ...]
+    limitations: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-safe rendering consumed by the CLI envelope and the desktop app."""
+        return {
+            "status": "restored",
+            "mode": "to_directory",
+            "archive": {
+                "path": str(self.archive_path),
+                "size": self.archive_size,
+                "sha256": self.archive_sha256,
+                "manifest_sha256": self.manifest_sha256,
+                "format": BACKUP_FORMAT,
+                "format_version": BACKUP_FORMAT_VERSION,
+                "engine_version": self.manifest.engine_version,
+                "created_at": self.manifest.created_at,
+            },
+            "target": {
+                "directory": str(self.directory),
+                "config_path": str(self.config_path),
+                "data_dir": str(self.directory / "data"),
+                "database_path": _optional_str(self.database_path),
+            },
+            "config": {
+                "path": str(self.config_path),
+                "valid": self.config_valid,
+                "sha256": self.config_sha256,
+            },
+            "database": {
+                "in_archive": self.database_in_archive,
+                "restored": self.database_path is not None,
+                "path": _optional_str(self.database_path),
+                "size": self.database_size,
+                "sha256": self.database_sha256,
+                "quick_check": self.quick_check,
+                "properties": self.properties,
+                "snapshots": self.snapshots,
+                "schema_version": self.schema_version,
+                "latest_snapshot_at": self.latest_snapshot_at,
+            },
+            "files": [item.to_dict() for item in self.manifest.files],
+            "summary": self.manifest.summary_dict(),
+            "limitations": list(self.limitations),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class _ArchiveContents:
     manifest: BackupManifest
     manifest_bytes: bytes
     config_bytes: bytes
     sha256: str
     size: int
+
+
+def restore_to_directory(
+    *,
+    archive_path: Path,
+    directory: Path,
+    max_config_bytes: int = MAX_CONFIG_BYTES,
+    max_database_bytes: int = MAX_DATABASE_BYTES,
+) -> DirectoryRestoreResult:
+    """Extract a validated archive into a new directory without touching any existing workspace.
+
+    The archive is validated exactly like the in-place plan: manifest schema, member set,
+    member names (no absolute paths, ``..`` segments, symlinks or extra files), sizes and every
+    SHA-256. *directory* must be an absolute path that does not exist and whose parent does;
+    an existing or non-empty directory is refused instead of merged or overwritten. The files
+    are staged in a temporary directory inside the new target, the database passes
+    ``PRAGMA quick_check`` (twice: before and after the move), and a failure removes the
+    directory this call created. No confirm token and no ``--allow-write`` are involved because
+    no pre-existing file is modified.
+    """
+    archive = _validate_archive_path(archive_path)
+    target = _validate_restore_directory(directory)
+    contents = _read_archive(
+        archive,
+        max_config_bytes=max_config_bytes,
+        max_database_bytes=max_database_bytes,
+    )
+    schema_warnings = _check_manifest_schema(contents.manifest)
+    config_valid, config_warnings = _validate_restored_config(contents.config_bytes)
+    config_path = target / CONFIG_MEMBER
+    data_dir = _restore_data_dir(contents.config_bytes, config_path)
+    database_member = _member(contents.manifest, DATABASE_MEMBER)
+
+    warnings = list(config_warnings)
+    warnings.extend(schema_warnings)
+    if contents.manifest.summary.get("config_source") == "raw":
+        warnings.append("the archived config is a redacted raw copy; re-check it before use")
+    if database_member is None:
+        warnings.append(
+            "the archive contains no database; no database was created in the new directory"
+        )
+
+    limitations = (
+        "restore writes a new directory; the current workspace, config and database are untouched",
+        "the target directory must not exist; an existing directory is refused, never merged "
+        "or overwritten",
+        "provider tokens are not included; re-authenticate with `lv24-seo auth set` before using "
+        "the restored workspace",
+        "report snapshots live in the restored database; no separate snapshot files are written",
+    )
+
+    try:
+        created = False
+        _create_restore_directory(target)
+        created = True
+        temp_root = _make_temp_root(target)
+        manifest, extracted, manifest_sha256 = _extract_archive(
+            archive,
+            temp_root,
+            max_config_bytes=max_config_bytes,
+            max_database_bytes=max_database_bytes,
+        )
+        if not hmac.compare_digest(manifest_sha256, _sha256_bytes(contents.manifest_bytes)):
+            raise _invalid_input(
+                "the archive changed while it was being restored",
+                "retry with an archive that is not being rewritten; no existing file was changed",
+            )
+        summary: Mapping[str, Any] | None = None
+        database_temp = extracted.get(DATABASE_MEMBER)
+        if database_temp is not None:
+            summary = _verify_archive_database(database_temp, manifest)
+
+        _replace_file(extracted[CONFIG_MEMBER], config_path)
+        database_path: Path | None = None
+        quick_check: str | None = None
+        if database_temp is not None:
+            _ensure_data_dir(data_dir)
+            database_path = data_dir / DATABASE_FILENAME
+            _replace_file(database_temp, database_path)
+            quick_check = _quick_check_database(database_path)
+            summary = _read_database_summary(database_path)
+        shutil.rmtree(temp_root, ignore_errors=True)
+        counts = summary or {}
+        return DirectoryRestoreResult(
+            archive_path=archive,
+            archive_size=contents.size,
+            archive_sha256=contents.sha256,
+            manifest_sha256=manifest_sha256,
+            manifest=manifest,
+            directory=target,
+            config_path=config_path,
+            config_valid=config_valid,
+            config_sha256=_sha256_bytes(contents.config_bytes),
+            database_path=database_path,
+            database_in_archive=database_member is not None,
+            database_size=None if database_member is None else database_member.size,
+            database_sha256=None if database_member is None else database_member.sha256,
+            quick_check=quick_check,
+            properties=_optional_int(counts.get("properties")),
+            snapshots=_optional_int(counts.get("snapshots")),
+            schema_version=_optional_int(counts.get("schema_version")),
+            latest_snapshot_at=_optional_str_value(counts.get("latest_snapshot_at")),
+            warnings=tuple(warnings),
+            limitations=limitations,
+        )
+    except BaseException:
+        # Only remove a directory this call created; a directory that appeared concurrently
+        # belongs to someone else and must never be deleted.
+        if created:
+            shutil.rmtree(target, ignore_errors=True)
+        raise
 
 
 def plan_restore(
@@ -1349,6 +1542,55 @@ def _validate_archive_path(path: Path) -> Path:
             "pass the .zip file itself, not a directory or a device",
         )
     return candidate
+
+
+def _validate_restore_directory(path: Path) -> Path:
+    """A restore-to-directory target: absolute, non-existent and inside an existing parent."""
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        raise _invalid_input(
+            f"the restore directory must be absolute: {path}",
+            "pass an absolute path to --to",
+        )
+    candidate = Path(os.path.abspath(candidate))
+    if candidate.is_symlink():
+        raise _invalid_input(
+            f"the restore directory is a symlink: {candidate}",
+            "pass a new directory path; restore never writes through a link",
+        )
+    if candidate.exists():
+        raise _invalid_input(
+            f"the restore directory already exists: {candidate}",
+            "choose a new directory; `backup restore --to` never merges or overwrites "
+            "existing files",
+        )
+    parent = candidate.parent
+    if not parent.exists():
+        raise _invalid_input(
+            f"the restore directory's parent does not exist: {parent}",
+            "create the parent directory first, then retry",
+        )
+    if not parent.is_dir():
+        raise _invalid_input(
+            f"the restore directory's parent is not a directory: {parent}",
+            "pass a directory path below an existing folder",
+        )
+    return candidate
+
+
+def _create_restore_directory(path: Path) -> None:
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        raise _invalid_input(
+            f"the restore directory already exists: {path}",
+            "choose a new directory; `backup restore --to` never overwrites existing files",
+        ) from None
+    except OSError:
+        raise _invalid_input(
+            f"cannot create the restore directory at {path}",
+            "check permissions and free space, then retry",
+        ) from None
 
 
 def _validate_config_target(path: Path) -> Path:
@@ -1946,6 +2188,27 @@ def _verify_archive_database(path: Path, manifest: BackupManifest) -> Mapping[st
         raise
     except sqlite3.Error as exc:
         raise _corrupt_archive_database(path) from exc
+
+
+def _quick_check_database(path: Path) -> str:
+    """Run ``PRAGMA quick_check`` on the database at its final path."""
+    try:
+        conn = _connect_readonly(path)
+        try:
+            rows = conn.execute("PRAGMA quick_check").fetchall()
+        finally:
+            conn.close()
+    except SeoError as exc:
+        from lv24_seo.store.errors import STORE_CORRUPT
+
+        if exc.code == STORE_CORRUPT:
+            raise _corrupt_archive_database(path) from None
+        raise
+    except sqlite3.Error as exc:
+        raise _corrupt_archive_database(path) from exc
+    if not rows or any(str(row[0]).lower() != "ok" for row in rows):
+        raise _corrupt_archive_database(path)
+    return "ok"
 
 
 def _corrupt_archive_database(path: Path) -> SeoError:

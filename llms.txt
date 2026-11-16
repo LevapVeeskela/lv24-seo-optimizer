@@ -11,6 +11,9 @@
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
 - CLI: 21 top-level commands (14 groups + 7 commands), every command with `--json`.
+- Backup restore has two modes: `--to DIR` extracts into a new directory (no write gate, never
+  overwrites; an existing directory is refused) and `--config ABS` replaces the current workspace
+  only with `--allow-write --confirm TOKEN`.
 - MCP: 12 tools (10 read-class, including 3 local-state writers with `readOnlyHint: false`; 2 gated
   provider writes that return `WRITE_DISABLED` in this build), 3 resources, 3 prompts.
 - New in 0.7.0: `portfolio list` (read-only multi-site roll-up), two-phase `backup restore`,

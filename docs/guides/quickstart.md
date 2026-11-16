@@ -87,6 +87,8 @@ lv24-seo portfolio list --root /srv/sites --json                # read-only mult
 mkdir -p backups
 lv24-seo backup create --out "$PWD/backups" --json               # config + SQLite history zip
 lv24-seo backup restore --file "$PWD/backups/lv24-seo-backup-<stamp>.zip" \
+  --to "$PWD/restored" --json                                    # new dir; nothing overwritten
+lv24-seo backup restore --file "$PWD/backups/lv24-seo-backup-<stamp>.zip" \
   --config "$PWD/seo.toml" --json                                # plan; add --allow-write --confirm TOKEN
 ```
 
@@ -97,10 +99,12 @@ identity. `tasks list` shows tasks recorded with `tasks add`; an add is idempote
 `open → in_progress → verified`. `portfolio list` scans sibling project folders (absolute `--root`,
 up to three levels deep, at most 50 sites) and reports local crawl/report/issue activity without
 calling a provider. `backup create` writes a portable zip with a redacted `seo.toml`, a consistent
-SQLite copy and a SHA-256 manifest. `backup restore` first validates the archive and returns a
-five-minute `confirm_token`; apply with `--allow-write --confirm TOKEN`. It replaces files (never
-merges rows), copies the current database/config to `.pre-restore-<utc>` first, and does not
-include provider tokens — re-run `auth set` afterwards.
+SQLite copy and a SHA-256 manifest. `backup restore --to DIR` validates the archive and extracts it
+into a new directory (no token, existing directories refused); the restored database passes
+`PRAGMA quick_check`. The in-place `--config` mode first returns a five-minute `confirm_token`;
+apply with `--allow-write --confirm TOKEN`. It replaces files (never merges rows), copies the current
+database/config to `.pre-restore-<utc>` first, and neither mode includes provider tokens — re-run
+`auth set` afterwards.
 
 ## 8. Schedule it
 

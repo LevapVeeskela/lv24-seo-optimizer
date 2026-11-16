@@ -326,6 +326,7 @@ without its `-shm` is reported as unavailable rather than opened read-write. `me
 
 ```bash
 lv24-seo backup create --out /absolute/existing/dir [--force] [--json]
+lv24-seo backup restore --file /absolute/backup.zip --to /absolute/new-dir [--json]
 lv24-seo backup restore --file /absolute/backup.zip --config /absolute/seo.toml [--json]
 lv24-seo backup restore --file /absolute/backup.zip --config /absolute/seo.toml \
   --allow-write --confirm TOKEN --json
@@ -350,25 +351,47 @@ WAL). The envelope carries `archive_path`, `archive_size`, `archive_sha256`, the
 and a flat `summary`. A corrupt source is `STORE_CORRUPT` and is left untouched (no `.corrupt-*`
 copy is written by this command).
 
-`backup restore` is **two-phase**. Without `--confirm` it only validates the archive and returns a
-plan (`status: planned`): the archive hash and manifest hash, the target config/data directory, the
-current and archived database hashes, the config action (`create`, `replace` or `write_alongside`)
-and a short-lived `confirm_token` with `expires_at`/`ttl_seconds` (300 seconds). Nothing outside a
-temporary directory is written in this phase. Applying needs both `--allow-write` and the token:
-`--allow-write` alone only plans and warns, and a token without `--allow-write` is
-`WRITE_DISABLED`. The token is bound to the archive bytes and the target state, so a changed
-archive, a changed workspace, an expired token or a replay is `CONFIRM_REQUIRED`. The database is
-always restored to `<config dir>/data/seo.sqlite3`; an archived config whose `data_dir` points
-elsewhere is `INVALID_INPUT`. Before replacing anything, the current database is copied to
-`<db>.pre-restore-<utc>` (and the current config to `seo.toml.pre-restore-<utc>` when it is
-replaced). Every member hash is re-verified, the restored database passes `PRAGMA quick_check`, and
-the files are replaced atomically. A config that does not validate is written alongside as
-`seo.toml.restored-<utc>` so the existing config stays usable.
+`backup restore` has two mutually exclusive modes: `--to DIR` and `--config ABS`.
 
-Restore replaces files; it never merges rows or settings. Provider tokens are not in the archive,
-so re-authenticate with `lv24-seo auth set`. Stop other CLI/desktop processes first — a database
-held open cannot be replaced on Windows. The token prevents accidental or stale applies; it is not
-access control, because anyone who can run the CLI can restore.
+**New directory (`--to`).** The archive is validated exactly like the in-place plan (manifest,
+member set, member names, sizes and every SHA-256), then `seo.toml` and `data/seo.sqlite3` are
+extracted into a directory that must not exist; its parent must exist. The current workspace,
+config and database are never modified, so no `--allow-write` or confirm token is involved.
+The target must be an absolute path; an existing, non-empty or symlinked target is
+`INVALID_INPUT` and is never merged or overwritten. Members with absolute paths, `..` segments,
+backslashes or symlinks are rejected before extraction. The database passes `PRAGMA quick_check`
+both before and after it is moved into place, and the staging directory is removed. An archive
+without a database produces a config-only directory with `database.in_archive: false`,
+`database.restored: false`, `database.path: null` and an explicit warning — no empty database is
+invented. A failure removes only the directory this call created. The envelope carries
+`mode: to_directory`, `target.directory`, `target.config_path`, `target.database_path`,
+`config.valid`, `database.quick_check`, `database.properties`, `database.snapshots` and
+`warnings`; there is no `confirm_token`. Report snapshots travel inside the SQLite file and are
+counted, not written as separate files.
+
+**In place (`--config`)** is **two-phase**. Without `--confirm` it only validates the archive and
+returns a plan (`status: planned`): the archive hash and manifest hash, the target config/data
+directory, the current and archived database hashes, the config action (`create`, `replace` or
+`write_alongside`) and a short-lived `confirm_token` with `expires_at`/`ttl_seconds` (300
+seconds). Nothing outside a temporary directory is written in this phase. Applying needs both
+`--allow-write` and the token: `--allow-write` alone only plans and warns, and a token without
+`--allow-write` is `WRITE_DISABLED`. The token is bound to the archive bytes and the target
+state, so a changed archive, a changed workspace, an expired token or a replay is
+`CONFIRM_REQUIRED`. The database is always restored to `<config dir>/data/seo.sqlite3`; an
+archived config whose `data_dir` points elsewhere is `INVALID_INPUT`. Before replacing anything,
+the current database is copied to `<db>.pre-restore-<utc>` (and the current config to
+`seo.toml.pre-restore-<utc>` when it is replaced). Every member hash is re-verified, the restored
+database passes `PRAGMA quick_check`, and the files are replaced atomically. A config that does
+not validate is written alongside as `seo.toml.restored-<utc>` so the existing config stays
+usable. Passing `--allow-write` or `--confirm` together with `--to` is `INVALID_INPUT`, and
+`--to` with `--config` is refused.
+
+The in-place mode replaces files; neither mode merges rows or settings. Provider tokens are not in
+the archive, so re-authenticate with `lv24-seo auth set`. For the in-place mode, stop other
+CLI/desktop processes first — a database held open cannot be replaced on Windows. The in-place token
+prevents accidental or stale applies; it is not access control, because anyone who can run the CLI
+can restore. Prefer `--to` when you want to inspect an archive or compare it with the current
+workspace before replacing anything.
 
 ## Scheduling
 
@@ -405,8 +428,10 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
 - Dates are ISO-8601 (`2026-11-10`); durations are `7d`, `28d`, `90d` where a flag accepts them.
 - Write operations (sitemap submit, recrawl queue, IndexNow submit) **are** exposed with gating:
   a dry run first, then `--allow-write` plus the HMAC `confirm_token` from the plan (ADR-0003).
-  `backup restore` uses the same two-phase shape for a local destructive write: the plan's token is
-  bound to the archive and target state, expires in 5 minutes and is not replayable. IndexNow
+  `backup restore --config` uses the same two-phase shape for a local destructive write: the
+  plan's token is bound to the archive and target state, expires in 5 minutes and is not
+  replayable. `backup restore --to` is not gated because it only creates a new directory that
+  must not already exist; it never modifies the current workspace. IndexNow
   actually submits; GSC sitemap submit and Yandex recrawl refuse with `WRITE_DISABLED`
   when the provider path is not wired, instead of pretending. With an initialised workspace the
   apply uses the SQLite idempotency ledger, so replaying the same token returns
