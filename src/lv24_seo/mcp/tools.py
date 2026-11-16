@@ -37,6 +37,7 @@ from urllib.parse import urlsplit
 from mcp.types import CallToolResult, TextContent
 
 from lv24_seo.analysis.indexing import triage
+from lv24_seo.analysis.logs import analyze_log_file
 from lv24_seo.analysis.opportunities import find_opportunities
 from lv24_seo.core.envelope import fail, ok
 from lv24_seo.core.errors import (
@@ -726,6 +727,9 @@ def _report_from_payload(payload: Mapping[str, Any]) -> Report | None:
             if isinstance(raw_rows, list)
             else []
         )
+        total = item.get("total")
+        truncated = item.get("truncated")
+        data_age = item.get("data_age")
         sections.append(
             ReportSection(
                 key=str(item.get("key") or ""),
@@ -733,6 +737,9 @@ def _report_from_payload(payload: Mapping[str, Any]) -> Report | None:
                 summary=str(item.get("summary") or ""),
                 rows=rows,
                 notes=_strings(item.get("notes")),
+                total=total if isinstance(total, int) and not isinstance(total, bool) else None,
+                truncated=truncated if isinstance(truncated, bool) else None,
+                data_age=data_age if isinstance(data_age, str) and data_age.strip() else None,
             )
         )
 
@@ -964,6 +971,20 @@ def _analysis_rows(rows: object) -> list[AnalysisRow]:
                 values[str(key)] = cast(float | str | None, value)
         cleaned.append(values)
     return cleaned
+
+
+def build_log_analysis(state: ToolState) -> Callable[..., CallToolResult]:
+    """``seo_log_analysis``: roll up one local nginx JSON log (read-only, no provider call)."""
+    del state  # the analysis is local; no service, store or workspace is involved
+
+    def seo_log_analysis(file: str, bot: str = "") -> CallToolResult:
+        def _run() -> Envelope:
+            analysis = analyze_log_file(file, bot=bot or None)
+            return ok(analysis.to_dict(), meta=analysis.meta(), warnings=analysis.warnings())
+
+        return respond("seo_log_analysis", _run)
+
+    return seo_log_analysis
 
 
 # -- write tools -----------------------------------------------------------------------------
@@ -1253,6 +1274,7 @@ TOOL_BUILDERS: dict[str, ToolBuilder] = {
     "seo_weekly_report": build_weekly_report,
     "seo_report_diff": build_report_diff,
     "seo_indexing_triage": build_indexing_triage,
+    "seo_log_analysis": build_log_analysis,
     "seo_opportunities": build_opportunities,
     "seo_recrawl_request": build_recrawl_request,
     "seo_sitemap_submit": build_sitemap_submit,

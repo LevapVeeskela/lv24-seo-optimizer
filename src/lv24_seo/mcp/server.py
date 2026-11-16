@@ -1,6 +1,6 @@
 """MCP server assembly and transports (Wave 7, WP7.1 / WP7.4).
 
-The server surface is deliberately small: eleven tools from
+The server surface is deliberately small: twelve tools from
 :data:`lv24_seo.mcp.registry.TOOLS`, three resources and three prompts. Tool
 implementations live in :mod:`lv24_seo.mcp.tools`; this module only registers them,
 adds resources/prompts and runs a transport.
@@ -73,7 +73,8 @@ _HTTP_ALIASES = frozenset({"http", TRANSPORT_HTTP, "streamable_http"})
 _INSTRUCTIONS = (
     "lv24-seo is a free-first SEO control plane. Start with `seo_weekly_report` for a broad "
     "review, then use the focused read tools; `seo_report_diff` compares two stored weekly "
-    "snapshots without provider calls. Every response is a JSON envelope: check `ok`, "
+    "snapshots without provider calls and `seo_log_analysis` rolls up one local nginx JSON "
+    "access log. Every response is a JSON envelope: check `ok`, "
     "`meta.truncated`, `meta.data_age_days` and `warnings` before drawing conclusions. "
     "The two write tools are disabled unless the caller explicitly passes `allow_write=true`. "
     "CLI runs and MCP sessions share one SQLite history when the workspace is initialised "
@@ -300,7 +301,7 @@ def _register_resources(
         "seo://docs/tools",
         name="docs_tools",
         title="Tool reference",
-        description="Generated JSON reference for the eleven MCP tools (registry source of truth).",
+        description="Generated JSON reference for the twelve MCP tools (registry source of truth).",
         mime_type="application/json",
     )(read_tools)
 
@@ -388,7 +389,7 @@ def create_server(
     *,
     crawl_workspace: Callable[[], contextlib.AbstractContextManager[SeoService]] | None = None,
 ) -> McpServer:
-    """Build the MCP server and register exactly the eleven registry tools.
+    """Build the MCP server and register exactly the twelve registry tools.
 
     ``service`` defaults to a lazily wired :class:`~lv24_seo.services.SeoService`
     built from :func:`~lv24_seo.core.config.load_config`. Tests and embedders may
