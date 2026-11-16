@@ -19,6 +19,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from typing import Any
 
+from lv24_seo.analysis.cwv import CwvReport, build_cwv
 from lv24_seo.analysis.delta import DeltaRow, DeltaThresholds, compute_delta, headline, summary
 from lv24_seo.analysis.digest import Digest, build_digest
 from lv24_seo.analysis.fusion import EngineSummary, FusionReport, fuse_engines
@@ -34,6 +35,7 @@ _UNKNOWN_SEVERITY = "unknown"
 _HEADLINE_METRICS: tuple[str, ...] = ("clicks", "impressions", "ctr", "position")
 
 _WEEKLY_OPPORTUNITIES = 5
+_WEEKLY_CWV = 5
 _INDEXING_EXAMPLES = 5
 
 _BAD_DELTA_PREFIX = "⚠ "
@@ -61,6 +63,8 @@ def build_weekly(
     limitations: Sequence[str] = (),
     thresholds: DeltaThresholds | None = None,
     digest_evidence: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    cwv_rows: Sequence[Mapping[str, Any]] | None = None,
+    cwv_limit: int = _WEEKLY_CWV,
     generated_at: datetime | None = None,
 ) -> Report:
     """Build the weekly review: deltas, traffic, opportunities, issues and sources.
@@ -86,6 +90,13 @@ def build_weekly(
     ``indexing_events`` and ``pages`` rows from the store. A caller that cannot
     read one of them passes an empty list, and the digest reports the missing
     evidence as a limitation instead of guessing a cause.
+
+    ``cwv_rows`` opts into the Core Web Vitals by template section. ``None``
+    keeps the historical section list; a sequence (even an empty one) adds the
+    ``cwv`` section. Rows are already-stored field metric rows (``url``/``key``,
+    ``device``, ``metric``, ``p75`` and an optional previous p75); the builder
+    never calls a provider. Missing templates or devices become limitations,
+    not guessed values, and the section is capped at ``cwv_limit`` templates.
     """
     delta_rows = (
         compute_delta(current, previous, thresholds=thresholds) if current and previous else []
@@ -113,12 +124,15 @@ def build_weekly(
         period_start=period_start,
         period_end=period_end,
     )
+    cwv = build_cwv(cwv_rows, limit=cwv_limit) if cwv_rows is not None else None
     sections = [_headline_section(delta_rows, current_only_rows)]
     if digest is not None:
         sections.append(_digest_section(digest, has_comparison=bool(delta_rows)))
+    sections.append(_traffic_section(fusion))
+    if cwv is not None:
+        sections.append(_cwv_section(cwv))
     sections.extend(
         [
-            _traffic_section(fusion),
             _opportunities_section(opportunities, has_rows=bool(gsc_rows)),
             _issues_section(issues),
             _sources_section(
@@ -134,6 +148,12 @@ def build_weekly(
         ]
     )
 
+    report_limitations = list(limitations)
+    if digest is not None:
+        report_limitations = _unique([*report_limitations, *digest.limitations])
+    if cwv is not None:
+        report_limitations = _unique([*report_limitations, *cwv.limitations])
+
     return Report(
         kind="weekly",
         property_id=property_id,
@@ -142,9 +162,7 @@ def build_weekly(
         headline=headline_text,
         sections=sections,
         generated_at=_timestamp(generated_at),
-        limitations=(
-            list(limitations) if digest is None else _unique([*limitations, *digest.limitations])
-        ),
+        limitations=report_limitations,
         warnings=_weekly_warnings(current, previous, gsc_rows, yandex_rows, metrika_rows),
     )
 
@@ -269,6 +287,34 @@ def _digest_section(digest: Digest, *, has_comparison: bool) -> ReportSection:
         total=digest.total,
         truncated=digest.truncated,
         data_age=digest.data_age,
+    )
+
+
+def _cwv_section(cwv: CwvReport) -> ReportSection:
+    shown = (
+        f"{len(cwv.templates)} of {cwv.total} templates"
+        if cwv.truncated
+        else f"{cwv.total} {_plural(cwv.total, 'template')}"
+    )
+    if cwv.regressed_template is not None:
+        first = cwv.templates[0]
+        metric = (first.regression_metric or "").upper()
+        change = f"+{first.regression_pct:.1f}%" if first.regression_pct is not None else "worse"
+        summary = f"{shown}; regressed: {first.template} ({metric} {change})"
+    elif cwv.total and "cwv_no_comparison" in cwv.limitations:
+        summary = f"{shown}; no comparison window"
+    elif cwv.total:
+        summary = f"{shown}; no template regressed"
+    else:
+        summary = "No Core Web Vitals templates"
+    return ReportSection(
+        key="cwv",
+        title="Core Web Vitals by template",
+        summary=summary,
+        rows=[template.to_dict() for template in cwv.templates],
+        total=cwv.total,
+        truncated=cwv.truncated,
+        data_age=cwv.data_age,
     )
 
 

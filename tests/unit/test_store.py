@@ -18,6 +18,7 @@ from lv24_seo.store.repositories import canonical_json
 EXPECTED_TABLES = {
     "bot_daily",
     "crawl_runs",
+    "indexing_events",
     "issues",
     "metric_daily",
     "pages",

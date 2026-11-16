@@ -198,3 +198,26 @@ CREATE INDEX IF NOT EXISTS idx_tasks_property_state
 
 CREATE INDEX IF NOT EXISTS idx_tasks_kind_state
     ON tasks (kind, state, updated_at);
+
+-- Provider-reported indexing events (0.7.0): one row per URL, event name and day. The table is
+-- append-only in spirit -- an event is a fact a provider reported, so a replay must neither
+-- duplicate it nor move its first sighting. `(provider, property_id, url, event, event_date)` is
+-- the natural key; `first_seen` never moves and `last_seen` only advances. `detail_json` keeps
+-- the provider payload compact so the digest can explain an event without a second API call.
+CREATE TABLE IF NOT EXISTS indexing_events (
+    provider    TEXT NOT NULL,
+    property_id TEXT NOT NULL,
+    url         TEXT NOT NULL,
+    event       TEXT NOT NULL,
+    event_date  TEXT NOT NULL,
+    detail_json TEXT,
+    first_seen  TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    UNIQUE (provider, property_id, url, event, event_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_indexing_events_property_date
+    ON indexing_events (property_id, event_date);
+
+CREATE INDEX IF NOT EXISTS idx_indexing_events_property_url
+    ON indexing_events (property_id, url, event_date);

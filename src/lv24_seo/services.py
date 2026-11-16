@@ -34,6 +34,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from lv24_seo.analysis.coverage import sitemap_crawl_diff
+from lv24_seo.analysis.cwv import DEVICES as CWV_DEVICES
 from lv24_seo.analysis.delta import DeltaThresholds, compute_delta
 from lv24_seo.analysis.delta import headline as delta_headline
 from lv24_seo.core.config import SeoConfig
@@ -117,6 +118,30 @@ _STATS_PSI_URL_LIMIT = 5
 # Digest evidence is joined against the bounded delta list, so a larger cap would only
 # slow the report without changing the rendered section.
 _DIGEST_EVIDENCE_LIMIT = 500
+# The CWV section is opt-in: it only appears when the store holds URL+device field rows.
+# Five templates is the builder's report bound; the row cap keeps one read bounded.
+_WEEKLY_CWV_LIMIT = 5
+_CWV_ROW_LIMIT = 2_000
+# Provider event history can be long; one command must not write an unbounded number of rows.
+# The digest reads at most _DIGEST_EVIDENCE_LIMIT events, so this is already generous.
+_INDEXING_EVENTS_LIMIT = 500
+_INDEXING_EVENT_ALIASES: dict[str, str] = {
+    "appeared_in_search": "indexed",
+    "url_added": "indexed",
+    "entered": "indexed",
+    "appeared": "indexed",
+    "removed_from_search": "excluded",
+    "url_removed": "excluded",
+    "exited": "excluded",
+    "removed": "excluded",
+}
+_INDEXING_EVENT_DETAIL_KEYS: tuple[str, ...] = (
+    "title",
+    "excluded_url_status",
+    "bad_http_status",
+    "target_url",
+    "last_access",
+)
 
 _HTTP_SCHEMES = frozenset({"http", "https"})
 # PSI works keyless; a key only raises the quota, so it never blocks client construction.
@@ -830,7 +855,83 @@ class SeoService:
             "truncated": truncated,
             "limitations": _unique(limitations),
         }
+        persisted = self._persist_indexing_events(
+            provider=SOURCE_YANDEX_WEBMASTER,
+            property_id=_report_property_id(self._config),
+            rows=data["events"],
+            limitations=limitations,
+            warnings=warnings,
+        )
+        if persisted is not None:
+            meta["indexing_events"] = persisted
+            meta["limitations"] = _unique(limitations)
         return ok(data, meta=meta, warnings=_unique(warnings))
+
+    def _persist_indexing_events(
+        self,
+        *,
+        provider: str,
+        property_id: str,
+        rows: Sequence[Mapping[str, Any]],
+        limitations: list[str],
+        warnings: list[str],
+    ) -> dict[str, int] | None:
+        """Store provider-reported per-URL events without failing the read command.
+
+        Yandex's event *history* endpoint returns daily aggregate counts, not URLs; such a
+        row has no per-URL identity and is skipped instead of being assigned a guessed URL.
+        A row is stored only when it carries an absolute URL, an unambiguous event name and
+        an event date. The write is one transaction and every storage failure becomes a
+        warning: an indexing read must still return the provider data.
+        """
+        store = self._store
+        if store is None or not rows:
+            return None
+
+        considered = rows[:_INDEXING_EVENTS_LIMIT]
+        truncated = len(rows) - len(considered)
+        candidates: list[tuple[str, str, date, dict[str, Any] | None]] = []
+        skipped = 0
+        for row in considered:
+            candidate = _indexing_event_candidate(row)
+            if candidate is None:
+                skipped += 1
+                continue
+            candidates.append(candidate)
+
+        counts = {"new": 0, "existing": 0, "skipped": skipped, "truncated": truncated}
+        if truncated:
+            limitations.append(
+                f"indexing events: only the first {_INDEXING_EVENTS_LIMIT} of {len(rows)} "
+                "provider rows were considered"
+            )
+        if not candidates:
+            limitations.append(
+                "indexing events: provider rows carry no per-URL identity; nothing was stored"
+            )
+            return counts
+
+        try:
+            with store.atomic():
+                for url, event, event_date, detail in candidates:
+                    status = store.upsert_indexing_event(
+                        provider,
+                        property_id,
+                        url,
+                        event,
+                        event_date,
+                        detail=detail,
+                    )
+                    counts[status] += 1
+        except Exception:  # storage must never cancel the provider read
+            logger.warning("indexing events: could not persist provider rows")
+            warnings.append("indexing events: stored rows could not be saved")
+            return None
+        if skipped:
+            limitations.append(
+                f"indexing events: {skipped} provider row(s) without url/event/date were not stored"
+            )
+        return counts
 
     def crawl_and_store(
         self,
@@ -1476,8 +1577,24 @@ class SeoService:
         stored_issues = self._stored_issue_rows(property_id)
         # The digest is opt-in: without a comparable GSC window there is nothing to
         # attribute, and with no stored evidence the section stays absent instead of
-        # claiming a cause.
-        digest_evidence = self._digest_evidence(property_id, limitations) if gsc_complete else None
+        # claiming a cause. Indexing events are bounded to the compared windows: an
+        # event outside them cannot explain this period's change.
+        digest_evidence = (
+            self._digest_evidence(
+                property_id,
+                limitations,
+                start=previous_start,
+                end=current_end,
+            )
+            if gsc_complete
+            else None
+        )
+        cwv_rows = self._stored_cwv_rows(
+            property_id,
+            start=previous_start,
+            end=current_end,
+            limitations=limitations,
+        )
 
         # Current GSC totals are real even without a comparable previous window;
         # only the previous side is gated on comparability. The fallback gets the
@@ -1524,6 +1641,10 @@ class SeoService:
             digest_kwargs: dict[str, Any] = {}
             if digest_evidence is not None and _weekly_builder_accepts(builder, "digest_evidence"):
                 digest_kwargs["digest_evidence"] = digest_evidence
+            if cwv_rows and _weekly_builder_accepts(builder, "cwv_rows"):
+                digest_kwargs["cwv_rows"] = cwv_rows
+                if _weekly_builder_accepts(builder, "cwv_limit"):
+                    digest_kwargs["cwv_limit"] = _WEEKLY_CWV_LIMIT
             report_obj = builder(
                 property_id=property_id,
                 period_start=start,
@@ -1624,8 +1745,85 @@ class SeoService:
             )
         return rows
 
+    def _stored_cwv_rows(
+        self,
+        property_id: str,
+        *,
+        start: date,
+        end: date,
+        limitations: list[str],
+    ) -> list[dict[str, Any]]:
+        """Latest stored CrUX/PSI field row per URL, device and metric.
+
+        The store keeps provider metrics in ``metric_daily``/``metric_windows`` with a
+        ``scope`` and a ``key``. A CWV producer writes the device as ``scope`` and the page
+        URL as ``key``; only rows carrying both are returned, because an origin aggregate or
+        an unknown scope cannot be assigned to a template without guessing. The newest
+        observation wins per ``(url, device, metric)``: feeding every day would turn the
+        template p75 into a worst-of-the-window value instead of the current one. No row
+        means no section, never an empty or invented baseline.
+        """
+        store = self._store
+        if store is None:
+            return []
+        try:
+            daily = store.get_metric_daily(property_id, source=SOURCE_CRUX, start=start, end=end)
+            daily += store.get_metric_daily(property_id, source=SOURCE_PSI, start=start, end=end)
+            windows = store.get_metric_windows(
+                property_id, source=SOURCE_CRUX, start=start, end=end
+            )
+            windows += store.get_metric_windows(
+                property_id, source=SOURCE_PSI, start=start, end=end
+            )
+        except Exception:  # storage must never cancel a report
+            logger.warning("weekly: could not read stored cwv rows")
+            limitations.append("cwv: stored metrics could not be read")
+            return []
+
+        latest: dict[tuple[str, str, str], tuple[date, dict[str, Any]]] = {}
+        for row in [*daily, *windows]:
+            url = row.get("key")
+            device = str(row.get("scope") or "").strip().casefold()
+            metric = row.get("metric")
+            if not isinstance(url, str) or not url.strip():
+                continue
+            if device not in CWV_DEVICES:
+                continue
+            if not isinstance(metric, str) or not metric.strip():
+                continue
+            observed = _stored_day(row.get("date") or row.get("end"))
+            if observed is None:
+                continue
+            candidate_url = url.strip()
+            candidate_metric = metric.strip()
+            candidate: dict[str, Any] = {
+                "url": candidate_url,
+                "device": device,
+                "metric": candidate_metric,
+                "p75": row.get("value"),
+                "date": observed.isoformat(),
+            }
+            identity = (candidate_url, device, candidate_metric)
+            previous = latest.get(identity)
+            if previous is None or observed >= previous[0]:
+                latest[identity] = (observed, candidate)
+
+        rows = [candidate for _, candidate in latest.values()]
+        rows.sort(key=lambda item: (item["url"], item["device"], item["metric"]))
+        if len(rows) > _CWV_ROW_LIMIT:
+            limitations.append(
+                f"cwv: stored metric rows capped at {_CWV_ROW_LIMIT}; a template may be incomplete"
+            )
+            rows = rows[:_CWV_ROW_LIMIT]
+        return rows
+
     def _digest_evidence(
-        self, property_id: str, limitations: list[str]
+        self,
+        property_id: str,
+        limitations: list[str],
+        *,
+        start: date | None = None,
+        end: date | None = None,
     ) -> dict[str, list[dict[str, Any]]] | None:
         """Stored evidence for the attributed change digest, or ``None`` when there is none.
 
@@ -1633,22 +1831,40 @@ class SeoService:
         ``state`` rather than a per-run issue snapshot. That is enough to say what is new
         since the previous window (``first_seen`` inside it) and what was triaged as fixed;
         ``analysis.digest`` applies those rules, so the rows are passed without a guessed
-        ``change``. A missing store, a read failure or an empty result keeps the digest
-        section out of the report entirely. The store has no indexing-event table yet, so
-        that input is omitted and the digest reports the gap instead of inventing events.
+        ``change``. Indexing events are read only inside ``[start, end]`` -- the compared
+        windows -- because an event outside them cannot explain this period's change; the
+        digest counts a row without a URL or event name as malformed instead of guessing.
+        A missing store, a read failure or an empty result keeps the digest section out of
+        the report entirely.
         """
         if self._store is None:
             return None
         try:
             issues = self._store.list_issues(property_id, state=None, limit=_DIGEST_EVIDENCE_LIMIT)
             pages = self._store.list_pages(property_id, limit=_DIGEST_EVIDENCE_LIMIT)
+            events = self._store.list_indexing_events(
+                property_id=property_id,
+                start=start,
+                end=end,
+                limit=_DIGEST_EVIDENCE_LIMIT,
+            )
+            event_total = (
+                self._store.count_indexing_events(property_id=property_id, start=start, end=end)
+                if len(events) >= _DIGEST_EVIDENCE_LIMIT
+                else len(events)
+            )
         except Exception:  # storage must never cancel a report
             logger.warning("weekly: could not read digest evidence")
             return None
-        if len(issues) >= _DIGEST_EVIDENCE_LIMIT or len(pages) >= _DIGEST_EVIDENCE_LIMIT:
+        if (
+            len(issues) >= _DIGEST_EVIDENCE_LIMIT
+            or len(pages) >= _DIGEST_EVIDENCE_LIMIT
+            or event_total > len(events)
+        ):
             limitations.append(
-                f"digest evidence capped at {_DIGEST_EVIDENCE_LIMIT} issues and "
-                f"{_DIGEST_EVIDENCE_LIMIT} pages; an unexplained change may be missing"
+                f"digest evidence capped at {_DIGEST_EVIDENCE_LIMIT} issues, "
+                f"{_DIGEST_EVIDENCE_LIMIT} pages and {_DIGEST_EVIDENCE_LIMIT} indexing events; "
+                "an unexplained change may be missing"
             )
         issue_changes = [
             {
@@ -1671,9 +1887,25 @@ class SeoService:
             }
             for page in pages
         ]
-        if not issue_changes and not page_rows:
+        event_rows = [
+            {
+                "url": event.get("url"),
+                "event": event.get("event"),
+                "event_date": event.get("event_date"),
+            }
+            for event in events
+        ]
+        evidence: dict[str, list[dict[str, Any]]] = {
+            "issue_changes": issue_changes,
+            "pages": page_rows,
+        }
+        if event_rows:
+            # Absent events stay absent: the digest reports the gap instead of an empty list
+            # that a reader could mistake for "checked, nothing happened".
+            evidence["indexing_events"] = event_rows
+        if not issue_changes and not page_rows and not event_rows:
             return None
-        return {"issue_changes": issue_changes, "pages": page_rows}
+        return evidence
 
     def _deliver_report(self, report: Report, warnings: list[str]) -> bool:
         """Send a built report through the configured channels (best-effort)."""
@@ -2659,6 +2891,90 @@ def _metric_key(row: Mapping[str, Any], dimensions: Sequence[str]) -> str:
     if len(parts) <= 1:
         return parts[0] if parts else ""
     return json.dumps(parts, ensure_ascii=False, separators=(",", ":"))
+
+
+def _stored_day(value: object) -> date | None:
+    """Parse a stored metric date without inventing a day for an unknown value."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _indexing_event_candidate(
+    row: Mapping[str, Any],
+) -> tuple[str, str, date, dict[str, Any] | None] | None:
+    """Extract one storable per-URL event, or ``None`` when the row has no identity."""
+    url = _event_url(row.get("url") or row.get("URL"))
+    event = _event_name(row.get("event") or row.get("event_type") or row.get("type"))
+    event_date = _event_day(row.get("event_date") or row.get("date"))
+    if url is None or event is None or event_date is None:
+        return None
+    return url, event, event_date, _event_detail(row, event)
+
+
+def _event_url(value: object) -> str | None:
+    """Only an absolute http(s) URL can be a per-URL event; a count or path is not one."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    parts = urlsplit(text)
+    if parts.scheme not in _HTTP_SCHEMES or not parts.hostname:
+        return None
+    return text
+
+
+def _event_name(value: object) -> str | None:
+    """Normalise a provider event name to the store's stable vocabulary.
+
+    ``APPEARED_IN_SEARCH``/``URL_ADDED``/``entered`` all mean the page became indexed;
+    ``REMOVED_FROM_SEARCH``/``URL_REMOVED``/``exited`` mean it was excluded. Unknown names
+    keep their provider spelling (lowercase, underscores) so two distinct events never
+    collapse into one label.
+    """
+    text = value.strip() if isinstance(value, str) else ""
+    if not text:
+        return None
+    folded = "_".join(text.casefold().replace("-", " ").split())
+    mapped = _INDEXING_EVENT_ALIASES.get(folded)
+    if mapped is not None:
+        return mapped
+    return folded[:64] or None
+
+
+def _event_day(value: object) -> date | None:
+    """Accept a date or an ISO timestamp (Yandex uses a comma before milliseconds)."""
+    return _stored_day(value)
+
+
+def _event_detail(row: Mapping[str, Any], event: str) -> dict[str, Any] | None:
+    """Keep the compact provider evidence for one event, never the whole payload."""
+    detail: dict[str, Any] = {}
+    raw_event = row.get("event") or row.get("event_type") or row.get("type")
+    if isinstance(raw_event, str):
+        text = raw_event.strip()
+        if text and text.casefold() != event:
+            detail["provider_event"] = text[:64]
+    for key in _INDEXING_EVENT_DETAIL_KEYS:
+        value = row.get(key)
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                detail[key] = text[:500]
+        elif isinstance(value, (int, float, bool)):
+            detail[key] = value
+    return detail or None
 
 
 def _row_day(row: Mapping[str, Any], dimensions: Sequence[str], fallback: date) -> date:

@@ -429,6 +429,117 @@ def test_generated_at_defaults_to_an_aware_utc_timestamp() -> None:
     assert datetime.fromisoformat(report.generated_at).utcoffset() == timedelta(0)
 
 
+def _cwv_rows() -> list[dict[str, object]]:
+    return [
+        {
+            "url": "https://example.com/blog/1",
+            "device": "phone",
+            "metric": "lcp",
+            "p75": 3000.0,
+            "previous_p75": 2000.0,
+            "date": "2026-11-01",
+        },
+        {
+            "url": "https://example.com/blog/2",
+            "device": "phone",
+            "metric": "cls",
+            "p75": 0.08,
+            "date": "2026-11-02",
+        },
+    ]
+
+
+def test_weekly_cwv_section_is_opt_in_and_additive() -> None:
+    without = build_weekly(
+        property_id="example.com",
+        period_start=_PERIOD_START,
+        period_end=_PERIOD_END,
+        current=_current(),
+        previous=_previous(),
+        generated_at=_GENERATED_AT,
+    )
+    assert without.section("cwv") is None
+
+    report = build_weekly(
+        property_id="example.com",
+        period_start=_PERIOD_START,
+        period_end=_PERIOD_END,
+        current=_current(),
+        previous=_previous(),
+        cwv_rows=_cwv_rows(),
+        generated_at=_GENERATED_AT,
+    )
+
+    assert [section.key for section in report.sections] == [
+        "headline",
+        "traffic",
+        "cwv",
+        "opportunities",
+        "issues",
+        "sources",
+    ]
+    section = report.section("cwv")
+    assert section is not None
+    assert section.total == 1
+    assert section.truncated is False
+    assert section.data_age == "2026-11-01"
+    row = section.rows[0]
+    assert row["template"] == "/blog/{id}"
+    assert row["device"] == "phone"
+    assert row["regressed"] is True
+    assert row["regression_pct"] == 50.0
+    assert row["regression_metric"] == "lcp"
+    assert "cwv_p75_worst_page" in report.limitations
+    assert "cwv_no_comparison" not in report.limitations
+
+
+def test_weekly_cwv_section_is_capped_at_five_templates() -> None:
+    rows = [
+        {
+            "url": f"https://example.com/t{index}/1",
+            "device": "phone",
+            "metric": "lcp",
+            "p75": float(index * 1000),
+        }
+        for index in range(1, 8)
+    ]
+    report = build_weekly(
+        property_id="example.com",
+        period_start=_PERIOD_START,
+        period_end=_PERIOD_END,
+        current=_current(),
+        previous=_previous(),
+        cwv_rows=rows,
+        generated_at=_GENERATED_AT,
+    )
+
+    section = report.section("cwv")
+    assert section is not None
+    assert section.total == 7
+    assert section.truncated is True
+    assert len(section.rows) == 5
+
+
+def test_weekly_cwv_missing_rows_are_a_limitation_not_a_zero() -> None:
+    report = build_weekly(
+        property_id="example.com",
+        period_start=_PERIOD_START,
+        period_end=_PERIOD_END,
+        current=_current(),
+        previous=_previous(),
+        cwv_rows=[],
+        generated_at=_GENERATED_AT,
+    )
+
+    section = report.section("cwv")
+    assert section is not None
+    assert section.rows == []
+    assert section.total == 0
+    assert section.truncated is False
+    assert section.data_age is None
+    assert "cwv_no_rows" in report.limitations
+
+
 def test_same_input_produces_the_same_report() -> None:
     def build() -> dict[str, object]:
         return build_weekly(

@@ -117,6 +117,13 @@ def _task_row(row: sqlite3.Row) -> JsonObject:
     return item
 
 
+def _indexing_event_row(row: sqlite3.Row) -> JsonObject:
+    item = _row_to_dict(row)
+    raw_detail = cast(str | None, item.pop("detail_json"))
+    item["detail"] = {} if raw_detail is None else _decode_json(raw_detail)
+    return item
+
+
 def _task_identity(
     kind: str, property_id: str, url: str, rule_id: str
 ) -> tuple[str, str, str, str]:
@@ -129,6 +136,20 @@ def _task_identity(
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{name} must be a non-empty string")
     return (kind, property_id, url, rule_id)
+
+
+def _indexing_event_identity(
+    provider: str, property_id: str, url: str, event: str, event_date: date | str
+) -> tuple[str, str, str, str, str]:
+    for name, value in (
+        ("provider", provider),
+        ("property_id", property_id),
+        ("url", url),
+        ("event", event),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+    return (provider, property_id, url, event, _day(event_date, name="event_date"))
 
 
 class Store:
@@ -655,6 +676,147 @@ class Store:
             )
         if cursor.rowcount == 0:
             raise KeyError(f"issue {issue_id} not found")
+
+    # -- indexing events ------------------------------------------------------------------------
+
+    def upsert_indexing_event(
+        self,
+        provider: str,
+        property_id: str,
+        url: str,
+        event: str,
+        event_date: date | str,
+        *,
+        detail: JsonObject | None = None,
+        seen_at: datetime | str | None = None,
+    ) -> str:
+        """Record one provider-reported indexing event; return ``"new"`` or ``"existing"``.
+
+        ``(provider, property_id, url, event, event_date)`` is the identity, so replaying a
+        provider sync never duplicates an event. ``first_seen`` is the first import and never
+        moves; ``last_seen`` only advances. ``detail`` refreshes the stored payload when
+        supplied, and a repeat without detail keeps the original evidence instead of erasing it.
+        """
+        identity = _indexing_event_identity(provider, property_id, url, event, event_date)
+        stamp = _timestamp(seen_at, name="seen_at")
+        detail_json = None if detail is None else canonical_json(detail)
+        # BEGIN IMMEDIATE: the SELECT-then-write must not race a concurrent sync of the same
+        # event (unique-key violation instead of idempotency). Nested callers join a batch.
+        with self.atomic():
+            existing = self.conn.execute(
+                """
+                SELECT 1
+                FROM indexing_events
+                WHERE provider = ? AND property_id = ? AND url = ? AND event = ?
+                  AND event_date = ?
+                """,
+                identity,
+            ).fetchone()
+            if existing is None:
+                self.conn.execute(
+                    """
+                    INSERT INTO indexing_events (
+                        provider, property_id, url, event, event_date, detail_json,
+                        first_seen, last_seen
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (*identity, detail_json, stamp, stamp),
+                )
+                return "new"
+            self.conn.execute(
+                """
+                UPDATE indexing_events
+                SET last_seen = MAX(last_seen, ?),
+                    detail_json = COALESCE(?, detail_json)
+                WHERE provider = ? AND property_id = ? AND url = ? AND event = ?
+                  AND event_date = ?
+                """,
+                (stamp, detail_json, *identity),
+            )
+        return "existing"
+
+    def list_indexing_events(
+        self,
+        *,
+        property_id: str | None = None,
+        provider: str | None = None,
+        url: str | None = None,
+        event: str | None = None,
+        start: date | str | None = None,
+        end: date | str | None = None,
+        limit: int = 1000,
+    ) -> list[JsonObject]:
+        """Indexing events newest first, optionally filtered and always bounded.
+
+        ``start``/``end`` bound ``event_date`` inclusively. ``detail`` is decoded back into an
+        object (``{}`` when the provider sent none), so callers never see the ``detail_json``
+        column name.
+        """
+        params: dict[str, object] = {
+            "property_id": property_id,
+            "provider": provider,
+            "url": url,
+            "event": event,
+            "start": None if start is None else _day(start, name="start"),
+            "end": None if end is None else _day(end, name="end"),
+            "limit": max(0, int(limit)),
+        }
+        rows = self.conn.execute(
+            """
+            SELECT provider, property_id, url, event, event_date, detail_json,
+                   first_seen, last_seen
+            FROM indexing_events
+            WHERE (:property_id IS NULL OR property_id = :property_id)
+              AND (:provider IS NULL OR provider = :provider)
+              AND (:url      IS NULL OR url = :url)
+              AND (:event    IS NULL OR event = :event)
+              AND (:start    IS NULL OR event_date >= :start)
+              AND (:end      IS NULL OR event_date <= :end)
+            ORDER BY event_date DESC, url, event, provider
+            LIMIT :limit
+            """,
+            params,
+        ).fetchall()
+        return [_indexing_event_row(row) for row in rows]
+
+    def count_indexing_events(
+        self,
+        *,
+        property_id: str | None = None,
+        provider: str | None = None,
+        url: str | None = None,
+        event: str | None = None,
+        start: date | str | None = None,
+        end: date | str | None = None,
+    ) -> int:
+        """Number of indexing events matching the same filters as :meth:`list_indexing_events`.
+
+        A bounded list cannot tell "exactly the cap" from "truncated"; the digest asks this
+        once when it hits the cap so the limitation it prints is true.
+        """
+        params: dict[str, object] = {
+            "property_id": property_id,
+            "provider": provider,
+            "url": url,
+            "event": event,
+            "start": None if start is None else _day(start, name="start"),
+            "end": None if end is None else _day(end, name="end"),
+        }
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM indexing_events
+            WHERE (:property_id IS NULL OR property_id = :property_id)
+              AND (:provider IS NULL OR provider = :provider)
+              AND (:url      IS NULL OR url = :url)
+              AND (:event    IS NULL OR event = :event)
+              AND (:start    IS NULL OR event_date >= :start)
+              AND (:end      IS NULL OR event_date <= :end)
+            """,
+            params,
+        ).fetchone()
+        return 0 if row is None else int(row["total"])
 
     # -- tasks (finding lifecycle) --------------------------------------------------------------
 

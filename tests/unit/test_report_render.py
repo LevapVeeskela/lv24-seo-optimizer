@@ -1269,6 +1269,177 @@ def test_text_and_html_have_no_mapping_repr() -> None:
     assert "{'code': 'x'}" not in html_doc
 
 
+def _cwv_section() -> ReportSection:
+    return ReportSection(
+        key="cwv",
+        title="Core Web Vitals by template",
+        summary="1 of 8 templates; regressed: /blog/{id} (LCP +60.0%)",
+        rows=[
+            {
+                "template": "/blog/{id}",
+                "device": "phone",
+                "urls": 2,
+                "sample": 12,
+                "coverage": 1.0,
+                "metrics": [
+                    {
+                        "metric": "lcp",
+                        "p75": 3200.0,
+                        "unit": "ms",
+                        "status": "needs_improvement",
+                        "previous_p75": 2000.0,
+                        "delta": 1200.0,
+                        "delta_pct": 60.0,
+                        "regressed": True,
+                        "sample": 10,
+                        "compared": 10,
+                    },
+                    {
+                        "metric": "cls",
+                        "p75": 0.08,
+                        "unit": "score",
+                        "status": "good",
+                        "previous_p75": 0.1,
+                        "delta": -0.02,
+                        "delta_pct": -20.0,
+                        "regressed": False,
+                        "sample": 2,
+                        "compared": 2,
+                    },
+                ],
+                "regressed": True,
+                "regression_pct": 60.0,
+                "regression_metric": "lcp",
+                "poor_metrics": 0,
+            }
+        ],
+        total=8,
+        truncated=True,
+        data_age="2026-11-01",
+    )
+
+
+def _weekly_with_cwv() -> Report:
+    report = _weekly_full()
+    report.sections.insert(2, _cwv_section())
+    report.limitations.append("cwv_p75_worst_page")
+    return report
+
+
+def _weekly_cwv_empty() -> Report:
+    report = _weekly_full()
+    report.sections.insert(
+        2,
+        ReportSection(
+            key="cwv",
+            title="Core Web Vitals by template",
+            summary="No Core Web Vitals templates",
+            rows=[],
+            total=0,
+            truncated=False,
+        ),
+    )
+    report.limitations.append("cwv_no_rows")
+    return report
+
+
+def test_cwv_section_is_localized_in_text_and_html() -> None:
+    report = _weekly_with_cwv()
+
+    en = render_email_text(report)
+    assert "Core Web Vitals by template" in en
+    assert "1. /blog/{id} · Phone · Regressed" in en
+    assert "LCP p75 3,200 ms (Needs improvement, +60.0%)" in en
+    assert "CLS p75 0.08 (Good, -20.0%)" in en
+    assert "Sample 12 · Coverage 100%" in en
+    assert "Regressed: /blog/{id} · Phone (LCP +60.0%)" in en
+    assert "Showing 1 of 8 templates." in en
+    assert "Oldest CWV data: 2026-11-01" in en
+
+    ru = render_email_text(report, locale="ru")
+    assert "Core Web Vitals по шаблонам" in ru
+    assert "Телефон" in ru
+    assert "Требует улучшения" in ru
+    assert "мс" in ru
+    assert "Ухудшение: /blog/{id}" in ru
+
+    zh = render_html(report, locale="zh")
+    assert "按模板划分的 Core Web Vitals" in zh
+    assert "手机" in zh
+    assert "需要改进" in zh
+    assert "毫秒" in zh
+    assert "退化：/blog/{id}" in zh
+
+
+def test_cwv_section_renders_in_html_without_mapping_repr() -> None:
+    html_doc = render_html(_weekly_with_cwv())
+
+    assert "Core Web Vitals by template" in html_doc
+    assert "/blog/{id}" in html_doc
+    assert "LCP p75 3,200 ms (Needs improvement, +60.0%)" in html_doc
+    assert "Sample 12" in html_doc
+    assert "Regressed" in html_doc
+    assert "{&#x27;" not in html_doc
+    assert "{'metric'" not in html_doc
+
+
+def test_cwv_section_renders_in_markdown_as_a_table() -> None:
+    markdown = render_markdown(_weekly_with_cwv())
+
+    assert "## Core Web Vitals by template" in markdown
+    assert "| Template | Device | p75 | Sample | Coverage | Regression |" in markdown
+    assert "| /blog/{id} | phone |" in markdown
+    assert "LCP 3,200 ms \\(needs\\_improvement, +60.0%\\)" in markdown
+    assert "CLS 0.08 \\(good, -20.0%\\)" in markdown
+    assert "| 12 | 100% | LCP +60.0% |" in markdown
+    assert "_Showing 1 of 8 templates · Oldest CWV data: 2026-11-01_" in markdown
+
+
+def test_empty_cwv_section_says_no_rows_instead_of_zero() -> None:
+    report = _weekly_cwv_empty()
+    text = render_email_text(report)
+    html_doc = render_html(report)
+    markdown = render_markdown(report)
+
+    assert "No stored Core Web Vitals rows." in text
+    assert "No stored Core Web Vitals rows." in html_doc
+    assert "p75 0" not in text
+    assert "p75 0" not in html_doc
+    assert "| Template |" not in markdown
+
+
+def test_malformed_cwv_rows_are_skipped_without_invented_values() -> None:
+    report = _weekly_full()
+    report.sections.insert(
+        2,
+        ReportSection(
+            key="cwv",
+            title="Core Web Vitals by template",
+            summary="",
+            rows=[
+                {"template": "/a/{id}", "device": "phone", "metrics": []},
+                {
+                    "template": "/b/{id}",
+                    "device": "phone",
+                    "metrics": [{"metric": "lcp", "p75": None, "unit": "ms"}],
+                },
+            ],
+            total=2,
+            truncated=False,
+        ),
+    )
+    report.limitations.append("cwv_values_ignored")
+
+    text = render_email_text(report)
+    html_doc = render_html(report)
+
+    assert "/a/{id}" not in text
+    assert "/b/{id}" not in text
+    assert "No stored Core Web Vitals rows." in text
+    assert "No stored Core Web Vitals rows." in html_doc
+    assert "p75 0" not in text
+
+
 def test_markdown_escapes_links_mentions_and_code_from_provider_text() -> None:
     """Provider text must not become Markdown links, mentions, emphasis or code spans."""
     report = Report(

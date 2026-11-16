@@ -57,6 +57,33 @@ _REQUIRED_KEYS = (
     "section.sources",
     "section.notes",
     "section.warnings",
+    "section.cwv",
+    "cwv.template",
+    "cwv.device",
+    "cwv.p75",
+    "cwv.sample",
+    "cwv.coverage",
+    "cwv.regressed",
+    "cwv.no_regression",
+    "cwv.no_comparison",
+    "cwv.none",
+    "cwv.no_templates",
+    "cwv.truncated",
+    "cwv.data_age",
+    "cwv.regressed_summary",
+    "cwv.device.phone",
+    "cwv.device.desktop",
+    "cwv.device.tablet",
+    "cwv.status.good",
+    "cwv.status.needs_improvement",
+    "cwv.status.poor",
+    "cwv.status.unknown",
+    "cwv.metric.lcp",
+    "cwv.metric.inp",
+    "cwv.metric.cls",
+    "cwv.metric.fcp",
+    "cwv.metric.ttfb",
+    "cwv.metric.fid",
     "traffic.rows",
     "traffic.sessions",
     "traffic.no_rows",
@@ -106,6 +133,14 @@ _REQUIRED_KEYS = (
     "notes.limitation.token_expiring",
     "notes.limitation.paid_provider",
     "notes.limitation.partial_response",
+    "notes.limitation.cwv_no_rows",
+    "notes.limitation.cwv_template_missing",
+    "notes.limitation.cwv_device_missing",
+    "notes.limitation.cwv_no_comparison",
+    "notes.limitation.cwv_partial_comparison",
+    "notes.limitation.cwv_p75_worst_page",
+    "notes.limitation.cwv_values_ignored",
+    "notes.limitation.cwv_lab_ignored",
     "warning.no_metrics",
     "warning.previous_no_metrics",
     "warning.no_provider_rows",
@@ -128,10 +163,11 @@ _REQUIRED_KEYS = (
     "unit.rows",
     "unit.sessions",
     "unit.positions",
+    "unit.ms",
     "unit.pp",
 )
 
-_PLURAL_KEYS = ("headline.significant", "issue.count", "issue.checks")
+_PLURAL_KEYS = ("headline.significant", "issue.count", "issue.checks", "cwv.count")
 _PLURAL_FORMS = ("one", "few", "many", "other")
 
 
@@ -473,6 +509,46 @@ def test_chinese_units_precede_the_number() -> None:
     assert zh.t("unit.sessions") == "会话数"
     assert zh.t("unit.pp") == "个百分点"
     assert f"{zh.t('unit.clicks')} {zh.number(165)}" == "点击次数 165"
+
+
+def test_cwv_copy_is_localized_in_all_catalogs() -> None:
+    en = translator("en")
+    ru = translator("ru")
+    zh = translator("zh")
+
+    assert en.t("section.cwv") == "Core Web Vitals by template"
+    assert ru.t("section.cwv") == "Core Web Vitals по шаблонам"
+    assert zh.t("section.cwv") == "按模板划分的 Core Web Vitals"
+    assert en.t("cwv.status.needs_improvement") == "Needs improvement"
+    assert ru.t("cwv.status.needs_improvement") == "Требует улучшения"
+    assert zh.t("cwv.status.needs_improvement") == "需要改进"
+    assert en.t("cwv.device.phone") == "Phone"
+    assert ru.t("cwv.device.phone") == "Телефон"
+    assert zh.t("cwv.device.phone") == "手机"
+    assert en.t("unit.ms") == "ms"
+    assert ru.t("unit.ms") == "мс"
+    assert zh.t("unit.ms") == "毫秒"
+    assert (
+        en.t(
+            "cwv.regressed_summary",
+            template="/blog/{id}",
+            device="Phone",
+            metric="LCP",
+            change="+60.0%",
+        )
+        == "Regressed: /blog/{id} · Phone (LCP +60.0%)"
+    )
+    assert ru.t("notes.limitation.cwv_p75_worst_page").startswith("Core Web Vitals:")
+    assert zh.t("notes.limitation.cwv_no_rows").startswith("Core Web Vitals：")
+
+
+def test_cwv_plural_forms() -> None:
+    assert Translator("en").count("cwv.count", 1) == "1 template"
+    assert Translator("en").count("cwv.count", 3) == "3 templates"
+    assert Translator("ru").count("cwv.count", 1) == "1 шаблон"
+    assert Translator("ru").count("cwv.count", 2) == "2 шаблона"
+    assert Translator("ru").count("cwv.count", 5) == "5 шаблонов"
+    assert Translator("zh").count("cwv.count", 5) == "5 个模板"
 
 
 def test_estimate_note_and_new_catalog_copy() -> None:
