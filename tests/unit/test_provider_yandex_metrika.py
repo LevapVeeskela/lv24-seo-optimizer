@@ -232,7 +232,7 @@ def test_stat_data_pages_by_offset_up_to_total_rows() -> None:
             json={
                 "data": [
                     {"dimensions": [{"name": f"/{index}"}], "metrics": [float(index)]}
-                    for index in range(offset, min(offset + limit, 5))
+                    for index in range(offset - 1, min(offset - 1 + limit, 5))
                 ],
                 "total_rows": 5,
                 "sampled": offset > 0,
@@ -248,7 +248,7 @@ def test_stat_data_pages_by_offset_up_to_total_rows() -> None:
         limit=2,
     )
 
-    assert seen == [(0, 2), (2, 2), (4, 2)]
+    assert seen == [(1, 2), (3, 2), (5, 2)]
     assert [row["startURLPath"] for row in result.rows] == ["/0", "/1", "/2", "/3", "/4"]
     assert result.total == 5
     assert result.truncated is False
@@ -297,7 +297,7 @@ def test_stat_data_respects_the_row_cap() -> None:
             json={
                 "data": [
                     {"dimensions": [{"name": f"/{index}"}], "metrics": [1]}
-                    for index in range(offset, min(offset + limit, 10))
+                    for index in range(offset - 1, min(offset - 1 + limit, 10))
                 ],
                 "total_rows": 10,
             },
@@ -334,7 +334,7 @@ def test_stat_data_bounds_the_page_walk(monkeypatch: pytest.MonkeyPatch) -> None
             json={
                 "data": [
                     {"dimensions": [{"name": f"/{index}"}], "metrics": [1]}
-                    for index in range(offset, offset + limit)
+                    for index in range(offset - 1, offset - 1 + limit)
                 ],
                 "total_rows": 1000,
             },

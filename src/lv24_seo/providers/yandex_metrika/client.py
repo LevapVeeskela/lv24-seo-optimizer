@@ -156,7 +156,8 @@ class YandexMetrikaClient:
         total: int | None = None
         sampled = False
         truncated = False
-        offset = 0
+        # Metrika ``offset`` is 1-based; ``0`` is rejected with HTTP 400.
+        offset = 1
         pages = 0
 
         while True:
@@ -198,7 +199,7 @@ class YandexMetrikaClient:
             if len(rows) >= total:
                 rows = rows[:total]
                 break
-            offset = len(rows)
+            offset = len(rows) + 1
 
         if total is not None and total > len(rows):
             truncated = True
