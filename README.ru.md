@@ -50,7 +50,13 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 | MCP | 12 инструментов, 3 ресурса, 3 промпта; без записи к провайдеру по умолчанию — таблица ниже |
 | CLI | 22 команды верхнего уровня (15 групп + 7 команд): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp` |
 | Скиллы | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
-| Автоматизация | cron / systemd timer / Планировщик Windows, рецепт GitHub Actions |
+| Автоматизация | cron / systemd timer / Планировщик Windows: `schedule install` по умолчанию только печатает план, запись — с `--allow-write`; `schedule status` только читает; `schedule uninstall` удаляет ровно созданную задачу и идемпотентен; плюс рецепт GitHub Actions |
+
+Планировщик работает по принципу «сначала план»: `lv24-seo schedule install` печатает cron-блок,
+systemd-юниты или XML задачи и не пишет ничего без `--allow-write`. `schedule status` показывает
+`installed` / `outdated` / `partial` / `missing` / `unknown`, пути и совпадение с текущей
+конфигурацией; `schedule uninstall --allow-write` удаляет ровно созданный блок/юниты/задачу,
+не трогает чужие cron-строки и при повторном запуске ничего не делает.
 
 ## Десктоп
 

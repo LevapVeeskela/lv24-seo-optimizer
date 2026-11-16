@@ -57,6 +57,14 @@ backslashes and symlink members are rejected before extraction. The restored
 database passes `PRAGMA quick_check` before and after it is moved into place,
 and a failed restore removes only the directory that call created.
 
+Local host-scheduler changes are gated too. `schedule install` and
+`schedule uninstall` only print a plan by default; they touch cron, systemd
+user units or Task Scheduler only with `--allow-write`. `schedule status` is
+read-only. Uninstall removes exactly the generated `# >>> lv24-seo:<job> >>>`
+block, the two `<job>.service` / `<job>.timer` units or the named task, reports
+what it removed, and is idempotent. There are no wildcard process kills, and
+unrelated cron lines or tasks are never modified.
+
 ## Supply chain
 
 CI runs offline tests, type/style checks, generated-schema drift checks and

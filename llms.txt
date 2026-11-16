@@ -51,6 +51,15 @@
 - [Desktop plan](docs/plans/2026-11-14-seo-desktop.md): shell scope and milestones
 - [Security](SECURITY.md): token handling, write gating
 
+## Examples
+
+```bash
+lv24-seo schedule install --kind weekly --config ./seo.toml              # plan only: dry_run=true, installed=false
+lv24-seo schedule install --kind weekly --config ./seo.toml --allow-write  # writes the cron block / systemd units / task
+lv24-seo schedule status --kind weekly --config ./seo.toml --json        # read-only: state, paths, matches
+lv24-seo schedule uninstall --kind weekly --config ./seo.toml --allow-write  # removes exactly the generated job
+```
+
 ## Machine-readable
 
 - [schemas/tools.json](schemas/tools.json): generated tool schemas for non-MCP agents

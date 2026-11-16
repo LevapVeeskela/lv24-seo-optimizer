@@ -167,6 +167,16 @@ $ lv24-seo report weekly --days 7 --json --out reports/
 # No configured tokens: an explicit no-data report, with complete=false.
 ```
 
+```text
+$ lv24-seo schedule install --kind weekly --config ./seo.toml
+
+# dry_run: true, installed: false — prints the cron block / systemd units / task XML only.
+$ lv24-seo schedule install --kind weekly --config ./seo.toml --allow-write
+# dry_run: false, installed: true — writes the managed cron block / user units / task.
+$ lv24-seo schedule status --kind weekly --config ./seo.toml
+# state: installed, matches: true (read-only)
+```
+
 The same data is available as MCP tools (`seo_weekly_report`, `gsc_search_analytics`,
 `yandex_query_stats`, `seo_indexing_triage`, …) and as three skills that encode
 audit → plan → fix → verify.
@@ -179,7 +189,7 @@ audit → plan → fix → verify.
 | **MCP tools** | 12 tools across GSC, Yandex, crawl, reports, logs and gated writes — see the table below |
 | **CLI** | 22 top-level commands (15 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`; read commands accept `--strict` to exit `5` on truncated data |
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
-| **Automation** | cron / systemd timer / Windows Task Scheduler generators and a GitHub Actions recipe |
+| **Automation** | cron / systemd timer / Windows Task Scheduler generators with plan-first `schedule install` (`--allow-write` to apply), read-only `schedule status`, exact and idempotent `schedule uninstall`, plus a GitHub Actions recipe |
 
 ### MCP tools
 
