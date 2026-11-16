@@ -57,15 +57,36 @@ QUERY_REPORT_LAG_DAYS = 4
 LOGIN_NEXT_ACTION = "lv24-seo auth login --provider yandex"
 HOST_NOT_LOADED_WARNING = "host_not_loaded"
 
-_QUERY_INDICATORS = ("TOTAL_SHOWS", "TOTAL_CLICKS", "AVG_SHOW_POSITION")
+#: Documented ``ApiQueryIndicator`` values for ``search-queries/popular``.
+_QUERY_INDICATORS = (
+    "TOTAL_SHOWS",
+    "TOTAL_CLICKS",
+    "AVG_SHOW_POSITION",
+    "AVG_CLICK_POSITION",
+)
+#: Indicators with a stable, documented row key; anything else is kept in ``extra_indicators``.
+_QUERY_INDICATOR_KEYS = {
+    "TOTAL_SHOWS": "shows",
+    "TOTAL_CLICKS": "clicks",
+    "AVG_SHOW_POSITION": "position",
+    "AVG_CLICK_POSITION": "avg_click_position",
+}
 _SUMMARY_NUMERIC_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("pages_in_search", ("searchable_pages_count", "pages_in_search")),
     ("pages_excluded", ("excluded_pages_count", "pages_excluded")),
-    ("http_2xx", ("http_2xx",)),
-    ("http_3xx", ("http_3xx",)),
-    ("http_4xx", ("http_4xx",)),
-    ("http_5xx", ("http_5xx",)),
+    ("http_2xx", ("http_2xx", "HTTP_2XX")),
+    ("http_3xx", ("http_3xx", "HTTP_3XX")),
+    ("http_4xx", ("http_4xx", "HTTP_4XX")),
+    ("http_5xx", ("http_5xx", "HTTP_5XX")),
 )
+#: Documented ``IndexingStatusEnum`` series returned by ``indexing/history``.
+_INDEXING_INDICATOR_KEYS = {
+    "HTTP_2XX": "http_2xx",
+    "HTTP_3XX": "http_3xx",
+    "HTTP_4XX": "http_4xx",
+    "HTTP_5XX": "http_5xx",
+    "OTHER": "other",
+}
 _REPORT_DATE_KEYS = ("date_to", "end_date", "date", "last_update", "updated_at")
 _HOST_NOT_LOADED = "HOST_NOT_LOADED"
 
@@ -146,6 +167,12 @@ class YandexWebmasterClient:
     def indexing_history(self, host_id: str) -> ProviderResult[Row]:
         """Daily indexing buckets (date plus HTTP status counters).
 
+        The documented payload is ``{"indicators": {"HTTP_2XX": [{"date", "value"}], ...}}``
+        with the ``IndexingStatusEnum`` series ``HTTP_2XX``/``HTTP_3XX``/``HTTP_4XX``/
+        ``HTTP_5XX``/``OTHER``. Series are merged into one row per date; an indicator the
+        provider omitted stays absent instead of being zero-filled. The older
+        ``history``/``indexing_history`` list form is still accepted unchanged.
+
         An empty history means the host is loaded but has no daily buckets yet; that is an
         empty answer with the :data:`~lv24_seo.providers.base.EMPTY_HISTORY` limitation, not a
         degraded host. Only a ``404`` or an explicit ``HOST_NOT_LOADED`` payload is degraded.
@@ -158,7 +185,7 @@ class YandexWebmasterClient:
         if missing or _is_host_not_loaded(payload):
             return _degraded(scope, fetched_at)
 
-        rows = _copy_rows(_rows_from(payload, "history", "indexing_history"))
+        rows = _indexing_rows(payload)
         if not rows:
             return _empty_history(scope, fetched_at)
         return _result(property_id=scope, rows=rows, fetched_at=fetched_at)
@@ -536,7 +563,59 @@ def _summary_row(payload: object) -> Row | None:
         value = _first_number(body, aliases)
         if value is not None:
             row[field_name] = value
+    problems = body.get("site_problems")
+    if isinstance(problems, Mapping):
+        row["site_problems"] = _severity_counts(problems)
     return row or None
+
+
+def _severity_counts(problems: Mapping[str, Any]) -> dict[str, int]:
+    """Documented ``site_problems`` counters: severity → count, zero is a real value."""
+    counts: dict[str, int] = {}
+    for severity, raw in problems.items():
+        count = _as_int(raw)
+        if count is not None:
+            counts[str(severity)] = count
+    return dict(sorted(counts.items()))
+
+
+def _indexing_rows(payload: object) -> list[Row]:
+    """Rows from the documented indicator series, or the legacy list form unchanged."""
+    body = _mapping(payload)
+    indicators = body.get("indicators")
+    if isinstance(indicators, Mapping):
+        return _indexing_rows_from_indicators(indicators)
+    return _copy_rows(_rows_from(payload, "history", "indexing_history"))
+
+
+def _indexing_rows_from_indicators(indicators: Mapping[str, Any]) -> list[Row]:
+    """Merge ``{"HTTP_2XX": [{"date", "value"}], ...}`` into one row per date.
+
+    Only returned indicators are written: a missing series leaves its key absent, and a
+    status the enum does not document is preserved under ``extra_indicators``.
+    """
+    rows: dict[str, Row] = {}
+    extra: dict[str, dict[str, int | float]] = {}
+    for raw_name, series in indicators.items():
+        name = str(raw_name)
+        row_key = _INDEXING_INDICATOR_KEYS.get(name.upper())
+        if not isinstance(series, list):
+            continue
+        for entry in series:
+            if not isinstance(entry, Mapping):
+                continue
+            date_text = _text(entry.get("date"))
+            value = _number(entry.get("value"))
+            if date_text is None or value is None:
+                continue
+            row = rows.setdefault(date_text, {"date": date_text})
+            if row_key is not None:
+                row[row_key] = value
+            else:
+                extra.setdefault(date_text, {})[name] = value
+    for date_text, values in extra.items():
+        rows[date_text]["extra_indicators"] = dict(sorted(values.items()))
+    return [rows[date_text] for date_text in sorted(rows)]
 
 
 def _diagnostic_row(item: Mapping[str, Any]) -> Row:
@@ -555,12 +634,30 @@ def _is_sitemap_problem(row: Row) -> bool:
 
 def _query_row(item: Mapping[str, Any]) -> Row:
     indicators = _indicator_map(item.get("indicators"))
-    return {
+    row: Row = {
         "query": _text(item.get("query_text", item.get("query"))),
         "shows": _indicator(indicators, item, "TOTAL_SHOWS", "shows"),
         "clicks": _indicator(indicators, item, "TOTAL_CLICKS", "clicks"),
         "position": _indicator(indicators, item, "AVG_SHOW_POSITION", "position"),
     }
+    query_id = _text(item.get("query_id"))
+    if query_id is not None:
+        row["query_id"] = query_id
+    click_position = _indicator(indicators, item, "AVG_CLICK_POSITION", "avg_click_position")
+    if click_position is not None:
+        row["avg_click_position"] = click_position
+    extra = {
+        name: value
+        for name, value in indicators.items()
+        if name not in _QUERY_INDICATOR_KEYS and _is_scalar(value)
+    }
+    if extra:
+        row["extra_indicators"] = dict(sorted(extra.items()))
+    return row
+
+
+def _is_scalar(value: object) -> bool:
+    return isinstance(value, (str, int, float, bool))
 
 
 def _indicator_map(raw: object) -> Mapping[str, Any]:
@@ -597,8 +694,9 @@ def _indicator(
 def _reported_total(payload: object) -> int | None:
     """Grand total reported by the payload.
 
-    Only explicit grand-total keys count. A bare ``count`` is the size of *this page* in the
-    Yandex Webmaster API, and treating it as the total stops pagination early and hides rows.
+    Only explicit grand-total keys count. A bare ``count`` is not trusted as a total: if it is
+    page-scoped, treating it as the grand total would stop pagination early and hide rows. The
+    walk therefore ends on a short page or at the documented 3,000-query cap.
     """
     body = _mapping(payload)
     for key in ("total", "total_queries", "total_count"):

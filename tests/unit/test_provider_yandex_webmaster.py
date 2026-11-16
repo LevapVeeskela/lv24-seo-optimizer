@@ -192,6 +192,55 @@ def test_summary_maps_known_counters() -> None:
     ]
 
 
+def test_summary_maps_documented_site_problems() -> None:
+    payload = {
+        "sqi": 42,
+        "searchable_pages_count": 1200,
+        "excluded_pages_count": 30,
+        "site_problems": {
+            "FATAL": 0,
+            "CRITICAL": 2,
+            "POSSIBLE_PROBLEM": 5,
+            "RECOMMENDATION": 1,
+        },
+    }
+
+    result = _client(_with_user(payload)).summary(HOST)
+
+    assert result.rows == [
+        {
+            "sqi": 42,
+            "pages_in_search": 1200,
+            "pages_excluded": 30,
+            "site_problems": {
+                "CRITICAL": 2,
+                "FATAL": 0,
+                "POSSIBLE_PROBLEM": 5,
+                "RECOMMENDATION": 1,
+            },
+        }
+    ]
+
+
+def test_summary_missing_counters_stay_absent() -> None:
+    result = _client(_with_user({"sqi": 12})).summary(HOST)
+
+    # A provider-omitted counter is absent, never zero-filled.
+    assert result.rows == [{"sqi": 12}]
+    assert "pages_in_search" not in result.rows[0]
+    assert "pages_excluded" not in result.rows[0]
+    assert "http_2xx" not in result.rows[0]
+    assert "site_problems" not in result.rows[0]
+
+
+def test_summary_accepts_uppercase_http_counter_keys() -> None:
+    payload = {"sqi": 12, "HTTP_2XX": 10, "HTTP_5XX": 1}
+
+    result = _client(_with_user(payload)).summary(HOST)
+
+    assert result.rows == [{"sqi": 12, "http_2xx": 10, "http_5xx": 1}]
+
+
 def test_indexing_history_passes_daily_buckets() -> None:
     payload = {"history": [{"date": "2026-11-01", "http_2xx": 100, "http_4xx": 2}]}
 
@@ -199,6 +248,57 @@ def test_indexing_history_passes_daily_buckets() -> None:
 
     assert result.rows == [{"date": "2026-11-01", "http_2xx": 100, "http_4xx": 2}]
     assert result.data_age_days == 0
+
+
+def test_indexing_history_merges_documented_indicator_series() -> None:
+    payload = {
+        "indicators": {
+            "HTTP_2XX": [
+                {"date": "2026-11-01T00:00:00,000+0300", "value": 100},
+                {"date": "2026-11-02T00:00:00,000+0300", "value": 110},
+            ],
+            "HTTP_4XX": [{"date": "2026-11-01T00:00:00,000+0300", "value": 2}],
+            "OTHER": [{"date": "2026-11-02T00:00:00,000+0300", "value": 1}],
+        }
+    }
+
+    result = _client(_with_user(payload)).indexing_history(HOST)
+
+    # One row per date; omitted series stay absent instead of becoming zero.
+    assert result.rows == [
+        {"date": "2026-11-01T00:00:00,000+0300", "http_2xx": 100, "http_4xx": 2},
+        {"date": "2026-11-02T00:00:00,000+0300", "http_2xx": 110, "other": 1},
+    ]
+    assert "http_3xx" not in result.rows[0]
+    assert "http_5xx" not in result.rows[1]
+
+
+def test_indexing_history_preserves_unknown_indicator_series() -> None:
+    payload = {
+        "indicators": {
+            "HTTP_2XX": [{"date": "2026-11-01", "value": 10}],
+            "HTTP_999": [{"date": "2026-11-01", "value": 3}],
+        }
+    }
+
+    result = _client(_with_user(payload)).indexing_history(HOST)
+
+    assert result.rows == [
+        {
+            "date": "2026-11-01",
+            "http_2xx": 10,
+            "extra_indicators": {"HTTP_999": 3},
+        }
+    ]
+
+
+def test_empty_indicator_series_is_empty_history() -> None:
+    result = _client(_with_user({"indicators": {}})).indexing_history(HOST)
+
+    assert result.empty is True
+    assert result.total == 0
+    assert result.warnings == ()
+    assert result.limitations == (EMPTY_HISTORY,)
 
 
 def test_search_urls_events_passes_events() -> None:
@@ -276,9 +376,16 @@ def test_popular_queries_uses_repeated_params_and_reports_limits() -> None:
                     "TOTAL_SHOWS": 100,
                     "TOTAL_CLICKS": 7,
                     "AVG_SHOW_POSITION": 4.5,
+                    "AVG_CLICK_POSITION": 3.2,
                 },
             },
-            {"query": "seo минск", "shows": 20, "clicks": 1, "position": 12},
+            {
+                "query": "seo минск",
+                "shows": 20,
+                "clicks": 1,
+                "position": 12,
+                "avg_click_position": 9.5,
+            },
         ],
         "total": 600,
     }
@@ -297,13 +404,26 @@ def test_popular_queries_uses_repeated_params_and_reports_limits() -> None:
         "TOTAL_SHOWS",
         "TOTAL_CLICKS",
         "AVG_SHOW_POSITION",
+        "AVG_CLICK_POSITION",
     ]
     assert query_request.url.params["order_by"] == "TOTAL_SHOWS"
     assert query_request.url.params["limit"] == "500"
 
     assert result.rows == [
-        {"query": "seo", "shows": 100, "clicks": 7, "position": 4.5},
-        {"query": "seo минск", "shows": 20, "clicks": 1, "position": 12},
+        {
+            "query": "seo",
+            "shows": 100,
+            "clicks": 7,
+            "position": 4.5,
+            "avg_click_position": 3.2,
+        },
+        {
+            "query": "seo минск",
+            "shows": 20,
+            "clicks": 1,
+            "position": 12,
+            "avg_click_position": 9.5,
+        },
     ]
     assert result.limitations == (TOP_3000_QUERIES, NO_QUERY_PAGE_JOIN)
     assert result.total == 600
@@ -331,6 +451,78 @@ def test_popular_queries_honours_limit_and_payload_date() -> None:
         fetched_at=result.fetched_at,
     )
     assert result.limitations == (TOP_3000_QUERIES, NO_QUERY_PAGE_JOIN)
+
+
+def test_popular_queries_keeps_unknown_indicators() -> None:
+    payload = {
+        "queries": [
+            {
+                "query_id": "a08b",
+                "query_text": "seo",
+                "indicators": {
+                    "TOTAL_SHOWS": 100,
+                    "AVG_CLICK_POSITION": 2.5,
+                    "SOME_FUTURE_INDICATOR": 5,
+                },
+            }
+        ]
+    }
+
+    result = _client(_with_user(payload)).popular_queries(HOST)
+
+    row = result.rows[0]
+    assert row["query"] == "seo"
+    assert row["query_id"] == "a08b"
+    assert row["shows"] == 100
+    assert row["avg_click_position"] == 2.5
+    assert row["extra_indicators"] == {"SOME_FUTURE_INDICATOR": 5}
+    assert row.get("clicks") is None
+    assert row.get("position") is None
+
+
+def test_popular_queries_list_indicators_keep_unknown_rows() -> None:
+    payload = {
+        "queries": [
+            {
+                "query_text": "seo",
+                "indicators": [
+                    {"name": "TOTAL_CLICKS", "value": 7},
+                    {"name": "AVG_CLICK_POSITION", "value": 3.5},
+                    {"name": "SOME_FUTURE_INDICATOR", "value": 1},
+                ],
+            }
+        ]
+    }
+
+    result = _client(_with_user(payload)).popular_queries(HOST)
+
+    row = result.rows[0]
+    assert row["query"] == "seo"
+    assert row["clicks"] == 7
+    assert row["avg_click_position"] == 3.5
+    assert row["extra_indicators"] == {"SOME_FUTURE_INDICATOR": 1}
+    assert row.get("shows") is None
+
+
+def test_popular_queries_paginates_until_reported_total() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == USER_PATH:
+            return httpx.Response(200, json={"user_id": USER_ID})
+        seen.append(request)
+        offset = int(request.url.params["offset"])
+        rows = [{"query_text": f"q{offset}", "indicators": {"TOTAL_SHOWS": 1}}]
+        if offset == 0:
+            rows.append({"query_text": "q1", "indicators": {"TOTAL_SHOWS": 2}})
+        return httpx.Response(200, json={"queries": rows, "total": 3})
+
+    result = _client(handler).popular_queries(HOST, limit=2)
+
+    assert [request.url.params["offset"] for request in seen] == ["0", "2"]
+    assert [row["query"] for row in result.rows] == ["q0", "q1", "q2"]
+    assert result.total == 3
+    assert result.truncated is False
 
 
 def test_host_not_loaded_payload_returns_degraded_result() -> None:

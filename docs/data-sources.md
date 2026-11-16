@@ -60,8 +60,27 @@ rich-result validation (no public API), query data beyond 16 months, real-time d
    `limitations: ["empty_history"]`, never `degraded_host`. Only a host-scoped `404` or an explicit
    `HOST_NOT_LOADED` payload is degraded.
 7. Pagination totals come from explicit grand-total keys only (`total`, `total_queries`,
-   `total_count`). A bare `count` is the size of the current page, so treating it as the total would
-   stop paging early and hide rows.
+   `total_count`). A bare `count` is not trusted as a grand total: if it is page-scoped, using it
+   as the total would stop paging early and hide rows. The walk therefore ends on a short page or
+   at the documented 3,000-query cap.
+
+**Field mapping (v4)**
+
+- `search-queries/popular` → one row per query: `query`, `query_id`, `shows` (`TOTAL_SHOWS`),
+  `clicks` (`TOTAL_CLICKS`), `position` (`AVG_SHOW_POSITION`) and `avg_click_position`
+  (`AVG_CLICK_POSITION`). Only returned indicators are written; a missing legacy key is `null`,
+  never `0`. An indicator the client does not know is kept under `extra_indicators`, so the row
+  is never dropped.
+- `summary` → `sqi`, `pages_in_search` (`searchable_pages_count`), `pages_excluded`
+  (`excluded_pages_count`) and `site_problems` (severity → count: `FATAL`, `CRITICAL`,
+  `POSSIBLE_PROBLEM`, `RECOMMENDATION`). The current schema does not list HTTP status counters
+  here; if a host returns `http_2xx`…`http_5xx` (upper- or lowercase) they are passed through, and
+  an omitted counter stays absent.
+- `indexing/history` → the documented `indicators` object with `HTTP_2XX`, `HTTP_3XX`, `HTTP_4XX`,
+  `HTTP_5XX` and `OTHER` series of `{date, value}`. Series are merged into one row per date
+  (`date`, `http_2xx`, `http_3xx`, `http_4xx`, `http_5xx`, `other`); an omitted series stays
+  absent. Unknown status series are kept under `extra_indicators`. Dates are returned as the
+  provider sends them, and the legacy `history` list form is still accepted unchanged.
 
 **Not available via API:** per-URL sitemap error detail, diagnostic recommendation text, Webmaster
 notification settings, Yandex Business card/reviews.

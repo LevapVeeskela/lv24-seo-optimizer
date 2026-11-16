@@ -212,7 +212,7 @@ def test_yandex_popular_queries_paginates_with_offset() -> None:
 
     assert [row["query"] for row in result.rows] == ["q0", "q1", "q2"]
     assert [r.url.params.get("offset") for r in seen] == ["0", "2"]
-    # A bare ``count`` is the page size, not a grand total; it must not become ``total``.
+    # A bare ``count`` is not trusted as a grand total; it must not become ``total``.
     assert result.total is None
     assert result.truncated is False
 
