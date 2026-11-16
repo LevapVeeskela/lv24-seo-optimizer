@@ -2,21 +2,30 @@
 
 ## Model
 
-There is **no daemon**. Scheduling is delegated to the host scheduler; the tool provides generators and
-a `--print` mode so nothing is written without consent.
+There is **no daemon**. Scheduling is delegated to the host scheduler; the tool provides generators
+and a **plan-only default**, so nothing is written without an explicit `--allow-write`.
 
 ```bash
-lv24-seo schedule install --kind weekly --cron "0 6 * * 1" --config ./seo.toml --print
-lv24-seo schedule install --kind daily  --cron "0 6 * * *" --config ./seo.toml
+lv24-seo schedule install --kind weekly --cron "0 6 * * 1" --config ./seo.toml
+lv24-seo schedule install --kind weekly --cron "0 6 * * 1" --config ./seo.toml --allow-write
+lv24-seo schedule status  --kind weekly --config ./seo.toml
+lv24-seo schedule uninstall --kind weekly --config ./seo.toml --allow-write
 ```
 
-The generated command embeds the **absolute `--config` path**, so a custom
-filename, a path with spaces, or several configs in one folder keep working. The job also uses the
-config file's parent as its working directory, so a scheduler that starts elsewhere still reads the
-same config and data directory.
-`schedule print --cron … --target …` renders without touching the host. There is
-no `schedule status` command — inspect the host scheduler (`crontab -l`,
-`systemctl --user list-timers`, Task Scheduler).
+`install` without `--allow-write` prints the artefact and the command it would run
+(`dry_run: true`, `installed: false`); `--print` is an alias for that default. The generated command
+embeds the **absolute `--config` path**, so a custom filename, a path with spaces, or several configs
+in one folder keep working. The job also uses the config file's parent as its working directory, so a
+scheduler that starts elsewhere still reads the same config and data directory.
+
+`status` is read-only and reports `state` (`installed`, `outdated`, `partial`, `missing` or
+`unknown`), the expected `paths`, and per-artefact `exists`/`matches`. A systemd timer without its
+service is `partial`, not "installed"; when `crontab`/`schtasks` cannot be inspected the state is
+`unknown` and `matches` is `null`. `uninstall --allow-write` removes exactly the generated managed
+cron block, the two user units or the named task, reports `removed_items` / `removed_paths`, and is
+idempotent (`removed: false` on a second run). It never uses wildcards and never touches unrelated cron lines
+or tasks. `schedule print --cron … --target …` remains available for rendering one artefact without
+building the report job spec.
 
 Timezone honesty: the configured zone is applied where the backend supports it
 and reported as a warning where it does not.
@@ -32,10 +41,10 @@ is rejected instead of silently rescheduled. An unknown/unavailable timezone is 
 before installation. Windows needs `tzdata` (included on Windows); fixed-offset XML does not
 encode an IANA zone's future DST rules, so review such tasks after seasonal transitions.
 
-The install result always carries a `warnings` list with the backend limits above. Re-installing
-replaces every managed block for that job. A damaged block with a missing end marker is treated as
-extending to the next managed marker (or EOF), so `schedule install` repairs the file instead of
-appending a duplicate job.
+The install result carries a `warnings` list with the backend limits above. Re-installing replaces
+every managed block for that job. A damaged block with a missing end marker is repaired
+conservatively: only lines that look like lv24-seo entries are removed, unrelated lines are kept,
+and the envelope warns you to review `crontab -l`.
 
 ## Recommended cadence
 

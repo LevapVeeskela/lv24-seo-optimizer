@@ -105,14 +105,20 @@ include provider tokens — re-run `auth set` afterwards.
 ## 8. Schedule it
 
 ```bash
-lv24-seo schedule install --kind weekly --cron "0 6 * * 1" --config ./seo.toml --print
 lv24-seo schedule install --kind weekly --config ./seo.toml
+lv24-seo schedule install --kind weekly --config ./seo.toml --allow-write
+lv24-seo schedule status  --kind weekly --config ./seo.toml
 ```
 
-`--print` renders without touching the host. The generated command embeds the
-**absolute config path**, so custom names and multiple configs in one folder
-keep working. There is no `schedule status` command — inspect the host
-scheduler (`crontab -l`, `systemctl --user list-timers`, Task Scheduler).
+`install` is plan-only by default: it prints the cron block / systemd units / task XML and the
+command it would run (`dry_run: true`, `installed: false`). Nothing touches the host until
+`--allow-write`; `--print` is an alias for the default. The generated command embeds the
+**absolute config path**, so custom names and multiple configs in one folder keep working.
+
+`status` is read-only and reports `installed` / `outdated` / `partial` / `missing` / `unknown`, the
+expected paths and whether each artefact matches the current spec. `schedule uninstall --allow-write`
+removes exactly the generated block/units/task and is idempotent; without the flag it only prints
+the plan.
 
 Timezone notes: `CRON_TZ` is a real assignment but only Vixie/ISC cron honours
 it; systemd timers run on the system clock; Task Scheduler gets an aware

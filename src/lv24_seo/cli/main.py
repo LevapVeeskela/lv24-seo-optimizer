@@ -32,6 +32,8 @@ import typer
 
 from lv24_seo.automation.scheduler import ScheduleSpec
 from lv24_seo.automation.scheduler import install as install_schedule
+from lv24_seo.automation.scheduler import status as schedule_status
+from lv24_seo.automation.scheduler import uninstall as uninstall_schedule
 from lv24_seo.cli import emit, run_envelope, tool_version
 from lv24_seo.cli.auth import auth_app
 from lv24_seo.cli.backup_cmd import backup_app
@@ -1005,8 +1007,18 @@ def schedule_install(
     cron: Annotated[
         str | None, typer.Option("--cron", help="Override the default cron expression.")
     ] = None,
+    target: Annotated[
+        str, typer.Option("--target", help="auto, cron, systemd or windows (default auto).")
+    ] = "auto",
     print_only: Annotated[
-        bool, typer.Option("--print", help="Render only; do not install.")
+        bool, typer.Option("--print", help="Render only (the default); wins over --allow-write.")
+    ] = False,
+    allow_write: Annotated[
+        bool,
+        typer.Option(
+            "--allow-write",
+            help="Touch the host scheduler; without it the command only prints the plan.",
+        ),
     ] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
@@ -1015,23 +1027,93 @@ def schedule_install(
         bool, typer.Option("--json", help="Machine-readable envelope output.")
     ] = False,
 ) -> None:
-    """Install (or preview with --print) the weekly/daily report job."""
+    """Plan the weekly/daily report job; install it only with --allow-write."""
+
+    dry_run = print_only or not allow_write
 
     def action() -> dict[str, Any]:
-        name = _schedule_kind(kind)
-        config = load_config(config_path)
-        spec = ScheduleSpec(
-            name=f"lv24-seo-{name}",
-            cron=cron or _SCHEDULE_CRONS[name],
-            command=_report_command(name, config_path),
-            workdir=_schedule_workdir(config_path),
-            timezone=config.report.timezone,
-            description=f"lv24-seo {name} SEO report",
+        spec, name = _schedule_spec(kind, cron, config_path, target)
+        data = install_schedule(spec, target=target, dry_run=dry_run)
+        warnings = list(data.get("warnings") or [])
+        if print_only and allow_write:
+            warnings.append("--print wins over --allow-write: nothing was installed")
+        return ok(
+            data,
+            meta={"kind": name, "target": data["target"], "allow_write": allow_write},
+            warnings=warnings,
         )
-        return ok(install_schedule(spec, dry_run=print_only), meta={"kind": name})
 
     payload = run_envelope(action)
     emit(payload, as_json=as_json, lines=_schedule_lines(payload))
+
+
+@schedule_app.command("status")
+def schedule_status_cmd(
+    kind: Annotated[str, typer.Option("--kind", help="weekly or daily.")] = "weekly",
+    cron: Annotated[
+        str | None, typer.Option("--cron", help="Cron expression to compare against.")
+    ] = None,
+    target: Annotated[
+        str, typer.Option("--target", help="auto, cron, systemd or windows (default auto).")
+    ] = "auto",
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Report whether the generated job exists and matches the current spec (read-only)."""
+
+    def action() -> dict[str, Any]:
+        spec, name = _schedule_spec(kind, cron, config_path, target)
+        data = schedule_status(spec, target=target)
+        warnings = list(data.get("warnings") or [])
+        return ok(data, meta={"kind": name, "target": data["target"]}, warnings=warnings)
+
+    payload = run_envelope(action)
+    emit(payload, as_json=as_json, lines=_schedule_status_lines(payload))
+
+
+@schedule_app.command("uninstall")
+def schedule_uninstall_cmd(
+    kind: Annotated[str, typer.Option("--kind", help="weekly or daily.")] = "weekly",
+    cron: Annotated[
+        str | None, typer.Option("--cron", help="Cron expression of the installed job.")
+    ] = None,
+    target: Annotated[
+        str, typer.Option("--target", help="auto, cron, systemd or windows (default auto).")
+    ] = "auto",
+    allow_write: Annotated[
+        bool,
+        typer.Option(
+            "--allow-write",
+            help="Remove the job; without it the command only prints the plan.",
+        ),
+    ] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Plan removal of the job; remove it only with --allow-write (idempotent)."""
+
+    def action() -> dict[str, Any]:
+        spec, name = _schedule_spec(kind, cron, config_path, target)
+        data = uninstall_schedule(spec, target=target, dry_run=not allow_write)
+        warnings = list(data.get("warnings") or [])
+        if not allow_write and data.get("plan"):
+            warnings.append("nothing was removed; rerun with --allow-write to uninstall")
+        return ok(
+            data,
+            meta={"kind": name, "target": data["target"], "allow_write": allow_write},
+            warnings=warnings,
+        )
+
+    payload = run_envelope(action)
+    emit(payload, as_json=as_json, lines=_schedule_uninstall_lines(payload))
 
 
 @schedule_app.command("print")
@@ -1575,6 +1657,29 @@ def _schedule_kind(value: str) -> str:
     return kind
 
 
+def _schedule_spec(
+    kind: str,
+    cron: str | None,
+    config_path: Path | None,
+    target: str,
+) -> tuple[ScheduleSpec, str]:
+    """Build the report job spec shared by install, status and uninstall."""
+
+    name = _schedule_kind(kind)
+    config = load_config(config_path)
+    # "auto" must keep platform detection in _report_command, so pass None there.
+    command_target = None if target == "auto" else target
+    spec = ScheduleSpec(
+        name=f"lv24-seo-{name}",
+        cron=cron or _SCHEDULE_CRONS[name],
+        command=_report_command(name, config_path, target=command_target),
+        workdir=_schedule_workdir(config_path),
+        timezone=config.report.timezone,
+        description=f"lv24-seo {name} SEO report",
+    )
+    return spec, name
+
+
 def _kind_from_cron(cron: str) -> str:
     fields = cron.split()
     return "daily" if len(fields) == 5 and fields[4] == "*" else "weekly"
@@ -1940,6 +2045,7 @@ def _schedule_lines(payload: Mapping[str, Any]) -> list[str]:
     lines = [
         f"target: {data.get('target')}",
         f"dry_run: {_yes_no(data.get('dry_run'))}",
+        f"installed: {_yes_no(data.get('installed'))}",
         f"command: {data.get('command')}",
     ]
     files = data.get("files") or {}
@@ -1951,7 +2057,63 @@ def _schedule_lines(payload: Mapping[str, Any]) -> list[str]:
     if isinstance(paths, Mapping):
         for name, path in paths.items():
             lines.append(f"installed {name}: {path}")
+    if data.get("dry_run"):
+        lines.append("next: rerun with --allow-write to install")
     return lines
+
+
+def _schedule_status_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    lines = [
+        f"target: {data.get('target')}",
+        f"job: {data.get('name')}",
+        f"state: {data.get('state')}",
+        f"matches: {_match_label(data.get('matches'))}",
+    ]
+    artifacts = data.get("artifacts") or []
+    unknown = data.get("state") == "unknown"
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if not isinstance(artifact, Mapping):
+                continue
+            path = artifact.get("path")
+            if unknown:
+                lines.append(f"{artifact.get('kind')}: unknown ({path})")
+            elif artifact.get("exists"):
+                match = "matches" if artifact.get("matches") else "differs"
+                lines.append(f"{artifact.get('kind')}: present, {match} ({path})")
+            else:
+                lines.append(f"{artifact.get('kind')}: missing ({path})")
+    return lines
+
+
+def _schedule_uninstall_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    lines = [
+        f"target: {data.get('target')}",
+        f"job: {data.get('name')}",
+        f"dry_run: {_yes_no(data.get('dry_run'))}",
+        f"removed: {_yes_no(data.get('removed'))}",
+    ]
+    for item in data.get("removed_items") or []:
+        lines.append(f"removed: {item}")
+    for item in data.get("plan") or []:
+        lines.append(f"plan: {item}")
+    if data.get("dry_run") and data.get("plan"):
+        lines.append("next: rerun with --allow-write to remove")
+    return lines
+
+
+def _match_label(value: Any) -> str:
+    return "unknown" if value is None else _yes_no(value)
 
 
 def _install_lines(payload: Mapping[str, Any]) -> list[str]:

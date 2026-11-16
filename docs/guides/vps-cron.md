@@ -22,9 +22,10 @@ command -v lv24-seo
 
 ## 1. Generate the artefacts
 
-`schedule print` renders without writing anything; `schedule install` writes the host-default
-artefact and enables it (`systemd` on Linux, `cron` on macOS, Task Scheduler on Windows). Start with
-`print` and review the output.
+`schedule print` renders without writing anything; `schedule install` is also plan-only by default
+and touches the host only with `--allow-write` (then it writes the host-default artefact and enables
+it: `systemd` on Linux, `cron` on macOS, Task Scheduler on Windows). Start with `print` or the
+default plan and review the output.
 
 ```bash
 # systemd user units (service + timer)
@@ -38,8 +39,8 @@ With the paths above, `--target cron` renders:
 
 ```cron
 # lv24-seo weekly SEO report
-# CRON_TZ=Europe/Minsk
-0 6 * * 1 cd /home/seo/seo && /home/seo/.local/bin/lv24-seo report weekly --json
+CRON_TZ=Europe/Minsk
+0 6 * * 1 cd /home/seo/seo && /home/seo/.local/bin/lv24-seo report weekly --send --json
 ```
 
 With `--target systemd` it renders:
@@ -184,10 +185,10 @@ sudo loginctl enable-linger seo
 
 ### 4.1 Production block
 
-Install the block with `crontab -e`. `lv24-seo schedule install --kind weekly --cron "0 6 * * 1"`
-writes the **host-default** artefact instead (systemd on Linux) and has no `--target` option; use
-`--print` to preview it. Because the generated command also lacks `--send`, the production line uses
-the wrapper below, which builds, delivers, and redirects the log:
+Install the block with `crontab -e`. `lv24-seo schedule install --kind weekly --cron "0 6 * * 1"
+--target cron --allow-write` writes the managed cron block directly (systemd is the default target
+on Linux; pass `--target cron` explicitly). Without `--allow-write` the command only prints the
+block. The production line below uses a wrapper for logging and for loading provider secrets:
 
 ```cron
 # lv24-seo weekly report — Monday 06:00 Europe/Minsk
@@ -196,9 +197,9 @@ CRON_TZ=Europe/Minsk
 ```
 
 * `CRON_TZ` is a **crontab-wide** setting and must appear as its own active line before the job. The
-  generator emits it as a comment because support varies: cronie and Debian/Vixie cron honour it,
-  while some minimal crons (for example BusyBox `crond`) do not. If yours ignores it, set the system
-  timezone or use the systemd timer.
+  generator emits it as an active assignment, but support varies: cronie and Debian/Vixie cron
+  honour it, while some minimal crons (for example BusyBox `crond`) do not. `schedule install`
+  warns about this; if yours ignores it, set the system timezone or use the systemd timer.
 * Cron starts a minimal shell with a small `PATH`; always use absolute paths.
 * Cron does not read the systemd `EnvironmentFile`, hence the wrapper.
 

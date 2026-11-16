@@ -374,14 +374,30 @@ access control, because anyone who can run the CLI can restore.
 
 ```bash
 lv24-seo schedule print --cron "0 6 * * 1" [--target cron|systemd|windows] [--json]
-lv24-seo schedule install --kind weekly|daily [--cron "0 6 * * 1"] [--print] [--json]
+lv24-seo schedule install --kind weekly|daily [--cron "0 6 * * 1"] [--target auto|cron|systemd|windows] [--allow-write] [--json]
+lv24-seo schedule status --kind weekly|daily [--cron "0 6 * * 1"] [--target auto|cron|systemd|windows] [--json]
+lv24-seo schedule uninstall --kind weekly|daily [--target auto|cron|systemd|windows] [--allow-write] [--json]
 ```
 
-`print` renders the artefact without touching the host; `install` writes the cron block / systemd user
-units / Task Scheduler XML. Generated jobs call `report weekly --send --json`, so a scheduled run
-delivers the report. The job embeds the **absolute** `--config` path and uses the config file's parent
-as its working directory, so a scheduler that starts in another directory still reads the same config
-and data directory.
+`print` renders the artefact without touching the host. `install` is **plan-only by default**: it
+prints the cron block / systemd user units / Task Scheduler XML and the command it would run, with
+`dry_run: true` and `installed: false`. Nothing is written until `--allow-write`; `--print` stays as
+an alias for the default and wins over `--allow-write`. Generated jobs call
+`report weekly --send --json`, so a scheduled run delivers the report. The job embeds the **absolute**
+`--config` path and uses the config file's parent as its working directory, so a scheduler that
+starts in another directory still reads the same config and data directory.
+
+`status` is read-only. It reports `state: installed|outdated|partial|missing|unknown`, the expected
+`paths`, and per-artefact `exists`/`matches` flags. `outdated` means the host copy differs from the
+current spec; `partial` means only some artefacts exist (for example a systemd timer without its
+service); `unknown` means the host scheduler could not be inspected (missing `crontab`/`schtasks`,
+permissions) and `matches` is then `null`.
+
+`uninstall` is also plan-only by default; with `--allow-write` it removes exactly the generated
+managed cron block, the two `<job>.service`/`<job>.timer` user units or the named Task Scheduler
+task, and reports `removed_items` (plus `removed_paths` for files). A second run is a no-op
+(`removed: false`, `state: missing`).
+Unrelated cron lines and tasks are never touched, and there are no wildcard process kills.
 
 Only simple cron expressions (`M H * * *` and `M H * * DOW`) can be converted to systemd/Windows.
 
@@ -429,5 +445,6 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
 
 ## Windows notes
 
-- `schedule install --target windows` writes a UTF-16 Task Scheduler XML (what `schtasks` expects).
+- `schedule install --target windows --allow-write` writes a UTF-16 Task Scheduler XML (what
+  `schtasks` expects) and registers the task; without `--allow-write` only the XML is printed.
 - Paths are handled with `pathlib`; no POSIX-only assumptions in user-facing commands.

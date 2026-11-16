@@ -6,6 +6,8 @@ from lv24_seo.automation.scheduler import (
     render_cron,
     render_systemd,
     render_windows_xml,
+    status,
+    uninstall,
 )
 
 __all__ = [
@@ -14,4 +16,6 @@ __all__ = [
     "render_cron",
     "render_systemd",
     "render_windows_xml",
+    "status",
+    "uninstall",
 ]
