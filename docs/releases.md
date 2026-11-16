@@ -7,11 +7,11 @@ The pipeline is **release plumbing only**: it verifies the exact tagged commit (
 offline tests, schema drift, installed-wheel smoke), builds the sdist/wheel, publishes them to
 PyPI with OIDC Trusted Publishing, publishes the thin `@lv24/seo` npm launcher with npm OIDC
 trusted publishing, and publishes `server.json` to the MCP Registry. No long-lived NPM_TOKEN or
-PyPI token exists. The current release candidate is `0.8.0` (notes:
-[`releases/0.8.0.md`](releases/0.8.0.md)); `0.7.0` is the latest published build (2026-11-16,
-[`releases/0.7.0.md`](releases/0.7.0.md)) until the `0.8.0` release workflow runs. `0.6.0` was the
-previous insights release, and `0.5.3`
-was the P0 hardening release before it.
+PyPI token exists. `0.8.0` is the current published build (2026-11-16, notes:
+[`releases/0.8.0.md`](releases/0.8.0.md)); desktop `0.6.0` is the current desktop release and bundles
+engine `0.8.0`. `0.7.0` was the previous coverage release (2026-11-16,
+[`releases/0.7.0.md`](releases/0.7.0.md)), `0.6.0` the insights release before it, and `0.5.3`
+was the P0 hardening release before that.
 
 | Artifact | Built by | Published by | Cost |
 |---|---|---|---|

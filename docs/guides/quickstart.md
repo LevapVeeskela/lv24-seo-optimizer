@@ -1,7 +1,7 @@
 # Quickstart
 
-Verified against the 0.8.0 release candidate CLI (`lv24-seo <command> --help` is the authority when
-in doubt).
+Verified against the 0.8.0 CLI (`lv24-seo <command> --help` is the authority when
+in doubt). Desktop `0.6.0` bundles this engine.
 
 ## 1. Install
 
