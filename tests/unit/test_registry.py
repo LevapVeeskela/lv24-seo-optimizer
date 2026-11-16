@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from typer.testing import CliRunner
@@ -11,6 +13,7 @@ from typer.testing import CliRunner
 from lv24_seo.cli.main import app
 from lv24_seo.mcp import registry
 from lv24_seo.mcp.registry import TOOLS, tools_as_json
+from lv24_seo.mcp.tools import TOOL_BUILDERS, ToolState
 
 
 def test_tool_names_are_unique_and_snake_case() -> None:
@@ -91,3 +94,30 @@ def test_cli_returns_envelope(command: list[str]) -> None:
     result = CliRunner().invoke(app, command)
     payload = json.loads(result.stdout)
     assert set(payload) == {"ok", "data", "meta", "warnings"}
+
+
+def test_registry_inputs_are_the_tool_signatures() -> None:
+    """ENG-16: the registry is the source of truth only if it matches the real schemas.
+
+    The MCP SDK builds each input schema from the registered callable's signature, so a
+    parameter that exists in one place and not the other is exactly the drift AGENTS.md
+    promises cannot happen.
+    """
+    state = ToolState(service=cast(Any, None))
+
+    assert set(TOOL_BUILDERS) == {spec.name for spec in TOOLS}
+    for spec in TOOLS:
+        tool = TOOL_BUILDERS[spec.name](state)
+        parameters = list(inspect.signature(tool).parameters)
+        assert parameters == list(spec.inputs), spec.name
+        for name, description in spec.inputs.items():
+            assert isinstance(description, str) and description.strip(), f"{spec.name}.{name}"
+
+
+def test_registry_write_tools_document_the_confirm_flow() -> None:
+    by_name = {tool.name: tool for tool in TOOLS}
+
+    for name in ("seo_recrawl_request", "seo_sitemap_submit"):
+        spec = by_name[name]
+        assert {"allow_write", "plan_hash", "confirm_token"} <= set(spec.inputs)
+        assert any("confirm_token" in limitation for limitation in spec.limitations)

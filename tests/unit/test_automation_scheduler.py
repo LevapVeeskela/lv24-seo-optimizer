@@ -301,3 +301,83 @@ def test_duplicate_managed_cron_blocks_are_collapsed() -> None:
 
     assert repaired.count("# >>> lv24-seo:lv24-seo-weekly >>>") == 1
     assert repaired.count("0 6 * * 1") == 1
+
+
+def test_unterminated_block_never_eats_user_entries_after_it() -> None:
+    """ENG-09: a damaged managed block must not delete unrelated crontab lines."""
+    block = render_cron(WEEKLY)
+    wrapped = f"# >>> lv24-seo:lv24-seo-weekly >>>\n{block}# <<< lv24-seo:lv24-seo-weekly <<<\n"
+    damaged = (
+        "# other job\n"
+        "0 1 * * * /usr/bin/true\n"
+        "# >>> lv24-seo:lv24-seo-weekly >>>\n"
+        f"{block}"
+        "0 2 * * * /usr/local/bin/backup.sh\n"
+        "15 3 * * * /usr/local/bin/rotate.sh\n"
+    )
+    warnings: list[str] = []
+
+    repaired = _replace_block(damaged, wrapped, "lv24-seo-weekly", warnings=warnings)
+
+    assert "0 1 * * * /usr/bin/true" in repaired
+    assert "0 2 * * * /usr/local/bin/backup.sh" in repaired
+    assert "15 3 * * * /usr/local/bin/rotate.sh" in repaired
+    assert repaired.count("0 6 * * 1") == 1
+    assert repaired.count("/usr/local/bin/lv24-seo report weekly --json") == 1
+    assert warnings and "unterminated" in warnings[0]
+    assert "crontab -l" in warnings[0]
+
+
+def test_unterminated_block_keeps_a_later_managed_job_and_user_zone() -> None:
+    weekly = render_cron(WEEKLY)
+    wrapped = f"# >>> lv24-seo:lv24-seo-weekly >>>\n{weekly}# <<< lv24-seo:lv24-seo-weekly <<<\n"
+    daily_spec = ScheduleSpec(
+        name="lv24-seo-daily",
+        cron="0 7 * * *",
+        command="/usr/local/bin/lv24-seo report daily --json",
+    )
+    daily = (
+        "# >>> lv24-seo:lv24-seo-daily >>>\n"
+        f"{render_cron(daily_spec)}"
+        "# <<< lv24-seo:lv24-seo-daily <<<\n"
+    )
+    damaged = (
+        "# >>> lv24-seo:lv24-seo-weekly >>>\n"
+        f"{weekly}"
+        "CRON_TZ=UTC\n"
+        "0 4 * * * /usr/local/bin/other-job.sh\n"
+        f"{daily}"
+    )
+    warnings: list[str] = []
+
+    repaired = _replace_block(damaged, wrapped, "lv24-seo-weekly", warnings=warnings)
+
+    assert "0 4 * * * /usr/local/bin/other-job.sh" in repaired
+    assert "CRON_TZ=UTC" in repaired
+    assert "# >>> lv24-seo:lv24-seo-daily >>>" in repaired
+    assert "0 7 * * * /usr/local/bin/lv24-seo report daily --json" in repaired
+    assert warnings and "unterminated" in warnings[0]
+
+
+def test_install_reports_a_conservative_cron_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lv24_seo.automation import scheduler
+
+    block = render_cron(WEEKLY)
+    damaged = f"# >>> lv24-seo:lv24-seo-weekly >>>\n{block}0 2 * * * /usr/local/bin/backup.sh\n"
+    written: dict[str, str] = {}
+
+    monkeypatch.setattr(scheduler, "_resolve_binary", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(scheduler, "_read_crontab", lambda crontab: damaged)
+    monkeypatch.setattr(
+        scheduler,
+        "_run",
+        lambda args, **kwargs: written.setdefault("text", kwargs.get("input_text", "")),
+    )
+
+    result = install(WEEKLY, target="cron", dry_run=False)
+
+    assert result["installed"] is True
+    assert "0 2 * * * /usr/local/bin/backup.sh" in written["text"]
+    assert any("unterminated" in warning for warning in result["warnings"])

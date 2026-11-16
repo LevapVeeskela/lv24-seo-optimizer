@@ -44,6 +44,19 @@ def test_partial_marks_limitations_and_is_ok() -> None:
     assert payload["meta"]["truncated"] is True
 
 
+def test_partial_strict_marks_the_envelope_for_exit_five() -> None:
+    payload = partial(
+        {"rows": []},
+        limitations=["rows_cap_50000"],
+        meta={"truncated": True},
+        strict=True,
+    )
+
+    assert payload["meta"]["strict"] is True
+    assert envelope_exit_code(payload) == 5
+    assert envelope_exit_code(partial({"rows": []}, limitations=[], strict=True)) == 0
+
+
 @pytest.mark.parametrize(
     ("code", "expected"),
     [

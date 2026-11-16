@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "engine": "lv24-seo",
+  "desktopContract": "lv24-seo-optimizer-desktop/contracts/cli-v1/manifest.json",
+  "note": "Frozen observable surface of `lv24-seo --json` for the desktop parser. Command ids and exit codes mirror the desktop manifest; changing an entry is a reviewed contract change, not a test fix.",
+  "envelope": {
+    "okKeys": ["data", "meta", "ok", "warnings"],
+    "errorKeys": ["error", "meta", "ok", "warnings"],
+    "metaRequiredKeys": ["version"],
+    "errorRequiredKeys": ["code", "message", "retryable"],
+    "errorOptionalKeys": ["detail", "next_action"],
+    "exitCodes": {
+      "AUTH_INVALID": 3,
+      "AUTH_REQUIRED": 3,
+      "CONFIG_INVALID": 2,
+      "CONFIRM_REQUIRED": 2,
+      "INTERNAL": 1,
+      "INVALID_INPUT": 2,
+      "PROPERTY_NOT_FOUND": 1,
+      "QUOTA_EXCEEDED": 4,
+      "TRUNCATED": 5,
+      "UPSTREAM_UNAVAILABLE": 4,
+      "WRITE_DISABLED": 2
+    }
+  },
+  "commands": [
+    {
+      "id": "version",
+      "desktopFixture": "version.json",
+      "argv": ["version", "--json"],
+      "exitCode": 0,
+      "ok": true,
+      "requiredDataKeys": ["name", "version"]
+    },
+    {
+      "id": "config-show",
+      "desktopFixture": "config-show.json",
+      "argv": ["config", "show", "--json"],
+      "exitCode": 0,
+      "ok": true,
+      "requiredDataKeys": ["config", "data_dir", "path"]
+    },
+    {
+      "id": "doctor",
+      "desktopFixture": "doctor.json",
+      "argv": ["doctor", "--json"],
+      "exitCode": 0,
+      "ok": true,
+      "requiredDataKeys": ["checks", "healthy"]
+    },
+    {
+      "id": "properties",
+      "desktopFixture": "properties.json",
+      "argv": ["properties", "--json"],
+      "exitCode": 0,
+      "ok": true,
+      "requiredDataKeys": ["project", "providers"]
+    },
+    {
+      "id": "auth-status",
+      "desktopFixture": "auth-status.json",
+      "argv": ["auth", "status", "--json"],
+      "exitCode": 0,
+      "ok": true,
+      "requiredDataKeys": ["missing", "present", "providers"]
+    },
+    {
+      "id": "stats",
+      "desktopFixture": "stats.json",
+      "argv": ["stats", "--days", "7", "--lag-days", "2", "--json"],
+      "exitCode": 0,
+      "ok": true,
+      "requiredDataKeys": ["generated_at", "limitations", "period", "previous_period", "services"]
+    },
+    {
+      "id": "report-weekly-no-data",
+      "desktopFixture": "report-weekly-no-data.json",
+      "argv": ["report", "weekly", "--days", "7", "--lag-days", "2", "--json"],
+      "exitCode": 0,
+      "ok": true,
+      "requiredDataKeys": ["generated_at", "headline", "kind", "limitations", "period", "sections"]
+    },
+    {
+      "id": "report-diff-no-store",
+      "desktopFixture": "report-diff-no-store.json",
+      "argv": ["report", "diff", "--json"],
+      "exitCode": 2,
+      "ok": false,
+      "requiredDataKeys": [],
+      "errorCode": "CONFIG_INVALID"
+    }
+  ]
+}

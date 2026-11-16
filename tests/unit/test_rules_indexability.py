@@ -212,10 +212,12 @@ def test_client_error_ignores_gone_answers_and_success() -> None:
     assert CLIENT_ERROR.run(ctx) == []
 
 
-def test_soft_404_reports_title_and_thin_reasons() -> None:
+def test_soft_404_requires_a_not_found_phrase_plus_an_empty_or_404_signal() -> None:
     pages = [
-        _page("https://example.com/missing-ru", title="Страница не найдена"),
-        _page("https://example.com/missing-en", title="Page Not Found"),
+        _page("https://example.com/missing-ru", title="Страница не найдена", word_count=2),
+        _page("https://example.com/missing-en", title="Page Not Found", word_count=0),
+        # An explicit 404 in the title is strong evidence even when some content renders.
+        _page("https://example.com/marked", title="404 Not Found", word_count=120),
         _page("https://example.com/stub", title="Promo", word_count=3),
     ]
     issues = SOFT_404.run(_ctx(*pages))
@@ -223,45 +225,79 @@ def test_soft_404_reports_title_and_thin_reasons() -> None:
     assert [issue.url for issue in issues] == [
         "https://example.com/missing-ru",
         "https://example.com/missing-en",
+        "https://example.com/marked",
         "https://example.com/stub",
     ]
-    assert [issue.detail["reason"] for issue in issues] == ["title", "title", "thin"]
+    assert [issue.detail["reason"] for issue in issues] == [
+        "not_found_phrase",
+        "not_found_phrase",
+        "not_found_phrase",
+        "thin",
+    ]
     assert all(issue.rule_id == "soft-404" for issue in issues)
     assert all(issue.severity == "high" for issue in issues)
+
+
+def test_soft_404_does_not_fire_on_a_bare_404_word_or_a_phrase_with_content() -> None:
+    """A guide about 404s and a long page mentioning "not found" are not soft 404s."""
+    ctx = _ctx(
+        _page("https://example.com/guide", title="How to fix a 404 error", word_count=800),
+        _page(
+            "https://example.com/archive",
+            title="Page not found: the archive moved",
+            word_count=400,
+        ),
+        _page("https://example.com/404-page", title="Error 404", word_count=600),
+    )
+
+    assert SOFT_404.run(ctx) == []
 
 
 def test_soft_404_ignores_root_and_content_pages() -> None:
     ctx = _ctx(
         _page("https://example.com/", title="Home", word_count=0),
         _page("https://example.com/rich", title="About us", word_count=400),
-        _page("https://example.com/gone", status=404, title="Not Found"),
+        _page("https://example.com/gone", status=404, title="Not Found", word_count=0),
     )
 
     assert SOFT_404.run(ctx) == []
 
 
-def test_redirect_chain_reports_multi_hop_and_off_target_redirects() -> None:
+def test_redirect_chain_reports_only_more_than_two_hops() -> None:
     pages = [
+        # One hop: normal housekeeping, not a chain.
         _page(
-            "https://example.com/a",
-            final_url="https://example.com/d",
+            "https://example.com/one",
+            final_url="https://example.com/two",
+            redirect_chain=["https://example.com/one", "https://example.com/two"],
+        ),
+        # Two hops: still below the threshold.
+        _page(
+            "https://example.com/two",
+            final_url="https://example.com/three",
             redirect_chain=[
-                "https://example.com/a",
-                "https://example.com/b",
-                "https://example.com/c",
+                "https://example.com/two",
+                "https://example.com/mid",
+                "https://example.com/three",
             ],
         ),
+        # Three hops: a real chain.
         _page(
-            "https://example.com/e",
-            final_url="https://example.com/f",
-            redirect_chain=["https://example.com/e"],
+            "https://example.com/three",
+            final_url="https://example.com/end",
+            redirect_chain=[
+                "https://example.com/three",
+                "https://example.com/a",
+                "https://example.com/b",
+                "https://example.com/end",
+            ],
         ),
     ]
     issues = REDIRECT_CHAIN.run(_ctx(*pages))
 
-    assert [issue.url for issue in issues] == ["https://example.com/a", "https://example.com/e"]
-    assert len(issues[0].detail["chain"]) == 3
-    assert issues[1].detail["chain"] == ["https://example.com/e"]
+    assert [issue.url for issue in issues] == ["https://example.com/three"]
+    assert issues[0].detail["hops"] == 3
+    assert len(issues[0].detail["chain"]) == 4
     assert all(issue.rule_id == "redirect-chain" for issue in issues)
     assert all(issue.severity == "high" for issue in issues)
 

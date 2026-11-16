@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 __all__ = [
     "CAVEAT_METRIKA_SESSIONS_NOT_CLICKS",
@@ -69,10 +70,12 @@ class EngineSummary:
 class FusionReport:
     """Per-engine summaries plus the only two honest cross-engine aggregations.
 
-    ``page_totals`` maps a URL to the metrics that URL actually reported: GSC
-    ``clicks``/``impressions`` and Metrika ``visits``. ``query_totals`` maps a query to summed
-    GSC and Yandex clicks/impressions; Yandex contributes only its top 3,000 queries and never
-    a page dimension. Both mappings are ordered by clicks descending, then key ascending.
+    ``page_totals`` maps a page path (path plus query, e.g. ``/a?x=1``) to the metrics that
+    page actually reported: GSC ``clicks``/``impressions`` and Metrika ``visits``. Absolute GSC
+    URLs are normalised to the same path so one page never appears twice. ``query_totals`` maps
+    a query to summed GSC and Yandex clicks/impressions; Yandex contributes only its top 3,000
+    queries and never a page dimension. Both mappings are ordered by clicks descending, then
+    key ascending.
     """
 
     engines: tuple[EngineSummary, ...]
@@ -152,11 +155,11 @@ def _page_totals(
     """Page totals from rows that truly carry a page: GSC pages and Metrika start URLs."""
     totals = _Totals()
     for row in gsc:
-        page = _text(row, "page")
+        page = _page_key(_text(row, "page"))
         totals.add(page, "clicks", _metric(row, "clicks"))
         totals.add(page, "impressions", _metric(row, "impressions"))
     for row in metrika:
-        page = _first_text(row, ("page", "startURLPath"))
+        page = _page_key(_first_text(row, ("page", "startURLPath")))
         totals.add(page, "visits", _metric(row, "visits"))
     return totals.ordered()
 
@@ -298,6 +301,29 @@ def _first_text(row: _Row, keys: tuple[str, ...]) -> str | None:
         if text is not None:
             return text
     return None
+
+
+def _page_key(page: str | None) -> str | None:
+    """Normalise a GSC absolute URL or a Metrika path to one page identity.
+
+    GSC reports ``https://example.com/a?x=1`` while Metrika reports ``/a?x=1``. Keeping both
+    forms would double every page in ``page_totals``, so the key is the path plus query: the
+    scheme and host are dropped (a GSC property is one site) and a bare path gains its
+    leading slash.
+    """
+    if page is None:
+        return None
+    text = page.strip()
+    if not text:
+        return None
+    if "://" in text:
+        try:
+            parts = urlsplit(text)
+        except ValueError:
+            return text
+        path = parts.path or "/"
+        return f"{path}?{parts.query}" if parts.query else path
+    return text if text.startswith("/") else f"/{text}"
 
 
 def _as_float(value: object) -> float | None:

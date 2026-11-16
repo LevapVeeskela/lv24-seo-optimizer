@@ -212,8 +212,28 @@ def test_yandex_popular_queries_paginates_with_offset() -> None:
 
     assert [row["query"] for row in result.rows] == ["q0", "q1", "q2"]
     assert [r.url.params.get("offset") for r in seen] == ["0", "2"]
-    assert result.total == 3
+    # A bare ``count`` is the page size, not a grand total; it must not become ``total``.
+    assert result.total is None
     assert result.truncated is False
+
+
+def test_yandex_popular_queries_accepts_only_grand_total_keys() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == USER_PATH:
+            return httpx.Response(200, json={"user_id": USER_ID})
+        return httpx.Response(
+            200,
+            json={
+                "queries": [{"query_text": "seo", "indicators": {"TOTAL_SHOWS": 1}}],
+                "count": 1,
+                "total_queries": 900,
+            },
+        )
+
+    result = _yandex(handler).popular_queries(HOST, limit=500)
+
+    assert result.total == 900
+    assert result.truncated is True
 
 
 def test_yandex_diagnostics_expands_problems_object() -> None:

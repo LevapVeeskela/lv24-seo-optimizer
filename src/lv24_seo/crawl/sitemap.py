@@ -28,6 +28,8 @@ _HTTP_SCHEMES = frozenset({"http", "https"})
 _INVALID_XML = "invalid_xml"
 _INVALID_ROOT = "invalid_root"
 _TOO_LARGE = "too_large"
+# A <loc> outside the sitemap's own origins. Stable code: services turn it into a warning.
+OFF_ORIGIN_LOC = "off_origin_loc"
 
 
 class _FetchResultLike(Protocol):
@@ -87,17 +89,25 @@ class SitemapReader:
     The starting document is depth 0; sitemaps linked from it are depth 1, and so on. A
     document at ``max_depth`` is still read, but its own children are only recorded (in
     :attr:`SitemapDoc.child_sitemaps`), not fetched.
+
+    ``allow_url`` is the origin predicate for every ``<loc>`` found in a document. It defaults
+    to the origins actually read: the seed sitemap origin plus the final origin of each fetched
+    document (a redirect to a CDN mirror is in scope, a loc pointing at an unrelated host is
+    not). Rejected locs are dropped and reported once as :data:`OFF_ORIGIN_LOC`, so a reader
+    without an external scoped fetcher still never follows a sitemap to another site.
     """
 
     def __init__(
         self,
         fetch: Callable[[str], _FetchResultLike],
         *,
+        allow_url: Callable[[str], bool] | None = None,
         max_urls: int = MAX_URLS_PER_SITEMAP,
         max_depth: int = 2,
         max_docs: int = 100,
     ) -> None:
         self._fetch = fetch
+        self._allow_url = allow_url
         self._max_urls = max(0, max_urls)
         self._max_depth = max(0, max_depth)
         self._max_docs = max(1, max_docs)
@@ -109,6 +119,11 @@ class SitemapReader:
         seen_sitemaps = {sitemap_url}
         seen_urls: set[str] = set()
         docs_read = 0
+        origins: set[tuple[str, str]] = set()
+        seed_origin = _origin(sitemap_url)
+        if seed_origin is not None:
+            origins.add(seed_origin)
+        off_origin = False
 
         while queue:
             if docs_read >= self._max_docs:
@@ -123,11 +138,17 @@ class SitemapReader:
                 doc.errors.append(failure)
                 continue
             assert result is not None  # narrowed by _load's contract
+            final_origin = _origin(result.final_url or current)
+            if final_origin is not None:
+                origins.add(final_origin)
             page = parse_sitemap(result.body, base_url=result.final_url or current)
             doc.errors.extend(page.errors)
             doc.truncated = doc.truncated or page.truncated
 
             for child in page.child_sitemaps:
+                if not self._in_scope(child, origins):
+                    off_origin = True
+                    continue
                 if child in seen_sitemaps:
                     continue
                 seen_sitemaps.add(child)
@@ -140,6 +161,9 @@ class SitemapReader:
                     doc.truncated = True
 
             for url in page.urls:
+                if not self._in_scope(url, origins):
+                    off_origin = True
+                    continue
                 if url in seen_urls:
                     continue
                 if len(doc.urls) >= self._max_urls:
@@ -154,7 +178,16 @@ class SitemapReader:
                 # The cap is global: do not spend more fetches on URLs we would have to drop.
                 doc.truncated = True
                 break
+
+        if off_origin:
+            doc.errors.append(OFF_ORIGIN_LOC)
         return doc
+
+    def _in_scope(self, url: str, origins: set[tuple[str, str]]) -> bool:
+        if self._allow_url is not None:
+            return self._allow_url(url)
+        origin = _origin(url)
+        return origin is not None and origin in origins
 
     def _load(self, url: str) -> tuple[_FetchResultLike | None, str | None]:
         try:
@@ -219,6 +252,18 @@ def _child_text(element: ElementTree.Element, name: str) -> str | None:
         if _local_name(child.tag) == name:
             return (child.text or "").strip()
     return None
+
+
+def _origin(url: str) -> tuple[str, str] | None:
+    """``(scheme, netloc)`` of an absolute http(s) URL, lower-cased; ``None`` otherwise."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in _HTTP_SCHEMES or not parts.netloc:
+        return None
+    return scheme, parts.netloc.lower()
 
 
 def _resolve_loc(loc: str | None, base_url: str) -> str | None:

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from lv24_seo.store import Store, connect, initialize
+from lv24_seo.store import STORE_CORRUPT, STORE_LOCKED, Store, StoreError, connect, initialize
 from lv24_seo.store.db import schema_path
 from lv24_seo.store.repositories import canonical_json
 
@@ -395,3 +395,74 @@ def test_store_context_manager_closes_connection(tmp_path: Path) -> None:
         instance.upsert_property("gsc", "p1", "LV24")
         assert instance.list_properties()
     assert instance._closed is True
+
+
+# -- ENG-10: typed storage failures ----------------------------------------------------------
+
+
+def test_corrupt_database_is_typed_and_preserved(tmp_path: Path) -> None:
+    path = tmp_path / "seo.sqlite3"
+    original = b"this is definitely not a sqlite database\n" * 64
+    path.write_bytes(original)
+
+    with pytest.raises(StoreError) as excinfo:
+        Store(path)
+
+    error = excinfo.value
+    assert error.code == STORE_CORRUPT
+    assert error.retryable is False
+    assert error.next_action and str(path) in error.next_action
+    backup = Path(error.detail["backup_path"])
+    assert backup.is_file()
+    assert backup.read_bytes() == original
+    assert path.read_bytes() == original, "the original file is never moved or deleted"
+
+
+def test_locked_database_is_typed_and_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lv24_seo.store import db
+
+    path = tmp_path / "seo.sqlite3"
+    Store(path).close()
+    holder = sqlite3.connect(path)
+    holder.execute("BEGIN IMMEDIATE")
+    monkeypatch.setattr(db, "_BUSY_TIMEOUT_SECONDS", 0.05)
+    try:
+        with pytest.raises(StoreError) as excinfo:
+            Store(path)
+    finally:
+        holder.rollback()
+        holder.close()
+
+    assert excinfo.value.code == STORE_LOCKED
+    assert excinfo.value.retryable is True
+    assert "retry" in (excinfo.value.next_action or "")
+
+
+def test_locked_write_is_typed_and_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lv24_seo.store import db
+
+    path = tmp_path / "seo.sqlite3"
+    monkeypatch.setattr(db, "_BUSY_TIMEOUT_SECONDS", 0.05)
+    store = Store(path)
+    holder = sqlite3.connect(path)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(StoreError) as excinfo:
+            store.record_send(
+                kind="weekly",
+                property_id="p1",
+                period="2026-11-01..2026-11-07",
+                content_hash="abc",
+                channel="email",
+            )
+    finally:
+        holder.rollback()
+        holder.close()
+        store.close()
+
+    assert excinfo.value.code == STORE_LOCKED
+    assert excinfo.value.retryable is True

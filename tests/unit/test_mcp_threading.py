@@ -21,6 +21,8 @@ import inspect
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from lv24_seo.core.config import (
     CrawlConfig,
     GscConfig,
@@ -284,3 +286,124 @@ def test_default_workspace_persists_and_close_workspaces_closes_store(
         assert reopened.get_metric_windows(PROPERTY, source="gsc"), "data must be durable"
     finally:
         reopened.close()
+
+
+# -- ENG-12: crawl runs off the event loop with a budget -------------------------------------
+
+
+class _CrawlService:
+    """Minimal service whose crawl blocks, so the off-loop dispatch is observable."""
+
+    timezone = "UTC"
+
+    def __init__(self, delay: float) -> None:
+        self.delay = delay
+        self.calls = 0
+        self.thread = 0
+
+    def properties(self) -> dict[str, Any]:
+        from lv24_seo.core.envelope import ok
+
+        return ok({"project": {"name": "Example"}, "providers": []})
+
+    def crawl_and_store(
+        self, *, start_url: str | None = None, max_urls: int | None = None
+    ) -> dict[str, Any]:
+        import threading
+        import time
+
+        from lv24_seo.core.envelope import ok
+
+        self.calls += 1
+        self.thread = threading.get_ident()
+        time.sleep(self.delay)
+        return ok(
+            {"summary": {"urls": 1, "issues": 0}, "issues": []},
+            meta={"max_urls": max_urls},
+        )
+
+
+def _crawl_workspace(service: _CrawlService) -> Any:
+    import contextlib
+
+    @contextlib.contextmanager
+    def factory() -> Any:
+        yield service
+
+    return factory
+
+
+def test_crawl_timeout_returns_a_retryable_failure_instead_of_wedging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from lv24_seo.core.errors import UPSTREAM_UNAVAILABLE
+
+    service = _CrawlService(delay=0.5)
+    monkeypatch.setattr(server_module, "CRAWL_TIMEOUT_SECONDS", 0.05)
+    server = create_server(service, crawl_workspace=_crawl_workspace(service))
+
+    async def scenario() -> tuple[Any, float]:
+        started = time.perf_counter()
+        result = await server.call_tool("seo_crawl_site", {})
+        # Measure the call, not ``asyncio.run`` shutdown: the loop waits for its executor,
+        # while a long-lived server keeps serving other clients immediately.
+        return result, time.perf_counter() - started
+
+    result, elapsed = asyncio.run(scenario())
+
+    payload = _payload(result)
+    assert result.is_error is True
+    assert payload["error"]["code"] == UPSTREAM_UNAVAILABLE
+    assert payload["error"]["retryable"] is True
+    assert "budget" in payload["error"]["message"]
+    assert elapsed < 0.4, "the timeout must answer before the crawl finishes"
+
+
+def test_a_slow_crawl_does_not_block_other_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    service = _CrawlService(delay=0.3)
+    monkeypatch.setattr(server_module, "CRAWL_TIMEOUT_SECONDS", 5.0)
+    server = create_server(service, crawl_workspace=_crawl_workspace(service))
+
+    async def scenario() -> tuple[Any, Any, float]:
+        crawl = asyncio.create_task(server.call_tool("seo_crawl_site", {}))
+        await asyncio.sleep(0.05)
+        started = time.perf_counter()
+        other = await asyncio.wait_for(server.call_tool("seo_properties", {}), 0.25)
+        elapsed = time.perf_counter() - started
+        return other, await crawl, elapsed
+
+    other, crawl, elapsed = asyncio.run(scenario())
+
+    assert _payload(other)["ok"] is True
+    assert _payload(crawl)["ok"] is True
+    assert elapsed < 0.25, "a crawl must not serialise unrelated tool calls"
+    assert service.thread and service.thread != threading.get_ident()
+    assert service.calls == 1
+
+
+def test_crawl_workspace_factory_opens_and_closes_its_own_store(tmp_path: Path) -> None:
+    import sqlite3
+
+    import pytest
+
+    from lv24_seo import composition
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    factory = server_module._crawl_workspace_factory(_config(data_dir))
+
+    with factory() as service:
+        store = service._store  # type: ignore[attr-defined]
+        assert store is not None
+        assert store.path == str(data_dir / composition.DB_FILENAME)
+        store.upsert_property("gsc", PROPERTY, "Example")
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        store.list_properties()

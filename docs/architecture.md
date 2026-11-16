@@ -51,8 +51,16 @@ class ProviderResult[T]:
 Rules:
 
 * `truncated` is computed from the provider's own cap and evidence of more data (GSC reports it when
-  the cap is reached, including a final page that fills it exactly; Yandex uses `total > limit`),
-  never guessed. A full page at the cap is potentially truncated, never claimed complete.
+  the cap is reached, including a final page that fills it exactly; Metrika marks it when the walked
+  rows are fewer than `total_rows`, a row/page cap stops the walk, or a full page arrives without a
+  total), never guessed. A full page at the cap is potentially truncated, never claimed complete.
+* `total` is `int | None`: a provider that cannot prove completeness omits it (GSC returns `null`
+  when `truncated` is true; a bare page `count` is never promoted to a grand total).
+* `data_age_days` is measured from the newest data the provider actually reports (Bing row dates,
+  Metrika's `date2`) and is never fresher than the documented provider lag (GSC floors at 3 days).
+* An empty answer is data, not a failure: Yandex empty indexing/search-URL history returns
+  `total=0` with the `empty_history` limitation, while `degraded_host` is reserved for an
+  unreachable or not-loaded host.
 * `limitations` codes are enum-like and translated to text in the report renderer.
 * Adapters never mutate the database; the caller (`analysis` or `store`) persists.
 
@@ -86,6 +94,12 @@ There are no on-disk raw provider archives: snapshots are gzipped canonical JSON
 has no effect). `data/seo.sqlite3` is git-ignored. Schema changes ship as numbered migrations in
 `store/db.py` recorded in `schema_migrations`; user data is never deleted by an upgrade.
 
+Raw `sqlite3` failures are translated at the store boundary into typed errors: `STORE_LOCKED`
+(retryable, another writer holds the lock), `STORE_CORRUPT` (a byte copy is preserved as
+`<db>.corrupt-<utc>`, the original is untouched) and `STORE_UNAVAILABLE` (permissions, path, disk).
+A failure the layer does not recognise is re-raised unchanged, so a real programming bug keeps its
+traceback instead of being disguised as a disk problem.
+
 ## 4. Analysis layer
 
 | Module | Input | Output |
@@ -111,6 +125,9 @@ query level (clicks/impressions) separately, and the report labels which engine 
   localized; Markdown stays canonical English. The weekly email presenter is a 600px inline-CSS
   template with KPI cards, top-3 opportunities, issue severities, merged sources, data notes and
   a footer; no external images, stylesheets, scripts or tracking pixels.
+* Markdown output is escaped: `escape_markdown` escapes backslashes, backticks, `*_[]()@`, and the
+  Markdown renderer additionally escapes `<`/`>`, so a crawled title, query or URL cannot inject a
+  link, emphasis, raw HTML or a GitHub `@` mention into `report diff --markdown` or a PR comment.
 * `report/delivery.py` implements `deliver(report, …)` for SMTP email and Telegram with a
   verifying TLS context, a normalized transport result (an HTTP 400/429 is `failed`, never
   `sent`), a semantic content hash that includes the normalized render locale (volatile envelope
@@ -125,7 +142,9 @@ query level (clicks/impressions) separately, and the report labels which engine 
 ## 6. Surfaces
 
 * **CLI** parses args → builds one `composition.Workspace` (config + shared SQLite history) →
-  runs one service operation → closes storage afterwards.
+  runs one service operation → closes storage afterwards. Read commands accept `--strict`, which
+  sets `meta.strict` and turns a truncated success into exit `5`; the envelope stays `ok: true`
+  because the data is valid, only incomplete.
 * **MCP** tools call the same services through the same composition root, so CLI and MCP share
   one history; the store closes when the transport stops. Without `init`, both run store-less
   with an explicit warning.
@@ -138,7 +157,9 @@ query level (clicks/impressions) separately, and the report labels which engine 
   Every retry acquires capacity. This limits request frequency, not persistent daily or cross-process
   quotas. The crawler separately pins validated destination IPs while retaining the original Host/SNI.
 * Retries: idempotent GET/HEAD plus explicitly opted-in safe *read* POSTs (GSC searchAnalytics,
-  CrUX queryRecord) with `Retry-After` support, capped at 3 attempts. Write POSTs never retry.
+  CrUX queryRecord) with `Retry-After` support, capped at 3 attempts. Write POSTs never retry. The
+  crawler separately retries a `429` **once**, honouring `Retry-After` (seconds or HTTP-date,
+  clamped to 30 s, 1 s default); a `429` on `robots.txt` defers the crawl instead of failing open.
 * Partial failure is normal: a weekly report with failing sources still produces available sections
   plus `sources_failed` and `complete: false`; it never cancels the whole run for one engine's
   401/403/429/timeout. A total outage yields an explicit no-data report. `complete` is `true`
@@ -151,7 +172,10 @@ query level (clicks/impressions) separately, and the report labels which engine 
   `async` adapter, so the synchronous core runs on the event-loop thread, one call at a time
   (blocking the loop while it runs). Concurrent `tools/call` requests are therefore serial, not
   parallel; `tests/unit/test_mcp_threading.py` proves both the failure without the adapter and
-  the serial behaviour with it.
+  the serial behaviour with it. `seo_crawl_site` is deliberately offloaded: it runs on a worker
+  thread with a fresh service/store opened there, under a 600 s budget, so a long crawl neither
+  blocks other tools nor touches the loop-bound connection. On timeout the client gets a
+  retryable `UPSTREAM_UNAVAILABLE` and the crawl finishes in the background.
 * Delivery is at-least-once: the sends-ledger claim and the send run inside `Store.atomic`; a
   journal failure after the message left is reported as `sent` with
   `reason=delivery_journal_failed`, never as `failed`. Telegram gets plain text (no `parse_mode`),
@@ -171,7 +195,12 @@ query level (clicks/impressions) separately, and the report labels which engine 
 * Tokens live in the keychain or `0600` files, never in `seo.toml`.
 * Provider clients are constructed per run with scoped credentials; nothing global.
 * Write operations pass through `core/write_gate.py` (plan → confirm token → pending claim →
-  provider call → `sent` or release). Local-state MCP tools (`seo_crawl_site`,
-  `seo_weekly_report`) are not write-gated because they never mutate provider state; they are
-  marked `writes_local_state: true` and `readOnlyHint: false`.
+  provider call → `sent` or release). CLI and MCP share the same gate, the same
+  `LV24_SEO_WRITE_SECRET` and the same SQLite idempotency ledger; an MCP apply needs
+  `allow_write=true` and `confirm_token`, plus a matching `plan_hash` when one is supplied.
+  Local-state MCP tools
+  (`seo_crawl_site`, `seo_weekly_report`) are not write-gated because they never mutate provider
+  state; they are marked `writes_local_state: true` and `readOnlyHint: false`. In this build the
+  engine service still exposes no recrawl/sitemap provider handler, so those applies return
+  `WRITE_DISABLED` and nothing is sent.
 * Logs are redacted at the formatter level, not per call site.

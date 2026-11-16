@@ -121,3 +121,25 @@ def test_output_is_deterministic() -> None:
     first = sitemap_crawl_diff(_site(), SITEMAP).to_dict()
     second = sitemap_crawl_diff(list(reversed(_site())), list(reversed(SITEMAP))).to_dict()
     assert first == second
+
+
+def test_a_sitemap_entry_matching_the_final_url_is_not_unvisited() -> None:
+    """The sitemap may list the redirect target while the crawl recorded the original URL."""
+    pages = [
+        _page("/", links=("/old",)),
+        _page(
+            "/old",
+            final_url=f"{SITE}/new",
+            redirect_chain=[f"{SITE}/old", f"{SITE}/new"],
+        ),
+    ]
+
+    diff = sitemap_crawl_diff(pages, [f"{SITE}/", f"{SITE}/new"])
+    buckets = diff.to_dict()["buckets"]
+
+    assert buckets["unvisited"] == []
+    # The advertised URL redirects, which is a confirmed not-ok entry, not an unknown one.
+    assert buckets["not_ok"] == [f"{SITE}/new"]
+    # The final URL is an alias of the crawled page, not a second crawled page.
+    assert diff.crawled_urls == 2
+    assert buckets["missing_from_sitemap"] == []

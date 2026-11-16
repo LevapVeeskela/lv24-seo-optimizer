@@ -84,4 +84,5 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
   "live: hits real provider APIs (needs tokens; never run in CI)",
   "network: hits the public internet (kept out of the default run)",
+  "contract: drives the installed CLI binary against tests/contract/cli-v1-contract.json",
 ]

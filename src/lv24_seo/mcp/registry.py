@@ -93,6 +93,10 @@ TOOLS: tuple[ToolSpec, ...] = (
         summary="Build the weekly SEO digest (deltas vs last snapshot) for one property.",
         writes_local_state=True,
         providers=("gsc", "yandex_webmaster", "yandex_metrika", "crux", "crawl"),
+        inputs={
+            "days": "current period length in days (1..90, default 7)",
+            "lag_days": "provider data lag in days (0..14, default 2)",
+        },
         returns="{period, headline, deltas, issues, opportunities, limitations}",
     ),
     ToolSpec(
@@ -118,6 +122,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         title="Indexing triage",
         summary="Group not-indexed URLs by reason and propose the cheapest fix.",
         providers=("gsc", "yandex_webmaster", "crawl"),
+        inputs={"max_examples": "example URLs per bucket (0..20, default 5)"},
         returns="{buckets:[{reason,count,examples,next_action}]}",
     ),
     ToolSpec(
@@ -125,6 +130,11 @@ TOOLS: tuple[ToolSpec, ...] = (
         title="Opportunities",
         summary="Striking-distance queries, CTR gaps, decayed pages, cannibalisation candidates.",
         providers=("gsc", "yandex_webmaster"),
+        inputs={
+            "days": "current period length in days (1..90, default 28)",
+            "limit": "1..500 (default 50)",
+            "min_impressions": "minimum impressions for a candidate (default 100)",
+        },
         returns="{opportunities:[{kind,url,query,evidence,expected_gain}]}",
     ),
     ToolSpec(
@@ -133,9 +143,19 @@ TOOLS: tuple[ToolSpec, ...] = (
         summary="Queue URLs for Yandex recrawl within the daily quota.",
         kind="write",
         providers=("yandex_webmaster",),
-        inputs={"host_id": "https:example.com:443", "urls": "list[url]"},
+        inputs={
+            "host_id": "https:example.com:443 (default: the configured host)",
+            "urls": "list[url]",
+            "allow_write": "explicit opt-in (default false)",
+            "plan_hash": "plan_hash returned by the dry run (apply only)",
+            "confirm_token": "confirm_token returned by the dry run (apply only)",
+        },
         returns="{queued, quota_left, task_ids}",
-        limitations=("requires --allow-write", "hard daily quota"),
+        limitations=(
+            "requires allow_write=true",
+            "apply needs the confirm_token from a dry run; a replay is skipped",
+            "hard daily quota",
+        ),
     ),
     ToolSpec(
         name="seo_sitemap_submit",
@@ -147,9 +167,15 @@ TOOLS: tuple[ToolSpec, ...] = (
             "property": "property id",
             "sitemap_url": "absolute URL",
             "action": "submit|delete",
+            "allow_write": "explicit opt-in (default false)",
+            "plan_hash": "plan_hash returned by the dry run (apply only)",
+            "confirm_token": "confirm_token returned by the dry run (apply only)",
         },
         returns="{ok, provider, status}",
-        limitations=("requires --allow-write",),
+        limitations=(
+            "requires allow_write=true",
+            "apply needs the confirm_token from a dry run; a replay is skipped",
+        ),
     ),
 )
 

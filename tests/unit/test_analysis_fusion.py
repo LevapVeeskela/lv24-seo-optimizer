@@ -47,8 +47,8 @@ def test_single_engine_gsc_summary_totals_and_no_caveats() -> None:
     assert summary.limitations == ()
     assert report.caveats == ()
     assert report.page_totals == {
-        "https://example.com/a": {"clicks": 10.0, "impressions": 100.0},
-        "https://example.com/b": {"clicks": 5.0, "impressions": 50.0},
+        "/a": {"clicks": 10.0, "impressions": 100.0},
+        "/b": {"clicks": 5.0, "impressions": 50.0},
     }
     assert report.query_totals == {
         "seo": {"clicks": 10.0, "impressions": 100.0},
@@ -122,6 +122,19 @@ def test_metrika_accepts_start_url_path_as_page_key() -> None:
     assert report.page_totals == {"/a": {"visits": 5.0}}
     assert report.query_totals == {}
     assert report.caveats == (CAVEAT_METRIKA_SESSIONS_NOT_CLICKS,)
+
+
+def test_absolute_url_and_path_are_the_same_page() -> None:
+    """GSC reports absolute URLs, Metrika reports paths: one page must not be counted twice."""
+    gsc = [{"query": "seo", "page": "https://example.com/a?x=1", "clicks": 3, "impressions": 30}]
+    metrika = [{"page": "/a?x=1", "visits": 11}, {"startURLPath": "b", "visits": 4}]
+
+    report = fuse_engines(gsc=gsc, metrika=metrika)
+
+    assert report.page_totals == {
+        "/a?x=1": {"clicks": 3.0, "impressions": 30.0, "visits": 11.0},
+        "/b": {"visits": 4.0},
+    }
 
 
 def test_missing_impressions_stay_none_and_do_not_create_zero_metrics() -> None:

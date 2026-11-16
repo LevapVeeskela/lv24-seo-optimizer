@@ -1159,6 +1159,7 @@ def test_html_escapes_all_user_controlled_fields_once() -> None:
     text = render_text(report)
     markdown = render_markdown(report)
     escaped = "&lt;script&gt;alert(1)&lt;/script&gt;"
+    markdown_escaped = "&lt;script&gt;alert\\(1\\)&lt;/script&gt;"
 
     assert "<script>" not in html_doc
     assert "<img" not in html_doc
@@ -1166,7 +1167,7 @@ def test_html_escapes_all_user_controlled_fields_once() -> None:
     assert escaped in html_doc
     assert "&amp;lt;" not in html_doc  # escaped exactly once
     assert "<script>" not in markdown
-    assert escaped in markdown
+    assert markdown_escaped in markdown
     assert "\x1b" not in text
     assert "<script>alert(1)</script>" in text  # inert plain text
 
@@ -1266,3 +1267,47 @@ def test_text_and_html_have_no_mapping_repr() -> None:
 
     assert "{'code': 'x'}" not in text
     assert "{'code': 'x'}" not in html_doc
+
+
+def test_markdown_escapes_links_mentions_and_code_from_provider_text() -> None:
+    """Provider text must not become Markdown links, mentions, emphasis or code spans."""
+    report = Report(
+        kind="audit",
+        property_id="https://example.com/",
+        period_start="2026-11-03",
+        period_end="2026-11-09",
+        headline="",
+        sections=[
+            ReportSection(
+                key="opportunities",
+                title="Opportunities",
+                summary="",
+                rows=[
+                    {
+                        "query": "[click](https://evil.example) @team *bold* `code`",
+                        "page": "/a_b",
+                    }
+                ],
+                notes=["see [docs](https://evil.example)"],
+            )
+        ],
+        limitations=["@here *urgent*"],
+    )
+
+    markdown = render_markdown(report)
+
+    for raw in (
+        "[click](https://evil.example)",
+        "*bold*",
+        "`code`",
+        "[docs](https://evil.example)",
+        "*urgent*",
+    ):
+        assert raw not in markdown
+    # A mention is only safe when escaped; the raw ``@team`` token must not survive.
+    assert re.search(r"(?<!\\)@team", markdown) is None
+    assert re.search(r"(?<!\\)@here", markdown) is None
+    assert "\\[click\\]" in markdown
+    assert "\\@team" in markdown
+    assert "\\`code\\`" in markdown
+    assert "/a\\_b" in markdown

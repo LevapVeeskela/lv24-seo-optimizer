@@ -38,6 +38,11 @@ DEFAULT_INSPECTION_URL = "https://searchconsole.googleapis.com/v1/urlInspection/
 _MAX_PAGE_ROWS = 25_000
 _MAX_TOTAL_ROWS = 50_000
 
+# GSC publishes data 2-3 days behind the current date (docs/data-sources.md). ``data_age_days``
+# must not claim a fresher window than the provider can have: floor at the documented lag so a
+# window ending today never looks like fresh data.
+GSC_REPORT_LAG_DAYS = 3
+
 _AUTH_NEXT_ACTION = "lv24-seo auth login --provider gsc"
 _END_OF_DAY = time(hour=23, minute=59)
 
@@ -178,7 +183,10 @@ class GscClient:
             fetched_at=fetched_at,
             data_age_days=_search_data_age(end_date, fetched_at),
             rows=rows,
-            total=len(rows),
+            # A capped result cannot prove completeness: an exact row count next to
+            # ``truncated=true`` reads as a full answer. Only report a total when the
+            # walk ended on a short batch.
+            total=None if truncated else len(rows),
             truncated=truncated,
             limitations=limitations,
             warnings=warnings,
@@ -285,8 +293,10 @@ def _map_inspection(url: str, payload: Any) -> Row:
 
 
 def _search_data_age(end_date: date, fetched_at: datetime) -> int:
+    """Age of the reporting window, never fresher than the documented GSC lag."""
     end_of_window = datetime.combine(end_date, _END_OF_DAY, tzinfo=UTC)
-    return data_age_days(end=end_of_window, fetched_at=fetched_at)
+    measured = data_age_days(end=end_of_window, fetched_at=fetched_at)
+    return max(GSC_REPORT_LAG_DAYS, measured)
 
 
 def _as_float(value: Any) -> float:

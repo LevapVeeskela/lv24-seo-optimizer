@@ -21,11 +21,14 @@ Design notes
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import json
 import logging
+import os
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING, Any, cast
@@ -37,6 +40,7 @@ from lv24_seo.analysis.indexing import triage
 from lv24_seo.analysis.opportunities import find_opportunities
 from lv24_seo.core.envelope import fail, ok
 from lv24_seo.core.errors import (
+    CONFIRM_REQUIRED,
     INTERNAL,
     INVALID_INPUT,
     UPSTREAM_UNAVAILABLE,
@@ -44,6 +48,8 @@ from lv24_seo.core.errors import (
     SeoError,
 )
 from lv24_seo.core.timeutil import compare_period
+from lv24_seo.core.write_gate import WRITE_SECRET_ENV, WriteGate, WritePlan
+from lv24_seo.core.write_gate import plan_hash as write_plan_hash
 from lv24_seo.report.models import Report, ReportSection
 from lv24_seo.report.render import render_markdown
 
@@ -69,6 +75,9 @@ OPPORTUNITY_DAYS_DEFAULT = 28
 OPPORTUNITY_LIMIT_DEFAULT = TOOL_LIMIT_DEFAULT
 WRITE_NEXT_ACTION = (
     "review the plan first, then pass allow_write=True; keep the default in agent configs"
+)
+WRITE_LEDGER_OFF = (
+    "write ledger: no workspace store; the confirm token can be replayed within its lifetime"
 )
 
 Envelope = dict[str, Any]
@@ -198,11 +207,27 @@ class ReportCache:
 
 @dataclass(slots=True)
 class ToolState:
-    """Everything the registered tools share: the service and the report cache."""
+    """Everything the registered tools share: the service and the report cache.
+
+    ``ledger`` is the SQLite store the write tools use for idempotency; when it is not passed
+    explicitly the service's own store is used (the server opens one shared workspace).
+    ``crawl_workspace`` builds a *fresh* service plus store for a crawl running on a worker
+    thread: a ``sqlite3`` connection belongs to one thread, so the server cannot hand its own
+    connection to the crawl worker. ``None`` keeps the crawl on the owning event-loop thread
+    (used when an embedder passes a service without a workspace factory).
+    """
 
     service: SeoService
     report: ReportCache = field(default_factory=ReportCache)
     timezone: str = "Europe/Minsk"
+    ledger: object | None = None
+    crawl_workspace: Callable[[], AbstractContextManager[SeoService]] | None = None
+
+    def write_ledger(self) -> object | None:
+        """The store used by :class:`~lv24_seo.core.write_gate.WriteGate` for replay claims."""
+        if self.ledger is not None:
+            return self.ledger
+        return getattr(self.service, "_store", None)
 
 
 def invoke(
@@ -562,11 +587,12 @@ def build_crawl_site(state: ToolState) -> Callable[..., CallToolResult]:
             if url is not None:
                 _require_http_url(url, name="start_url")
 
-            payload, ignored = invoke(
-                state.service,
-                "crawl_and_store",
-                arguments={"start_url": url, "max_urls": limit},
-            )
+            with _crawl_service(state) as service:
+                payload, ignored = invoke(
+                    service,
+                    "crawl_and_store",
+                    arguments={"start_url": url, "max_urls": limit},
+                )
             warnings.extend(ignored)
             payload = _shape_crawl_payload(payload, include_rules, warnings)
             return merge_warnings(payload, warnings)
@@ -574,6 +600,22 @@ def build_crawl_site(state: ToolState) -> Callable[..., CallToolResult]:
         return respond("seo_crawl_site", _run)
 
     return seo_crawl_site
+
+
+@contextlib.contextmanager
+def _crawl_service(state: ToolState) -> Iterator[SeoService]:
+    """Yield the service a crawl may use on the current thread.
+
+    A workspace factory opens its own ``Store`` in the calling thread, so the crawl can run on
+    a worker thread without touching the server's loop-bound connection. Without a factory the
+    shared service is used and the crawl stays on the owner loop (serialised with other tools).
+    """
+    factory = state.crawl_workspace
+    if factory is None:
+        yield state.service
+        return
+    with factory() as service:
+        yield service
 
 
 def _shape_crawl_payload(
@@ -928,16 +970,34 @@ def _analysis_rows(rows: object) -> list[AnalysisRow]:
 
 
 def build_recrawl_request(state: ToolState) -> Callable[..., CallToolResult]:
-    """``seo_recrawl_request``: gated Yandex recrawl queue write."""
+    """``seo_recrawl_request``: gated Yandex recrawl queue write (plan -> token -> apply)."""
 
     def seo_recrawl_request(
         host_id: str = "",
         urls: list[str] | None = None,
         allow_write: bool = False,
+        plan_hash: str = "",
+        confirm_token: str = "",
     ) -> CallToolResult:
         def _run() -> Envelope:
             _require_write(allow_write, tool="seo_recrawl_request")
             target_urls = _validate_urls(urls)
+            target = host_id.strip() or _configured_host(state.service)
+            if not target:
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message="host_id is required",
+                    next_action=(
+                        "pass the Yandex host id, e.g. https:example.com:443, "
+                        "or set providers.yandex_webmaster.host_id in seo.toml"
+                    ),
+                )
+            plan = WritePlan(
+                action="recrawl",
+                target=target,
+                summary=f"queue {len(target_urls)} URL(s) for recrawl on {target}",
+                payload={"host_id": target, "urls": target_urls},
+            )
             handler = _write_handler(state.service, ("recrawl_request", "request_recrawl"))
             if handler is None:
                 raise SeoError(
@@ -949,12 +1009,13 @@ def build_recrawl_request(state: ToolState) -> Callable[..., CallToolResult]:
                     ),
                     retryable=False,
                 )
-            return _call_write(
-                handler,
-                arguments={
-                    "host_id": host_id.strip(),
-                    "urls": target_urls,
-                },
+            return _gated_write(
+                state,
+                plan=plan,
+                allow_write=allow_write,
+                plan_hash=plan_hash,
+                confirm_token=confirm_token,
+                handler=handler,
             )
 
         return respond("seo_recrawl_request", _run)
@@ -963,13 +1024,15 @@ def build_recrawl_request(state: ToolState) -> Callable[..., CallToolResult]:
 
 
 def build_sitemap_submit(state: ToolState) -> Callable[..., CallToolResult]:
-    """``seo_sitemap_submit``: gated GSC/Bing sitemap submit or delete."""
+    """``seo_sitemap_submit``: gated GSC/Bing sitemap submit or delete (plan -> token -> apply)."""
 
     def seo_sitemap_submit(
         property: str = "",
         sitemap_url: str = "",
         action: str = "submit",
         allow_write: bool = False,
+        plan_hash: str = "",
+        confirm_token: str = "",
     ) -> CallToolResult:
         def _run() -> Envelope:
             _require_write(allow_write, tool="seo_sitemap_submit")
@@ -989,6 +1052,12 @@ def build_sitemap_submit(state: ToolState) -> Callable[..., CallToolResult]:
                     message=f"action must be one of: {_CSV.join(sorted(_SITEMAP_ACTIONS))}",
                     next_action="pass submit or delete",
                 )
+            plan = WritePlan(
+                action="sitemap_submit",
+                target=target,
+                summary=f"{verb} sitemap {url} for {target}",
+                payload={"property": target, "sitemap_url": url, "action": verb},
+            )
             handler = _write_handler(state.service, ("sitemap_submit", "submit_sitemap"))
             if handler is None:
                 raise SeoError(
@@ -1000,18 +1069,123 @@ def build_sitemap_submit(state: ToolState) -> Callable[..., CallToolResult]:
                     ),
                     retryable=False,
                 )
-            return _call_write(
-                handler,
-                arguments={
-                    "property": target,
-                    "sitemap_url": url,
-                    "action": verb,
-                },
+            return _gated_write(
+                state,
+                plan=plan,
+                allow_write=allow_write,
+                plan_hash=plan_hash,
+                confirm_token=confirm_token,
+                handler=handler,
             )
 
         return respond("seo_sitemap_submit", _run)
 
     return seo_sitemap_submit
+
+
+def _gated_write(
+    state: ToolState,
+    *,
+    plan: WritePlan,
+    allow_write: bool,
+    plan_hash: str,
+    confirm_token: str,
+    handler: Callable[..., Any],
+) -> Envelope:
+    """Run the two-phase write contract: dry run without a token, apply exactly once with it.
+
+    The ledger claim is what makes a repeated call safe: a second apply with the same token and
+    plan returns ``status: skipped`` / ``reason: duplicate`` without calling the provider. A
+    provider failure raises through ``WriteGate``, which releases the claim so a genuine retry
+    is allowed.
+    """
+    ledger = state.write_ledger()
+    gate = WriteGate(
+        allow_write=allow_write,
+        secret=os.environ.get(WRITE_SECRET_ENV, ""),
+        store=ledger,
+    )
+    token = confirm_token.strip()
+    if not token:
+        result = gate.plan(plan)
+        warnings = [] if ledger is not None else [WRITE_LEDGER_OFF]
+        return ok(
+            {
+                "status": result.status,
+                "plan": plan.to_dict(),
+                "plan_hash": result.detail.get("plan_hash", ""),
+                "confirm_token": result.confirm_token,
+                "ttl_seconds": result.detail.get("ttl_seconds"),
+            },
+            meta={"dry_run": True, "action": plan.action, "target": plan.target},
+            warnings=warnings,
+        )
+
+    digest = write_plan_hash(plan)
+    supplied = plan_hash.strip()
+    if supplied and supplied != digest:
+        raise SeoError(
+            code=CONFIRM_REQUIRED,
+            message="plan_hash does not match this plan",
+            next_action="rerun the dry run and pass the plan_hash and confirm_token it returned",
+        )
+    result = gate.apply(plan, token, execute=_execute_write(handler, plan))
+    meta: dict[str, Any] = {
+        "dry_run": False,
+        "action": plan.action,
+        "target": plan.target,
+        "plan_hash": digest,
+        "write_status": result.status,
+    }
+    if result.status == "skipped":
+        return ok(
+            {"status": "skipped", "reason": result.reason or "duplicate", "plan": plan.to_dict()},
+            meta=meta,
+            warnings=[WRITE_LEDGER_OFF] if ledger is None else [],
+        )
+    envelope = result.detail.get("result")
+    if not isinstance(envelope, Mapping):
+        return ok({"status": result.status, "plan": plan.to_dict()}, meta=meta)
+    merged = dict(envelope)
+    merged["meta"] = {**_mapping(merged.get("meta")), **meta}
+    return merged
+
+
+def _execute_write(handler: Callable[..., Any], plan: WritePlan) -> Callable[[WritePlan], Any]:
+    """Adapt a service write method to ``WriteGate.apply``'s ``execute`` contract.
+
+    A service envelope with ``ok: false`` is an exception here on purpose: the gate must
+    release its pending claim so the write can be retried, and a failed write must never be
+    recorded as sent.
+    """
+
+    def execute(_plan: WritePlan) -> Any:
+        result = _call_write(handler, arguments=dict(plan.payload))
+        if not result.get("ok", False):
+            error = _mapping(result.get("error"))
+            next_action = error.get("next_action")
+            raise SeoError(
+                code=str(error.get("code") or INTERNAL),
+                message=str(error.get("message") or "the provider write failed"),
+                next_action=next_action if isinstance(next_action, str) else None,
+                retryable=bool(error.get("retryable")),
+            )
+        return result
+
+    return execute
+
+
+def _configured_host(service: SeoService) -> str:
+    """The configured Yandex host id, when the service exposes its config.
+
+    ``SeoService`` owns the workspace config privately; reading it is the only way to keep the
+    previous ``host_id``-optional contract without duplicating configuration resolution here.
+    """
+    config = getattr(service, "_config", None)
+    providers = getattr(config, "providers", None)
+    webmaster = getattr(providers, "yandex_webmaster", None)
+    host = getattr(webmaster, "host_id", "")
+    return host.strip() if isinstance(host, str) else ""
 
 
 def _require_write(allow_write: bool, *, tool: str) -> None:

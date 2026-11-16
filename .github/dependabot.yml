@@ -1,0 +1,39 @@
+# QA-09: dependency updates arrive as reviewed pull requests instead of a floating
+# toolchain. Dependabot is free for public repositories and every PR runs the normal CI
+# (standard GitHub-hosted runners only, zero-spend policy).
+#
+# `uv` keeps pyproject.toml and uv.lock in step; a `pip` entry would bump pyproject
+# without the lockfile and every PR would fail `uv sync --locked`.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:17"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "[SEO](infra) - "
+    labels: ["dependencies"]
+    groups:
+      # Minor and patch bumps land as one reviewable PR; majors stay separate.
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:17"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "[SEO](infra) - "
+    labels: ["dependencies", "github-actions"]
+    groups:
+      github-actions:
+        patterns: ["*"]

@@ -35,6 +35,8 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 
+from lv24_seo.store.errors import translate_sqlite_error
+
 __all__ = ["MEMORY_PATH", "SCHEMA_VERSION", "connect", "initialize", "migrate", "schema_path"]
 
 #: SQLite's in-memory database name. WAL is meaningless there (the journal is memory-backed).
@@ -109,26 +111,66 @@ def connect(path: Path | str) -> sqlite3.Connection:
     """Open ``path`` with the project's PRAGMAs and row factory.
 
     Parent directories are created automatically. ``:memory:`` is supported for tests and
-    one-off tools (WAL is skipped because an in-memory journal cannot use it).
+    one-off tools (WAL is skipped because an in-memory journal cannot use it). A lock or a
+    corrupt file becomes a typed :class:`~lv24_seo.store.errors.StoreError` instead of a raw
+    ``sqlite3`` exception, so every surface can act on it.
     """
     target = _database_target(path)
-    conn = sqlite3.connect(target, timeout=_BUSY_TIMEOUT_SECONDS)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    if target != MEMORY_PATH:
-        conn.execute("PRAGMA journal_mode = WAL")
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(target, timeout=_BUSY_TIMEOUT_SECONDS)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        if target != MEMORY_PATH:
+            conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.Error as exc:
+        if conn is not None:
+            conn.close()
+        translated = translate_sqlite_error(exc, path)
+        if translated is None:
+            raise
+        raise translated from exc
     return conn
 
 
-def initialize(conn: sqlite3.Connection) -> None:
+def initialize(conn: sqlite3.Connection, *, path: Path | str | None = None) -> None:
     """Create every table and index; safe to call on an already-initialised database."""
-    conn.executescript(_schema_sql())
-    conn.commit()
+    try:
+        conn.executescript(_schema_sql())
+        conn.commit()
+    except sqlite3.Error as exc:
+        translated = translate_sqlite_error(
+            exc, path if path is not None else _connection_path(conn)
+        )
+        if translated is None:
+            raise
+        raise translated from exc
     migrate(conn)
+
+
+def _connection_path(conn: sqlite3.Connection) -> str:
+    """Best-effort file path of an open connection (``:memory:`` for in-memory databases)."""
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+    except sqlite3.Error:
+        return MEMORY_PATH
+    if row is None or len(row) < 3 or not row[2]:
+        return MEMORY_PATH
+    return str(row[2])
 
 
 def migrate(conn: sqlite3.Connection) -> list[int]:
     """Apply pending numbered migrations in order; return the versions applied."""
+    try:
+        return _migrate(conn)
+    except sqlite3.Error as exc:
+        translated = translate_sqlite_error(exc, _connection_path(conn))
+        if translated is None:
+            raise
+        raise translated from exc
+
+
+def _migrate(conn: sqlite3.Connection) -> list[int]:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS schema_migrations (

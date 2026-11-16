@@ -6,9 +6,10 @@ Design rules:
   behind the adapter.
 * Names `{source}_{verb}_{object}` for primitives, `seo_{task}` for composed workflows.
 * Read-only by default. Two tools persist local snapshots and carry `readOnlyHint: false` with
-  `writes_local_state: true`; gated write tools carry `destructiveHint: true` and require a confirm
-  token.
-* Every response includes `truncated`, `total`, `data_age_days` and `limitations[]`.
+  `writes_local_state: true`; gated write tools carry `destructiveHint: true`, require
+  `allow_write=true` and a confirm token from a dry run, and use the same idempotency ledger as the
+  CLI.
+* Every read response includes `truncated`, `total`, `data_age_days` and `limitations[]`.
 * Read tools take no `format` parameter; responses are compact JSON, and the weekly report renders
   markdown through `seo://report/latest` (or `report weekly --out`).
 
@@ -64,11 +65,18 @@ to 20,000 characters; `word_count` stays exact. Sitemap documents use a 50 MB bo
 query string. The payload also carries `sitemap_coverage` (sitemap ↔ crawl diff with
 `complete`/`limitations`; see `docs/cli.md`).
 
+This is the one tool that runs **off the event loop**: the server dispatches it to a worker thread
+with its own short-lived store, under a hard 600 s budget (`CRAWL_TIMEOUT_SECONDS`). Other
+`tools/call` requests keep being served while it runs. When the budget expires the client gets a
+retryable `UPSTREAM_UNAVAILABLE` envelope (the thread cannot be killed and finishes in the
+background); retry with a smaller `max_urls` or run `lv24-seo crawl` in a terminal.
+
 ### `seo_weekly_report`
 
-Inputs: none — the property, window (`days`, default 7, max 3660), lag and timezone
-(`report.timezone`) come from config/defaults. Composes GSC (headline deltas) + Yandex query window +
-Metrika sessions + Bing/CrUX/PSI when configured + stored crawl issues for the period. Returns
+Inputs: `days` (1..90, default 7) and `lag_days` (0..14, default 2). The property, timezone
+(`report.timezone`) and remaining defaults come from config. Composes GSC (headline deltas) + Yandex
+query window + Metrika sessions + Bing/CrUX/PSI when configured + stored crawl issues for the
+period. Returns
 `{period, previous_period, headline, sources, sources_failed, complete, issues, opportunities, limitations}`.
 The headline compares GSC windows only; CrUX is field data, PSI is lab data, and the two are never merged.
 
@@ -84,27 +92,46 @@ differ. Needs `lv24-seo init` and two `report weekly` runs; otherwise `INVALID_I
 
 ### `seo_indexing_triage`
 
-Inputs: none. Buckets not-indexed URLs (GSC coverage, Yandex `search-urls/events`, crawl states)
-into actionable groups with a `next_action` per bucket. No `property`/`urls`/`limit` inputs —
-scope comes from stored crawl + provider data.
+Inputs: `max_examples` (0..20, default 5) — example URLs per bucket. Buckets not-indexed URLs (GSC
+coverage, Yandex `search-urls/events`, crawl states) into actionable groups with a `next_action` per
+bucket. No `property`/`urls`/`limit` inputs — scope comes from stored crawl + provider data.
 
 ### `seo_opportunities`
 
-Inputs: none. Returns ranked opportunities: striking distance, CTR gap, decayed pages.
+Inputs: `days` (1..90, default 28), `limit` (1..500, default 50) and `min_impressions` (default 100).
+Returns ranked opportunities: striking distance, CTR gap, decayed pages.
 Each item carries `evidence` (real numbers) and `expected_clicks` (a prioritisation estimate,
 never a traffic promise). There is no `kind` filter and no `expected_gain` range field.
 
 ## Write tools (gated)
 
+The MCP layer implements the ADR-0003 two-phase contract. A call **without** `confirm_token` is a
+dry run: with `allow_write=true` it returns `status: dry_run`, the full `plan`, a `plan_hash`, a
+`confirm_token` and `ttl_seconds: 300`. Applying needs the same plan plus that token (and, when
+supplied, a matching `plan_hash`; a mismatch is `CONFIRM_REQUIRED`). The secret is
+`LV24_SEO_WRITE_SECRET` from the server environment, never a tool argument. With a workspace store
+the call claims the idempotency slot, so replaying the token returns `status: skipped` /
+`reason: duplicate` and the provider is called once; without a store the envelope warns that replay
+protection is off. A provider failure releases the claim so a genuine retry is allowed.
+
+**Current build:** the engine `SeoService` exposes no recrawl/sitemap write handler, and the
+handler lookup runs before the dry run. Every `seo_recrawl_request` / `seo_sitemap_submit` call with
+`allow_write=true` therefore returns `WRITE_DISABLED` (`… writes are not available in this build`)
+and nothing is sent. The contract above is what the tool layer enforces once the provider adapter
+exists.
+
 ### `seo_recrawl_request`
 
-Yandex recrawl queue. Reads the remaining quota first, refuses when `urls > quota_left`. Requires
-`allow_write=true` plus the confirm token from a dry run (HMAC `confirm_token` + `plan_hash`).
+Yandex recrawl queue. Reads the remaining quota first, refuses when `urls > quota_left`. Inputs:
+`host_id` (defaults to the configured host), `urls`, `allow_write`, `plan_hash`, `confirm_token`.
 
 ### `seo_sitemap_submit`
 
-GSC/Bing sitemap submit. Requires `allow_write=true` plus the confirm token. Google offers no
-general URL submission — the tool says so instead of pretending.
+GSC/Bing sitemap submit. Inputs: `property`, `sitemap_url`, `action` (`submit|delete`),
+`allow_write`, `plan_hash`, `confirm_token`. Google offers no general URL submission — the tool says
+so instead of pretending.
+
+The CLI has the same provider gap for these two actions (only IndexNow really writes).
 
 ## Annotations
 
@@ -149,7 +176,8 @@ Total: 11 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
 ```
 
 Codes: `AUTH_REQUIRED`, `AUTH_INVALID`, `PROPERTY_NOT_FOUND`, `QUOTA_EXCEEDED`, `UPSTREAM_UNAVAILABLE`,
-`TRUNCATED`, `WRITE_DISABLED`, `CONFIRM_REQUIRED`, `INVALID_INPUT`.
+`TRUNCATED`, `WRITE_DISABLED`, `CONFIRM_REQUIRED`, `INVALID_INPUT`, `STORE_LOCKED`, `STORE_CORRUPT`,
+`STORE_UNAVAILABLE`.
 
 ## Transports
 
@@ -164,6 +192,10 @@ Codes: `AUTH_REQUIRED`, `AUTH_INVALID`, `PROPERTY_NOT_FOUND`, `QUOTA_EXCEEDED`, 
 * The sync core runs serially on the event-loop thread and blocks the loop while it runs:
   concurrent `tools/call` requests are serialised instead of racing in SQLite.
   `check_same_thread=False` is deliberately not used.
+* `seo_crawl_site` is the exception: it runs on a worker thread with a **fresh** service and store
+  opened on that thread, under a 600 s budget. A long crawl therefore does not block other tools;
+  on timeout the client gets a retryable `UPSTREAM_UNAVAILABLE` and the crawl finishes and closes
+  its own connection in the background.
 
 ## Registration
 

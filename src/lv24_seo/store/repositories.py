@@ -33,6 +33,7 @@ from typing import Any, cast
 
 from lv24_seo.core.timeutil import utc_now
 from lv24_seo.store.db import connect, initialize
+from lv24_seo.store.errors import translate_sqlite_error
 
 __all__ = ["Store", "canonical_json", "content_hash"]
 
@@ -111,12 +112,20 @@ class Store:
         self.path = str(path)
         self._closed = False
         self._batch_depth = 0
-        conn = connect(path)
         try:
-            initialize(conn)
-        except BaseException:
-            conn.close()
-            raise
+            conn = connect(path)
+            try:
+                initialize(conn, path=self.path)
+            except BaseException:
+                conn.close()
+                raise
+        except sqlite3.Error as exc:
+            # ``connect``/``initialize`` translate their own failures; this guard covers a
+            # raw error raised between them (or by a future schema step) with the real path.
+            translated = translate_sqlite_error(exc, self.path)
+            if translated is None:
+                raise
+            raise translated from exc
         self.conn: sqlite3.Connection = conn
 
     def __enter__(self) -> Store:
@@ -146,25 +155,43 @@ class Store:
             finally:
                 self._batch_depth -= 1
             return
-        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.Error as exc:
+            translated = translate_sqlite_error(exc, self.path)
+            if translated is None:
+                raise
+            raise translated from exc
         self._batch_depth += 1
         try:
-            yield
-        except BaseException:
-            self.conn.rollback()
-            raise
-        else:
-            self.conn.commit()
+            try:
+                yield
+            except BaseException:
+                self.conn.rollback()
+                raise
+            else:
+                self.conn.commit()
+        except sqlite3.Error as exc:
+            translated = translate_sqlite_error(exc, self.path)
+            if translated is None:
+                raise
+            raise translated from exc
         finally:
             self._batch_depth -= 1
 
     @contextlib.contextmanager
     def _write_tx(self) -> Iterator[None]:
-        if self._batch_depth > 0:
-            yield
-        else:
-            with self.conn:
+        try:
+            if self._batch_depth > 0:
                 yield
+            else:
+                with self.conn:
+                    yield
+        except sqlite3.Error as exc:
+            translated = translate_sqlite_error(exc, self.path)
+            if translated is None:
+                raise
+            raise translated from exc
 
     def close(self) -> None:
         """Close the connection; repeated calls are no-ops."""

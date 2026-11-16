@@ -131,7 +131,10 @@
         "crux",
         "crawl"
       ],
-      "inputs": {},
+      "inputs": {
+        "days": "current period length in days (1..90, default 7)",
+        "lag_days": "provider data lag in days (0..14, default 2)"
+      },
       "returns": "{period, headline, deltas, issues, opportunities, limitations}",
       "limitations": [],
       "annotations": {
@@ -175,7 +178,9 @@
         "yandex_webmaster",
         "crawl"
       ],
-      "inputs": {},
+      "inputs": {
+        "max_examples": "example URLs per bucket (0..20, default 5)"
+      },
       "returns": "{buckets:[{reason,count,examples,next_action}]}",
       "limitations": [],
       "annotations": {
@@ -194,7 +199,11 @@
         "gsc",
         "yandex_webmaster"
       ],
-      "inputs": {},
+      "inputs": {
+        "days": "current period length in days (1..90, default 28)",
+        "limit": "1..500 (default 50)",
+        "min_impressions": "minimum impressions for a candidate (default 100)"
+      },
       "returns": "{opportunities:[{kind,url,query,evidence,expected_gain}]}",
       "limitations": [],
       "annotations": {
@@ -213,12 +222,16 @@
         "yandex_webmaster"
       ],
       "inputs": {
-        "host_id": "https:example.com:443",
-        "urls": "list[url]"
+        "host_id": "https:example.com:443 (default: the configured host)",
+        "urls": "list[url]",
+        "allow_write": "explicit opt-in (default false)",
+        "plan_hash": "plan_hash returned by the dry run (apply only)",
+        "confirm_token": "confirm_token returned by the dry run (apply only)"
       },
       "returns": "{queued, quota_left, task_ids}",
       "limitations": [
-        "requires --allow-write",
+        "requires allow_write=true",
+        "apply needs the confirm_token from a dry run; a replay is skipped",
         "hard daily quota"
       ],
       "annotations": {
@@ -240,11 +253,15 @@
       "inputs": {
         "property": "property id",
         "sitemap_url": "absolute URL",
-        "action": "submit|delete"
+        "action": "submit|delete",
+        "allow_write": "explicit opt-in (default false)",
+        "plan_hash": "plan_hash returned by the dry run (apply only)",
+        "confirm_token": "confirm_token returned by the dry run (apply only)"
       },
       "returns": "{ok, provider, status}",
       "limitations": [
-        "requires --allow-write"
+        "requires allow_write=true",
+        "apply needs the confirm_token from a dry run; a replay is skipped"
       ],
       "annotations": {
         "readOnlyHint": false,

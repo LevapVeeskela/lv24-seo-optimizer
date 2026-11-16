@@ -41,7 +41,7 @@ from lv24_seo.core.config import (
     redacted_dump,
     resolve_config_path,
 )
-from lv24_seo.core.envelope import fail, ok
+from lv24_seo.core.envelope import envelope_exit_code, fail, ok, partial
 from lv24_seo.core.errors import CONFIG_INVALID, INTERNAL, INVALID_INPUT, WRITE_DISABLED, SeoError
 from lv24_seo.core.logging import configure_logging_from_env
 from lv24_seo.core.secrets import SecretStore
@@ -99,6 +99,7 @@ def _configure_logging() -> None:
 _DB_FILENAME = "seo.sqlite3"  # canonical: lv24_seo.composition.DB_FILENAME
 _MAX_HUMAN_ROWS = 20
 _MAX_CELL = 100
+_STRICT_HELP = "Exit 5 when the response is truncated (CI gate); meta.strict is always set."
 
 _SCHEDULE_CRONS: dict[str, str] = {
     "weekly": "0 6 * * 1",
@@ -269,12 +270,21 @@ def doctor(
                 ),
             },
         ]
-        fatal = ("python", "cwd_writable")
+        # A declared data directory is part of the workspace contract: when the config file or
+        # LV24_SEO_DATA_DIR names one, every store-backed command needs it. Reporting
+        # `healthy: true` while the directory is missing or unusable made the CI gate useless.
+        data_dir_declared = resolved is not None or bool(
+            os.environ.get("LV24_SEO_DATA_DIR", "").strip()
+        )
+        fatal: tuple[str, ...] = ("python", "cwd_writable")
+        if data_dir_declared:
+            fatal = (*fatal, "data_dir")
         healthy = all(check["ok"] for check in checks if check["id"] in fatal)
         meta = {
             "config": None if resolved is None else str(resolved),
             "data_dir": str(data_dir),
             "data_dir_source": "config" if data_dir.is_absolute() else "working directory",
+            "data_dir_declared": data_dir_declared,
         }
         # A relative data directory is not an error (it is the historical default), but with a
         # config file present it is ambiguous, so it is reported through the envelope warning
@@ -411,6 +421,7 @@ def stats(
     lag_days: Annotated[
         int, typer.Option("--lag-days", min=0, help="Provider data lag in days.")
     ] = 2,
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
     ] = None,
@@ -422,6 +433,7 @@ def stats(
     payload = _run(
         config_path,
         lambda service, config: service.stats(days=days, lag_days=lag_days),
+        strict=strict,
     )
     emit(payload, as_json=as_json, lines=_stats_lines(payload))
 
@@ -435,6 +447,7 @@ def gsc_query(
         typer.Option("--dimensions", help="Comma-separated: query,page,country,device,date."),
     ] = "query",
     limit: Annotated[int, typer.Option("--limit", min=1, help="Maximum rows.")] = 100,
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
     ] = None,
@@ -453,6 +466,7 @@ def gsc_query(
             limit=limit,
         ),
         persist=True,
+        strict=strict,
     )
     emit(payload, as_json=as_json, lines=_gsc_lines(payload))
 
@@ -460,6 +474,7 @@ def gsc_query(
 @yandex_app.command("queries")
 def yandex_queries(
     limit: Annotated[int, typer.Option("--limit", min=1, help="Maximum rows.")] = 100,
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
     ] = None,
@@ -471,12 +486,14 @@ def yandex_queries(
     payload = _run(
         config_path,
         lambda service, config: service.yandex_queries(limit=limit),
+        strict=strict,
     )
     emit(payload, as_json=as_json, lines=_yandex_queries_lines(payload))
 
 
 @yandex_app.command("indexing")
 def yandex_indexing(
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
     ] = None,
@@ -485,7 +502,7 @@ def yandex_indexing(
     ] = False,
 ) -> None:
     """Indexing history, search events, problems and counters for the host."""
-    payload = _run(config_path, lambda service, config: service.yandex_indexing())
+    payload = _run(config_path, lambda service, config: service.yandex_indexing(), strict=strict)
     emit(payload, as_json=as_json, lines=_yandex_indexing_lines(payload))
 
 
@@ -509,14 +526,13 @@ def sitemap_submit(
     ] = None,
     config_path: Annotated[
         Path | None,
-        typer.Option("--config", help="Accepted for uniformity; the plan needs no config."),
+        typer.Option("--config", help="Config file; its data directory holds the write ledger."),
     ] = None,
     as_json: Annotated[
         bool, typer.Option("--json", help="Machine-readable envelope output.")
     ] = False,
 ) -> None:
     """Submit a sitemap to Google Search Console (dry run without --allow-write)."""
-    del config_path
 
     def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
         site = _required_text(property_id, name="--property", example="sc-domain:example.com")
@@ -529,7 +545,9 @@ def sitemap_submit(
         )
         return plan, _sitemap_execute
 
-    payload = _write_command(prepare, allow_write=allow_write, confirm=confirm)
+    payload = _write_command(
+        prepare, allow_write=allow_write, confirm=confirm, config_path=config_path
+    )
     emit(payload, as_json=as_json, lines=_write_lines(payload))
 
 
@@ -572,7 +590,9 @@ def yandex_recrawl(
         )
         return plan, _recrawl_execute
 
-    payload = _write_command(prepare, allow_write=allow_write, confirm=confirm)
+    payload = _write_command(
+        prepare, allow_write=allow_write, confirm=confirm, config_path=config_path
+    )
     emit(payload, as_json=as_json, lines=_write_lines(payload))
 
 
@@ -594,14 +614,13 @@ def indexnow_submit_command(
     ] = None,
     config_path: Annotated[
         Path | None,
-        typer.Option("--config", help="Accepted for uniformity; the plan needs no config."),
+        typer.Option("--config", help="Config file; its data directory holds the write ledger."),
     ] = None,
     as_json: Annotated[
         bool, typer.Option("--json", help="Machine-readable envelope output.")
     ] = False,
 ) -> None:
     """Submit URLs to IndexNow (dry run without --allow-write)."""
-    del config_path
 
     def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
         host_value = _bare_host(host)
@@ -619,7 +638,9 @@ def indexnow_submit_command(
 
         return plan, execute
 
-    payload = _write_command(prepare, allow_write=allow_write, confirm=confirm)
+    payload = _write_command(
+        prepare, allow_write=allow_write, confirm=confirm, config_path=config_path
+    )
     emit(payload, as_json=as_json, lines=_write_lines(payload))
 
 
@@ -628,13 +649,14 @@ def _write_command(
     *,
     allow_write: bool,
     confirm: str | None,
+    config_path: Path | None = None,
 ) -> dict[str, Any]:
     """Run one gated write: plan/validate, dry run without ``--confirm``, apply with it."""
 
     def action() -> dict[str, Any]:
         plan, execute = prepare()
         # A dry run needs no ledger, and must not create a database as a side effect.
-        store, ledger_warnings = (None, []) if confirm is None else _write_ledger()
+        store, ledger_warnings = (None, []) if confirm is None else _write_ledger(config_path)
         try:
             gate = WriteGate(
                 allow_write=allow_write,
@@ -672,18 +694,19 @@ def _write_command(
     return run_envelope(action)
 
 
-def _write_ledger() -> tuple[Store | None, list[str]]:
+def _write_ledger(config_path: Path | None = None) -> tuple[Store | None, list[str]]:
     """Open the shared idempotency ledger, or explain why replay protection is off.
 
     ``WriteGate`` can only recognise a replayed ``confirm_token`` when it has the SQLite
     ledger: without it the same token stays valid for its whole TTL and the provider write can
-    happen twice. The ledger lives in the workspace data directory, so an initialised
-    workspace gets replay protection for free; a write command must still work (with an
-    explicit warning) when the config is missing or invalid, because sitemap and IndexNow
-    submissions need no config.
+    happen twice. The ledger lives in the *selected* workspace data directory, so
+    ``--config /srv/site/seo.toml`` opens ``/srv/site/data`` even when the shell is elsewhere;
+    resolving it from the CWD silently disabled replay protection. A write command must still
+    work (with an explicit warning) when the config is missing or invalid, because sitemap and
+    IndexNow submissions need no config.
     """
     try:
-        config = load_config()
+        config = load_config(config_path)
     except SeoError:
         return None, [
             "write ledger: config could not be loaded; replay protection is off for this run"
@@ -843,6 +866,7 @@ def crawl(
         str | None, typer.Option("--start", help="Start URL (default: project base_url).")
     ] = None,
     max_urls: Annotated[int | None, typer.Option("--max-urls", min=1, help="URL budget.")] = None,
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
     ] = None,
@@ -855,6 +879,7 @@ def crawl(
         config_path,
         lambda service, config: service.crawl_and_store(start_url=start, max_urls=max_urls),
         persist=True,
+        strict=strict,
     )
     emit(payload, as_json=as_json, lines=_crawl_lines(payload))
 
@@ -875,6 +900,7 @@ def report_weekly(
         Path | None,
         typer.Option("--out", help="Directory for report.json and report.html."),
     ] = None,
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
     ] = None,
@@ -887,6 +913,7 @@ def report_weekly(
         config_path,
         lambda service, config: _weekly(service, config, days, lag_days, send, out),
         persist=True,
+        strict=strict,
     )
     emit(payload, as_json=as_json, lines=_report_lines(payload))
 
@@ -905,6 +932,7 @@ def report_diff(
         bool,
         typer.Option("--markdown", help="Print only the Markdown diff (PR comment / CI summary)."),
     ] = False,
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
     ] = None,
@@ -917,13 +945,14 @@ def report_diff(
         config_path,
         lambda service, config: service.report_diff(base=base, head=head),
         persist=True,
+        strict=strict,
     )
     if markdown and payload.get("ok") and not as_json:
         for warning in payload.get("warnings") or []:
             typer.echo(f"warning: {warning}", err=True)
         data = payload.get("data") or {}
         typer.echo(str(data.get("markdown", "")), nl=False)
-        return
+        raise typer.Exit(code=envelope_exit_code(payload))
     emit(payload, as_json=as_json, lines=_diff_lines(payload))
 
 
@@ -1167,6 +1196,7 @@ def _run(
     operation: Callable[[SeoService, SeoConfig], dict[str, Any]],
     *,
     persist: bool = False,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Load the workspace, run one service operation and close storage afterwards."""
 
@@ -1179,7 +1209,32 @@ def _run(
             if store is not None:
                 store.close()
 
-    return run_envelope(action)
+    return _strict_payload(run_envelope(action), strict)
+
+
+def _strict_payload(payload: dict[str, Any], strict: bool) -> dict[str, Any]:
+    """Mark a payload as strict and make truncation visible through ``partial()``.
+
+    ``meta.strict`` alone drives :func:`~lv24_seo.core.envelope.envelope_exit_code` (exit 5
+    when the data is truncated). A truncated strict payload is also rebuilt through
+    :func:`partial` so ``meta.limitations`` always explains what is missing, even for a
+    provider that set ``truncated`` without a limitation note.
+    """
+    if not strict:
+        return payload
+    meta = dict(payload.get("meta") or {})
+    meta["strict"] = True
+    if payload.get("ok") and meta.get("truncated"):
+        limitations = list(meta.get("limitations") or [])
+        if not limitations:
+            limitations = ["truncated: a provider or a local cap limited this response"]
+        return partial(
+            payload.get("data") or {},
+            limitations=limitations,
+            meta=meta,
+            warnings=payload.get("warnings"),
+        )
+    return {**payload, "meta": meta}
 
 
 def _store_for(config: SeoConfig) -> Store | None:
@@ -1959,8 +2014,9 @@ def mcp_serve(
     try:
         asyncio.run(serve(transport=transport, port=port))
     except SeoError as exc:
-        typer.echo(json_module.dumps(fail(exc), ensure_ascii=False))
-        raise typer.Exit(code=1) from exc
+        payload = fail(exc)
+        typer.echo(json_module.dumps(payload, ensure_ascii=False))
+        raise typer.Exit(code=envelope_exit_code(payload)) from exc
 
 
 if __name__ == "__main__":  # pragma: no cover

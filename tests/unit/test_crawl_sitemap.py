@@ -294,3 +294,68 @@ def test_fetch_exception_is_reported_without_raising() -> None:
     assert doc.errors == ["RuntimeError"]
     assert all("sk-live-secret" not in error for error in doc.errors)
     assert doc.urls == []
+
+
+def test_reader_rejects_off_origin_page_locs_by_default() -> None:
+    root = "https://example.com/sitemap.xml"
+    fetch = FakeFetch(
+        {
+            root: FakeResult(
+                body=_urlset(
+                    [
+                        ("https://example.com/a", None),
+                        ("https://evil.example/b", None),
+                    ]
+                ),
+                final_url=root,
+            )
+        }
+    )
+
+    doc = SitemapReader(fetch).read(root)
+
+    assert doc.urls == ["https://example.com/a"]
+    assert doc.errors == ["off_origin_loc"]
+    assert doc.truncated is False
+
+
+def test_reader_does_not_fetch_off_origin_child_sitemaps() -> None:
+    root = "https://example.com/sitemap.xml"
+    child = "https://example.com/pages.xml"
+    evil = "https://evil.example/pages.xml"
+    fetch = FakeFetch(
+        {
+            root: FakeResult(body=_sitemapindex([child, evil]), final_url=root),
+            child: FakeResult(body=_urlset([("https://example.com/a", None)]), final_url=child),
+            evil: FakeResult(body=_urlset([("https://evil.example/x", None)]), final_url=evil),
+        }
+    )
+
+    doc = SitemapReader(fetch).read(root)
+
+    assert fetch.calls == [root, child]
+    assert doc.child_sitemaps == [child]
+    assert doc.urls == ["https://example.com/a"]
+    assert doc.errors == ["off_origin_loc"]
+
+
+def test_reader_allow_url_override_widens_scope_explicitly() -> None:
+    root = "https://example.com/sitemap.xml"
+    fetch = FakeFetch(
+        {
+            root: FakeResult(
+                body=_urlset(
+                    [
+                        ("https://example.com/a", None),
+                        ("https://cdn.example.net/b", None),
+                    ]
+                ),
+                final_url=root,
+            )
+        }
+    )
+
+    doc = SitemapReader(fetch, allow_url=lambda _url: True).read(root)
+
+    assert doc.urls == ["https://example.com/a", "https://cdn.example.net/b"]
+    assert doc.errors == []

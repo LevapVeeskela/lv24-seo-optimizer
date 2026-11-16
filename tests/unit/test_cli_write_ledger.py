@@ -137,3 +137,46 @@ def test_dry_run_does_not_create_a_database(
     _plan(monkeypatch, sent)
 
     assert not (workspace / "data" / "seo.sqlite3").exists()
+
+
+def test_config_path_selects_the_ledger_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sent: list[tuple[str, str, list[str]]]
+) -> None:
+    """ENG-07: replay protection must follow ``--config``, not the shell's working directory."""
+    site = tmp_path / "srv" / "site"
+    site.mkdir(parents=True)
+    config = site / "seo.toml"
+    config.write_text(
+        '[project]\nname = "Example"\n[storage]\ndata_dir = "./data"\n', encoding="utf-8"
+    )
+    (site / "data").mkdir()
+    foreign = tmp_path / "elsewhere"
+    foreign.mkdir()
+    monkeypatch.chdir(foreign)
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", _SECRET)
+
+    args = (
+        "indexnow",
+        "submit",
+        "--host",
+        "example.com",
+        "--key",
+        "abc123",
+        "--url",
+        "https://example.com/a",
+        "--config",
+        str(config),
+        "--json",
+    )
+    dry = _payload(_invoke(*args, "--allow-write"))
+    token = dry["data"]["confirm_token"]
+
+    first = _payload(_invoke(*args, "--allow-write", "--confirm", token))
+    second = _payload(_invoke(*args, "--allow-write", "--confirm", token))
+
+    assert first["data"]["status"] == "applied"
+    assert first["warnings"] == [], "the selected workspace must provide the ledger"
+    assert second["data"]["status"] == "skipped"
+    assert len(sent) == 1
+    assert (site / "data" / "seo.sqlite3").is_file()
+    assert not (foreign / "data").exists()

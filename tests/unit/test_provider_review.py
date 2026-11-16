@@ -86,7 +86,9 @@ def test_yandex_pagination_preserves_window_and_bounds_rows() -> None:
     assert len(result.rows) == 3000
     assert offsets == [0, 499, 998, 1497, 1996, 2495, 2994]
     assert limits[-1] == 6
-    assert result.total == 3500
+    # ``count`` is the page size in this API, not a grand total: with no total the walk
+    # stops at the documented 3,000-query cap and reports truncation.
+    assert result.total is None
     assert result.truncated
 
 

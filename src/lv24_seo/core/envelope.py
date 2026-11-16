@@ -65,11 +65,18 @@ def partial(
     limitations: Sequence[str],
     meta: Mapping[str, Any] | None = None,
     warnings: Sequence[str] | None = None,
+    strict: bool = False,
 ) -> dict[str, Any]:
-    """Successful-but-incomplete result: data is real, coverage is not total."""
+    """Successful-but-incomplete result: data is real, coverage is not total.
+
+    ``strict=True`` marks ``meta.strict`` so :func:`envelope_exit_code` turns a truncated
+    result into exit code 5; the payload stays ``ok: true`` because the data is valid.
+    """
     merged = dict(meta or {})
     merged.setdefault("truncated", False)
     merged["limitations"] = list(limitations)
+    if strict:
+        merged["strict"] = True
     return ok(data, meta=merged, warnings=warnings)
 
 

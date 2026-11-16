@@ -26,6 +26,8 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any
 
+from lv24_seo.report.render import escape_markdown
+
 __all__ = ["diff_snapshots", "render_diff_markdown"]
 
 _HEADLINE_METRICS: tuple[str, ...] = ("clicks", "impressions", "ctr", "position")
@@ -100,13 +102,18 @@ def diff_snapshots(base: Mapping[str, Any], head: Mapping[str, Any]) -> dict[str
 
 
 def render_diff_markdown(diff: Mapping[str, Any]) -> str:
-    """Render :func:`diff_snapshots` output as GitHub-flavoured Markdown."""
+    """Render :func:`diff_snapshots` output as GitHub-flavoured Markdown.
+
+    Every value that can originate in provider data (queries, pages, property ids, limitation
+    text) is escaped: a PR comment must not gain links, emphasis or ``@`` mentions from a
+    crawled page title.
+    """
     base = _mapping(diff.get("base"))
     head = _mapping(diff.get("head"))
     lines = [
-        f"### SEO report diff: {base.get('period', '?')} → {head.get('period', '?')}",
+        f"### SEO report diff: {_md(base.get('period', '?'))} → {_md(head.get('period', '?'))}",
         "",
-        f"Property: `{head.get('property_id') or base.get('property_id') or '?'}` · "
+        f"Property: {_md(head.get('property_id') or base.get('property_id') or '?')} · "
         f"comparable: **{'yes' if diff.get('comparable') else 'no'}**",
         "",
     ]
@@ -116,7 +123,7 @@ def render_diff_markdown(diff: Mapping[str, Any]) -> str:
         for row in headline:
             pct = row.get("pct_delta")
             lines.append(
-                f"| {row['metric']} | {_num(row['base'])} | {_num(row['head'])} | "
+                f"| {_md(row.get('metric'))} | {_num(row['base'])} | {_num(row['head'])} | "
                 f"{_signed(row['abs_delta'])} | {'n/a' if pct is None else _signed(pct) + '%'} |"
             )
         lines.append("")
@@ -129,7 +136,7 @@ def render_diff_markdown(diff: Mapping[str, Any]) -> str:
         lines.append(
             "**Issues by severity:** "
             + ", ".join(
-                f"{row['severity']} {row['base']}→{row['head']} ({_signed(row['delta'])})"
+                f"{_md(row.get('severity'))} {row['base']}→{row['head']} ({_signed(row['delta'])})"
                 for row in changed
             )
         )
@@ -142,8 +149,9 @@ def render_diff_markdown(diff: Mapping[str, Any]) -> str:
             continue
         lines.append(f"**{label} ({len(rows)}):**")
         for row in rows[:_MAX_LISTED]:
-            page = f" — {row['page']}" if row.get("page") else ""
-            lines.append(f"- `{row['kind']}` {row['query'] or '(no query)'}{page}")
+            page = f" — {_md(row.get('page'))}" if row.get("page") else ""
+            query = _md(row.get("query") or "(no query)")
+            lines.append(f"- {_md(row.get('kind'))} {query}{page}")
         if len(rows) > _MAX_LISTED:
             lines.append(f"- … and {len(rows) - _MAX_LISTED} more")
         lines.append("")
@@ -153,12 +161,12 @@ def render_diff_markdown(diff: Mapping[str, Any]) -> str:
         values = _strings(limits.get(key))
         if values:
             lines.append(f"**{label}:**")
-            lines += [f"- {value}" for value in values]
+            lines += [f"- {_md(value)}" for value in values]
             lines.append("")
 
     caveats = _strings(diff.get("limitations"))
     if caveats:
-        lines.append("> **Caveats:** " + "; ".join(caveats))
+        lines.append("> **Caveats:** " + "; ".join(_md(caveat) for caveat in caveats))
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -253,6 +261,11 @@ def _number(value: object) -> float | None:
 
 def _mapping(value: object) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _md(value: object) -> str:
+    """Markdown-escape one untrusted value; missing values render as an empty string."""
+    return "" if value is None else escape_markdown(value)
 
 
 def _strings(value: object) -> list[str]:

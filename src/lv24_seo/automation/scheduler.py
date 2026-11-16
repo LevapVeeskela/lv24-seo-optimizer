@@ -41,6 +41,7 @@ _WINDOWS_HINT = "use a simple daily/weekly cron like '0 6 * * 1'"
 
 _BLOCK_BEGIN = "# >>> lv24-seo:{name} >>>"
 _BLOCK_END = "# <<< lv24-seo:{name} <<<"
+_MANAGED_BEGIN_PREFIX = "# >>> lv24-seo:"
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,7 +236,9 @@ def install(spec: ScheduleSpec, *, target: str = "auto", dry_run: bool = True) -
     }
     if dry_run:
         return result
-    result["paths"] = _apply(spec, resolved, files)
+    repair_warnings: list[str] = []
+    result["paths"] = _apply(spec, resolved, files, warnings=repair_warnings)
+    result["warnings"] = [*result["warnings"], *repair_warnings]
     result["installed"] = True
     return result
 
@@ -406,9 +409,15 @@ def _install_command(spec: ScheduleSpec, target: str) -> str:
     return f"schtasks /Create /XML {_windows_xml_path(spec)} /TN {spec.name} /F"
 
 
-def _apply(spec: ScheduleSpec, target: str, files: dict[str, str]) -> dict[str, str]:
+def _apply(
+    spec: ScheduleSpec,
+    target: str,
+    files: dict[str, str],
+    *,
+    warnings: list[str] | None = None,
+) -> dict[str, str]:
     if target == "cron":
-        _apply_cron(spec)
+        _apply_cron(spec, warnings=warnings)
         return {}
     if target == "systemd":
         directory = _systemd_user_dir()
@@ -439,10 +448,10 @@ def _apply(spec: ScheduleSpec, target: str, files: dict[str, str]) -> dict[str, 
     return {f"{spec.name}.xml": str(path)}
 
 
-def _apply_cron(spec: ScheduleSpec) -> None:
+def _apply_cron(spec: ScheduleSpec, *, warnings: list[str] | None = None) -> None:
     crontab = _resolve_binary("crontab")
     current = _read_crontab(crontab)
-    updated = _replace_block(current, _cron_block(spec), spec.name)
+    updated = _replace_block(current, _cron_block(spec), spec.name, warnings=warnings)
     if updated == current:
         return  # already installed: keep the crontab untouched
     _run(
@@ -477,10 +486,16 @@ def _cron_block(spec: ScheduleSpec) -> str:
     return f"{begin}\n{render_cron(spec)}{end}\n"
 
 
-def _replace_block(text: str, block: str, name: str) -> str:
+def _replace_block(
+    text: str,
+    block: str,
+    name: str,
+    *,
+    warnings: list[str] | None = None,
+) -> str:
     begin = _BLOCK_BEGIN.format(name=name)
     end = _BLOCK_END.format(name=name)
-    lines = _strip_managed_blocks(text.splitlines(), begin, end)
+    lines = _strip_managed_blocks(text.splitlines(), begin, end, warnings=warnings)
     while lines and not lines[-1].strip():
         lines.pop()
     if lines:
@@ -489,12 +504,21 @@ def _replace_block(text: str, block: str, name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _strip_managed_blocks(lines: list[str], begin: str, end: str) -> list[str]:
-    """Drop every managed block for ``begin``/``end``, including a truncated one.
+def _strip_managed_blocks(
+    lines: list[str],
+    begin: str,
+    end: str,
+    *,
+    warnings: list[str] | None = None,
+) -> list[str]:
+    """Drop every managed block for ``begin``/``end``, repairing a truncated one safely.
 
-    A missing end marker used to leave the old schedule in place and append a second block.
-    Treat the damaged block as extending to the next managed marker (or EOF) so re-installing
-    repairs the crontab instead of duplicating the job.
+    A missing end marker used to make the block extend to the next managed marker (or EOF),
+    which silently deleted every user cron entry that followed the damaged block. Repair is
+    now conservative: when no end marker exists, only lines that look like lv24-seo schedule
+    entries (``CRON_TZ=``, a ``# lv24-seo`` comment, or a cron line whose command invokes
+    ``lv24-seo``) are removed; everything else is kept and a warning tells the operator to
+    review ``crontab -l``. A terminated block is still removed as a whole.
     """
     kept: list[str] = []
     index = 0
@@ -503,12 +527,69 @@ def _strip_managed_blocks(lines: list[str], begin: str, end: str) -> list[str]:
             kept.append(lines[index])
             index += 1
             continue
+        start = index
+        terminator = _block_terminator(lines, index + 1, begin, end)
+        if terminator is not None:
+            index = terminator + 1
+            continue
+        if warnings is not None:
+            warnings.append(
+                f"crontab: repaired an unterminated managed block ({begin}); "
+                "lines that did not look like lv24-seo entries were kept — review `crontab -l`"
+            )
         index += 1
-        while index < len(lines) and lines[index].strip() not in (begin, end):
+        while index < len(lines):
+            marker = lines[index].strip()
+            if marker == end or _is_managed_begin(marker):
+                break
+            if not _looks_managed_line(lines[index], position=index - start):
+                kept.append(lines[index])
             index += 1
         if index < len(lines) and lines[index].strip() == end:
-            index += 1
+            index += 1  # stray end marker of the damaged block
     return kept
+
+
+def _is_managed_begin(marker: str) -> bool:
+    """True for any ``# >>> lv24-seo:<job> >>>`` marker, including another job's block."""
+    return marker.startswith(_MANAGED_BEGIN_PREFIX) and marker.endswith(">>>")
+
+
+def _block_terminator(lines: list[str], start: int, begin: str, end: str) -> int | None:
+    """Index of the closing marker, or ``None`` when the block is unterminated.
+
+    Another job's begin marker is a boundary as well: an unterminated block ends there, so a
+    later install of that other job still finds and replaces its own intact block.
+    """
+    index = start
+    while index < len(lines):
+        marker = lines[index].strip()
+        if marker == end:
+            return index
+        if marker == begin or _is_managed_begin(marker):
+            return None
+        index += 1
+    return None
+
+
+def _looks_managed_line(line: str, *, position: int) -> bool:
+    """Recognise a line this module writes inside a managed cron block.
+
+    Used only when a block has no end marker: anything that is not clearly ours is preserved,
+    because deleting a user's cron job is unrecoverable while leaving a stale lv24-seo line is
+    visible and harmless. ``position`` is the line offset from the begin marker; ``CRON_TZ=``
+    is only ours near the top of the block, so a user's own zone assignment further down (it
+    applies to their later entries) survives the repair.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("CRON_TZ="):
+        return position <= 2
+    if stripped.startswith("#") and "lv24-seo" in stripped:
+        return True
+    fields = stripped.split()
+    return bool(len(fields) >= 6 and any("lv24-seo" in field for field in fields[5:]))
 
 
 def _run(

@@ -25,12 +25,13 @@ policy instead of inventing its own.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, date, datetime
 from types import TracebackType
 from typing import Any
 
 from lv24_seo.core.errors import AUTH_REQUIRED, INVALID_INPUT, SeoError
 from lv24_seo.core.http import HttpClient
-from lv24_seo.providers.base import ProviderResult, Row, now_utc
+from lv24_seo.providers.base import ProviderResult, Row, data_age_days, now_utc
 
 __all__ = ["BingClient", "indexnow_submit"]
 
@@ -105,28 +106,42 @@ class BingClient:
         self.close()
 
     def query_stats(self) -> ProviderResult[Row]:
-        """Return query-level clicks, impressions and average position."""
+        """Return query-level clicks, impressions and average position.
+
+        Bing aggregates query stats per day and stamps every row with ``Date``; the newest
+        row date is the end of the reported window, so it drives ``data_age_days`` instead of
+        a hardcoded zero that would present week-old data as fresh.
+        """
         items, warnings = self._fetch_rows("GetQueryStats")
         rows: list[Row] = [_query_row(item) for item in items]
+        fetched_at = now_utc()
         return ProviderResult(
             source="bing",
             property_id=self._site_url,
-            fetched_at=now_utc(),
-            data_age_days=0,
+            fetched_at=fetched_at,
+            data_age_days=_newest_row_age(items, fetched_at, ("Date", "date")),
             rows=rows,
             total=len(rows),
             warnings=warnings,
         )
 
     def crawl_issues(self) -> ProviderResult[Row]:
-        """Return crawl issues reported by Bing for this site."""
+        """Return crawl issues reported by Bing for this site.
+
+        The issue feed has no window: ``DateDetected`` is when an issue was first seen, not
+        how old the feed is. The newest detection still bounds how fresh the reported data
+        can be, so it is used for ``data_age_days``; an empty feed stays at zero.
+        """
         items, warnings = self._fetch_rows("GetCrawlIssues")
         rows: list[Row] = [_crawl_row(item) for item in items]
+        fetched_at = now_utc()
         return ProviderResult(
             source="bing",
             property_id=self._site_url,
-            fetched_at=now_utc(),
-            data_age_days=0,
+            fetched_at=fetched_at,
+            data_age_days=_newest_row_age(
+                items, fetched_at, ("DateDetected", "dateDetected", "Detected", "detected")
+            ),
             rows=rows,
             total=len(rows),
             warnings=warnings,
@@ -259,6 +274,51 @@ def _unwrap_items(payload: Any) -> tuple[list[Any], tuple[str, ...]]:
     if isinstance(payload, list):
         return payload, ()
     return [], (UNEXPECTED_SHAPE_WARNING,)
+
+
+def _newest_row_age(
+    items: Sequence[Mapping[str, Any]],
+    fetched_at: datetime,
+    keys: tuple[str, ...],
+) -> int:
+    """Age in whole days of the newest dated row; ``0`` when no row carries a date."""
+    newest: datetime | None = None
+    for item in items:
+        parsed = _parse_row_date(_pick(item, *keys))
+        if parsed is not None and (newest is None or parsed > newest):
+            newest = parsed
+    if newest is None:
+        return 0
+    return data_age_days(end=newest, fetched_at=fetched_at)
+
+
+def _parse_row_date(value: Any) -> datetime | None:
+    """Parse a WCF ``/Date(ms)/`` value, an ISO string, an epoch or a date object."""
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime(value.year, value.month, value.day, tzinfo=UTC)
+    elif isinstance(value, bool):
+        return None
+    elif isinstance(value, int | float):
+        # WCF JSON dates are milliseconds since the Unix epoch.
+        parsed = datetime.fromtimestamp(float(value) / 1000.0, tz=UTC)
+    elif isinstance(value, str):
+        text = value.strip()
+        if text.startswith("/Date(") and text.endswith(")/"):
+            text = text[len("/Date(") : -len(")/")]
+        try:
+            if text.isdigit():
+                parsed = datetime.fromtimestamp(float(text) / 1000.0, tz=UTC)
+            else:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except (OverflowError, OSError, ValueError):
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _query_row(item: Mapping[str, Any]) -> Row:

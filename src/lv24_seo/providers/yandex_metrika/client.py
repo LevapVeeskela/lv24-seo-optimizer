@@ -29,6 +29,11 @@ DEFAULT_BASE_URL = "https://api-metrika.yandex.net"
 
 _LOGIN_NEXT_ACTION = "lv24-seo auth login --provider yandex"
 _SESSION_PREFIX = "ym:s:"
+# Metrika allows 200 stat requests per 5 minutes; a 10k-row walk is 100 pages at the
+# default page size and stays inside one quota window. The page cap also bounds a walk made
+# with a tiny caller page size, so one call can never exhaust the quota.
+_MAX_STAT_ROWS = 10_000
+_MAX_STAT_PAGES = 100
 
 Row = dict[str, Any]
 
@@ -102,13 +107,19 @@ class YandexMetrikaClient:
         filters: str | None = None,
         accuracy: str = "medium",
         limit: int = 100,
+        max_rows: int = _MAX_STAT_ROWS,
     ) -> ProviderResult[Row]:
-        """Read one ``stat/v1/data`` table.
+        """Read one ``stat/v1/data`` table, paging by ``offset`` up to ``total_rows``.
 
         Row keys are the requested dimension and metric names with the session prefix removed
         (``ym:s:startURLPath`` -> ``startURLPath``, ``ym:s:visits`` -> ``visits``). Every metric
         value is a float. A sampled response carries the ``sampled`` limitation and warning so a
         consumer can label the number instead of presenting it as exact.
+
+        ``limit`` is the page size, not the result size: the table is walked with ``offset``
+        until ``total_rows`` is reached, a short page arrives or ``max_rows`` caps the walk.
+        When ``total_rows`` is absent and a page comes back full, more rows may exist, so the
+        result is marked ``truncated`` instead of looking complete.
         """
         counter_id = _counter_id(counter)
         metric_names = _names(metrics, what="metrics", required=True)
@@ -124,6 +135,11 @@ class YandexMetrikaClient:
                 next_action="pass an inclusive date window",
             )
         page_limit = _require_limit(limit)
+        row_cap = _require_max_rows(max_rows)
+        if not dimension_names:
+            # Without dimensions the table has exactly one row. A misreported ``total_rows``
+            # must not turn an aggregate call into a long page walk.
+            row_cap = 1
 
         form: dict[str, str] = {
             "ids": counter_id,
@@ -132,25 +148,60 @@ class YandexMetrikaClient:
             "date1": first.isoformat(),
             "date2": last.isoformat(),
             "accuracy": accuracy,
-            "limit": str(page_limit),
         }
         if filters is not None and filters.strip():
             form["filters"] = filters.strip()
 
-        payload = self._http.get_json(
-            self._url("/stat/v1/data"),
-            params=form,
-            headers=self._auth_headers(),
-            rate_limit_key="yandex_metrika",
-        )
-        table = _require_mapping(payload)
-        rows = _stat_rows(
-            table,
-            dimension_names=dimension_names,
-            metric_names=metric_names,
-        )
-        total = _total_rows(table)
-        sampled = table.get("sampled") is True
+        rows: list[Row] = []
+        total: int | None = None
+        sampled = False
+        truncated = False
+        offset = 0
+        pages = 0
+
+        while True:
+            if pages >= _MAX_STAT_PAGES:
+                # The request budget stopped the walk before the table ended.
+                truncated = True
+                break
+            pages += 1
+            page_form = {**form, "limit": str(page_limit), "offset": str(offset)}
+            payload = self._http.get_json(
+                self._url("/stat/v1/data"),
+                params=page_form,
+                headers=self._auth_headers(),
+                rate_limit_key="yandex_metrika",
+            )
+            table = _require_mapping(payload)
+            if total is None:
+                total = _total_rows(table)
+            sampled = sampled or table.get("sampled") is True
+            batch = _stat_rows(
+                table,
+                dimension_names=dimension_names,
+                metric_names=metric_names,
+            )
+            rows.extend(batch)
+
+            if len(batch) < page_limit:
+                # A short page proves the table ended.
+                break
+            if len(rows) >= row_cap:
+                # The row budget stopped the walk before the table ended.
+                rows = rows[:row_cap]
+                truncated = total is None or total > len(rows)
+                break
+            if total is None:
+                # A full page with no grand total: there may be more rows behind it.
+                truncated = True
+                break
+            if len(rows) >= total:
+                rows = rows[:total]
+                break
+            offset = len(rows)
+
+        if total is not None and total > len(rows):
+            truncated = True
 
         # Metrika reports whole days; the window is complete at 23:59 UTC on ``date2``.
         fetched = now_utc()
@@ -162,7 +213,7 @@ class YandexMetrikaClient:
             data_age_days=data_age_days(end=window_end, fetched_at=fetched),
             rows=rows,
             total=total,
-            truncated=total is not None and total > page_limit,
+            truncated=truncated,
             limitations=(SAMPLED,) if sampled else (),
             warnings=("sampled",) if sampled else (),
         )
@@ -239,6 +290,17 @@ def _require_limit(limit: int) -> int:
             code=INVALID_INPUT,
             message=f"limit must be an integer >= 1, got {candidate!r}",
             next_action="pass a page size such as 100",
+        )
+    return candidate
+
+
+def _require_max_rows(max_rows: int) -> int:
+    candidate: object = max_rows
+    if isinstance(candidate, bool) or not isinstance(candidate, int) or candidate < 1:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"max_rows must be an integer >= 1, got {candidate!r}",
+            next_action="pass a row budget such as 10000",
         )
     return candidate
 
