@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
@@ -481,9 +482,12 @@ def test_cwv_collect_help_lists_the_documented_options() -> None:
 
     assert result.exit_code == 0
     help_text = _stdout(result)
+    # Rich may split an option across lines or inject ANSI resets at narrow widths.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", help_text)
+    compact = re.sub(r"\s+", "", plain)
     for flag in ("--url", "--device", "--source", "--limit", "--config", "--json"):
-        assert flag in help_text
-    assert "phone, desktop, tablet or all" in help_text
+        assert flag in compact
+    assert "phone,desktop,tabletorall" in compact
 
 
 def test_cwv_collect_emits_the_standard_envelope(

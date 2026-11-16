@@ -466,7 +466,8 @@ def test_schtasks_output_is_decoded_from_utf16() -> None:
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the OEM code page is Windows-specific")
-def test_schtasks_russian_not_found_is_decoded_from_oem() -> None:
+def test_schtasks_russian_not_found_is_decoded_from_oem(monkeypatch: pytest.MonkeyPatch) -> None:
     message = "ОШИБКА: Не удается найти указанный файл.".encode("cp866")  # noqa: RUF001
+    monkeypatch.setattr(scheduler, "_windows_oem_encoding", lambda: "cp866")
 
     assert "не удается найти" in scheduler._decode_scheduler_output(message).lower()

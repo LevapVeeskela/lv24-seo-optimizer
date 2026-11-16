@@ -897,6 +897,25 @@ def _query_windows_task(schtasks: str, name: str) -> str | None:
     )
 
 
+def _windows_oem_encoding() -> str:
+    """The host's OEM code page (``cp866`` on Russian Windows, ``cp437`` on English).
+
+    ``schtasks`` writes console output in the OEM code page. Python's ``oem`` alias is
+    resolved from the active locale, which is not necessarily the code page that produced
+    the bytes; asking the kernel directly keeps the decode deterministic and testable.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            code_page = int(ctypes.windll.kernel32.GetOEMCP())
+            if code_page > 0:
+                return f"cp{code_page}"
+        except (AttributeError, OSError, ValueError):
+            pass
+    return "oem"
+
+
 def _decode_scheduler_output(data: bytes) -> str:
     """Decode ``schtasks`` output, which is UTF-16 when redirected on Windows."""
 
@@ -911,7 +930,7 @@ def _decode_scheduler_output(data: bytes) -> str:
     except UnicodeDecodeError:
         if sys.platform == "win32":
             # Console output uses the OEM code page; the ANSI page is a fallback.
-            for encoding in ("oem", "mbcs"):
+            for encoding in (_windows_oem_encoding(), "oem", "mbcs"):
                 try:
                     return data.decode(encoding)
                 except (UnicodeDecodeError, LookupError):
