@@ -22,8 +22,8 @@ MCP tools return the same envelope (as `structuredContent` when the SDK supports
 | `UPSTREAM_UNAVAILABLE` | 4 | often | Network/timeout, HTTP 5xx, invalid JSON, or a capability the client does not implement | Retry later; check egress and provider status |
 | `WRITE_DISABLED` | 2 | no | A write was attempted without `--allow-write`/`allow_write`, the write secret is missing, the adapter is not wired, or a secret could not be stored | See [Write tools](#write_disabled--confirm_required) |
 | `CONFIRM_REQUIRED` | 2 | no | A gated write received a missing, expired or plan-mismatched confirm token | Rerun the dry run and pass the fresh token |
-| `INVALID_INPUT` | 2 | no | Bad flag, date, limit, URL, provider name or client name | Fix the argument; read `next_action` |
-| `CONFIG_INVALID` | 2 | no | Bad `seo.toml`, bad host JSON, BOM, or a missing explicit config path | Fix the file named in the message |
+| `INVALID_INPUT` | 2 | no | Bad flag, date, limit, URL, path, task transition, provider name or client name | Fix the argument; read `next_action` |
+| `CONFIG_INVALID` | 2 | no | Bad `seo.toml`, bad host JSON, BOM, a missing explicit config path, or `tasks` without an initialised workspace | Fix the file named in the message, or run `lv24-seo init` |
 | `STORE_LOCKED` | 1 | yes | Another process holds the SQLite write lock past the busy timeout | Wait for the other run (crawl, report, MCP server), then retry; nothing was written |
 | `STORE_CORRUPT` | 1 | no | The database file is not valid SQLite; a byte copy is kept as `<db>.corrupt-<utc>` | Inspect `detail.backup_path`, move the original aside, rerun |
 | `STORE_UNAVAILABLE` | 1 | no | SQLite could not open or write the path (permissions, missing directory, disk) | Fix the path/permissions; run `doctor --json` |
@@ -313,6 +313,30 @@ The store translates raw `sqlite3` failures into typed errors instead of a gener
 | `STORE_UNAVAILABLE` | SQLite could not open or write the path: permissions, missing parent directory, read-only file, disk full or I/O error. | Check the directory and free space; `lv24-seo doctor --json` now fails when a declared data directory is unusable. |
 
 The message and `detail` never contain row data, tokens or SQL parameters.
+
+`backup create` is the one `STORE_CORRUPT` path that does **not** write `<db>.corrupt-<utc>`: it
+promises to leave the source workspace untouched, so it reports the corrupt file and writes no
+archive. Inspect or restore that file from another copy.
+
+## logs, tasks and backup
+
+These commands add no new error codes; they reuse `INVALID_INPUT` (exit `2`), `CONFIG_INVALID`
+(exit `2`) and `STORE_CORRUPT` (exit `1`).
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `logs analyze` says the path “must be absolute”, “must name exactly one file, not a glob”, or “UNC, network and device paths are not accepted” | The log path contract is deliberately narrow | Pass one absolute local regular file: no `*`, `?`, `[`, no `\\server\share`, no `NUL`/`COM1` |
+| `logs analyze` says the path “is a directory” or “is not a regular file” | A directory or special file was passed | Pass the access log itself |
+| `logs analyze` says the file “is larger than the … byte limit” | The log exceeds **100 MiB** | Rotate or split the log and analyse one part at a time |
+| `warnings: skipped N of M lines: blank or not nginx JSON` | Blank, truncated or non-JSON lines | Expected for a rotated or partially written log; the parsed share is reported |
+| Bot counts look wrong, or a fake Googlebot appears | Bot classes are **user-agent only** | Treat the rollup as triage; there is no reverse-DNS or published-IP verification |
+| `tasks …` returns `CONFIG_INVALID`: “tasks need the local history store” | No initialised data directory | Run `lv24-seo init`, or set `storage.data_dir` and retry |
+| `tasks update` returns `INVALID_INPUT`: “invalid task transition” | The requested move is not in the lifecycle | Allowed: `open → in_progress\|verified\|dismissed`, `in_progress → open\|verified\|dismissed`, `verified → open\|dismissed`, `dismissed → open\|in_progress` |
+| `tasks add --payload` rejects a field as a credential | A key ends with `token`, `secret`, `password`, `api_key` or `authorization` | Store evidence only; remove the field |
+| `backup create` says the output directory must be absolute, does not exist or is not a directory | `--out` must be an existing absolute directory | Create it first, then pass the absolute path |
+| `backup create` says “the archive already exists” | The timestamped name already exists (a rerun in the same second) | Pass `--force` to replace it, or wait a second |
+| `backup create` returns `STORE_CORRUPT` | The source database is not valid SQLite | The source is left untouched and no archive is written; inspect or restore it from another copy |
+| `backup create` warns “the database was not found” | A config-only workspace | The archive contains `seo.toml` only; run `init` if you expected history |
 
 ## Empty or partial reports
 

@@ -75,6 +75,7 @@ Rules:
 | `pages` | URL inventory | `property_id`, `url`, `status`, `index_state`, `canonical`, `title_hash`, `last_seen`, `first_seen` |
 | `crawl_runs` | legacy crawl metadata (superseded by `runs kind=crawl`) | `id`, `start_url`, `started_at`, `finished_at`, `urls`, `errors`, `status` |
 | `issues` | crawl + provider findings | `rule_id`, `severity`, `property_id`, `url`, `detail_json`, `first_seen`, `last_seen`, `state` (`open`/`fixed`/`ignored`) |
+| `tasks` | finding/task lifecycle (v3) | `kind`, `property_id`, `url`, `rule_id`, `state` (`open`/`in_progress`/`verified`/`dismissed`), `payload_json`, `created_at`, `updated_at`; unique on `(kind, property_id, url, rule_id)` |
 | `snapshots` | diff base for reports | `kind`, `property_id`, `period`, `content_hash`, `payload_gz` |
 | `sends` | delivery ledger | `kind`, `property_id`, `period`, `content_hash`, `channel`, `sent_at`, `status` |
 | `bot_daily` | nginx log rollup | `property_id`, `date`, `bot`, `status`, `hits`, `bytes`, `p95_ms` |
@@ -88,6 +89,18 @@ containing `|` cannot collide.
 Migration 2 marks pre-migration **GSC** daily rows (other sources are untouched) with `accuracy=legacy_unknown_granularity`; their
 original window cannot be recovered. Normal daily reads exclude them. Repository callers may
 explicitly use `include_legacy=True` to inspect retained data; no historical rows are deleted.
+Migration 3 adds the `tasks` table (state `CHECK` plus two indexes) and is applied on the next open;
+a fresh database records versions 1..3 in `schema_migrations`. The task natural key is
+`(kind, property_id, url, rule_id)`, so re-running a crawl or decay scan never duplicates a task.
+`bot_daily` stays a reserved table: `logs analyze` and `seo_log_analysis` return their rollups
+in-memory and do not persist them, so log history is not stored.
+
+Task states are closed (`open`, `in_progress`, `verified`, `dismissed`). The repository validates
+moves against a fixed transition map and `upsert_task` returns `created`, `existing` or `reopened`:
+a `verified` task observed again reopens to `open` (a proven regression), a `dismissed` task stays
+dismissed until an explicit update, and a repeated observation without a payload is a no-op. Reads
+and writes happen in one `BEGIN IMMEDIATE` transaction, so concurrent crawls cannot duplicate a
+task or race a triage decision.
 
 There are no on-disk raw provider archives: snapshots are gzipped canonical JSON inside the
 `snapshots` table, and `raw_retention_days` is currently a reserved setting (pruning logs that it
@@ -107,6 +120,8 @@ traceback instead of being disguised as a disk problem.
 | `analysis/delta.py` | two `metric_daily` windows | headline deltas with significance thresholds |
 | `analysis/opportunities.py` | current + previous GSC `query`/`page` rows | striking distance (pos 8–20, impressions ≥ N), CTR gaps, decayed pages (vanished rows count as zero only with complete, untruncated coverage) |
 | `analysis/indexing.py` | URL Inspection + Yandex indexing + crawl | reason buckets + next action |
+| `analysis/digest.py` | significant delta rows + stored issues/pages (+ optional indexing events) | attributed change digest: cause, confidence, evidence, next action, `unexplained` when nothing matches |
+| `analysis/logs.py` | one local nginx JSON access log | bot/day/status rollups, nearest-rank p95 and crawl-waste share (read-only, UA-only bot classes) |
 | `analysis/rules/` | crawl results | one module per rule, `RULE_ID`, `SEVERITY`, `check(ctx)` |
 | `analysis/fusion.py` | per-provider query rows | joined view with explicit provider caveats (no fake query×page join) |
 
@@ -117,7 +132,19 @@ query level (clicks/impressions) separately, and the report labels which engine 
 
 * `report/builders.py` produce a `Report` dataclass (JSON-serialisable, canonical English).
   `Report.to_dict()` has no locale field: snapshots, report diff and MCP payloads do not change
-  with the display language.
+  with the display language. `build_weekly` accepts an opt-in `digest_evidence` mapping; without
+  it the historical section list is unchanged. With it, the builder adds a bounded `digest`
+  section whose rows carry `metric`, `change`, `cause`, `confidence`, `evidence` and
+  `next_action`; `ReportSection` gained optional `total`/`truncated`/`data_age` fields that are
+  only serialised for sections that set them.
+* The digest is honest by construction: only significant, non-flat delta rows are explained; a
+  change with no matching evidence stays `unexplained`; rules that cannot move search metrics
+  (image alt, HTML `lang`) are never candidates; unknown rules are low-confidence only; items are
+  capped at 8 and evidence at 3 per item, with `total`/`truncated` describing the full set and
+  `data_age` the oldest evidence date actually shown. Evidence rows without a rule id/URL are
+  dropped and counted in `malformed_rows`, never guessed at. The weekly service supplies stored
+  `issues` and `pages` rows only (there is no indexing-event table yet) and omits the section when
+  the GSC windows are not comparable or the store has no evidence at all.
 * `report/i18n.py` is presentation-only: locale catalogs (`en`, `ru`, `zh`), plural rules and
   number/percent/position/date formatting. An unknown locale falls back to English; an invalid
   numeric or date value renders as empty text, never as `0`.
@@ -204,3 +231,26 @@ query level (clicks/impressions) separately, and the report labels which engine 
   engine service still exposes no recrawl/sitemap provider handler, so those applies return
   `WRITE_DISABLED` and nothing is sent.
 * Logs are redacted at the formatter level, not per call site.
+
+## 9. Backup bundle
+
+`lv24-seo backup create` (and `core/backup.py`) produces one portable zip without a cloud account:
+
+```
+manifest.json      format/version, engine + schema versions, created_at,
+                   files:[{path,size,sha256}], totals, summary, limitations
+seo.toml           validated config, secret-looking keys masked as ***,
+                   storage.data_dir reset to ./data
+data/seo.sqlite3   consistent copy via the SQLite backup API, DELETE journal
+                   (report snapshots live in the snapshots table)
+```
+
+The source workspace is never modified: the config is only read and the database is opened with
+`mode=ro` and `PRAGMA query_only`. `secrets.json`, provider tokens, logs, raw responses and caches
+are excluded. Every payload member is hashed before it is written, the archive itself is hashed
+(`archive_sha256` in the envelope), and the zip is written to a temporary file in the output
+directory and renamed atomically, so a failed run leaves no half-written archive. Caps: 4 MiB config
+and 2 GiB database (plus WAL); a larger source must be archived manually. A corrupt source is
+`STORE_CORRUPT` and is left untouched — the store's usual `.corrupt-*` copy is deliberately not
+written by this command. **Restore is not implemented**; the manifest is the documented contract
+for a manual restore.

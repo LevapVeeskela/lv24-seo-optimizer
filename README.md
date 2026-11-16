@@ -55,14 +55,17 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.5.3).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
-Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule crawler, SQLite history, analysis (deltas, opportunities,
-indexing triage, multi-engine fusion, nginx log stats), per-provider `stats`, report builders +
-HTML/text/Markdown renderers,
-SMTP/Telegram delivery with idempotency, the 17-command CLI, the MCP server (11 tools, 3 resources,
-3 prompts) and scheduler generators. Canonical source ids, GSC-only headline deltas, partial
-provider isolation and window/daily storage separation are enforced with regression tests.
-`0.5.3` is the P0 hardening release; see [`docs/releases/0.5.3.md`](docs/releases/0.5.3.md).
+**Beta (0.6.0 release candidate; `0.5.3` is the current published release).** Working today: six
+provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule
+crawler, SQLite history, analysis (deltas, opportunities, indexing triage, multi-engine fusion,
+nginx log analysis with UA-only bot triage), per-provider `stats`, report builders +
+HTML/text/Markdown renderers with an attributed change digest, the finding/task lifecycle, portable
+backup bundles, SMTP/Telegram delivery with idempotency, the 20-command CLI, the MCP server
+(12 tools, 3 resources, 3 prompts) and scheduler generators. Canonical source ids, GSC-only
+headline deltas, partial provider isolation and window/daily storage separation are enforced with
+regression tests. `0.6.0` is the insights release candidate (logs, digest, tasks, backup); `0.5.3`
+was the P0 hardening release. See [`docs/releases/0.6.0.md`](docs/releases/0.6.0.md) and
+[`docs/releases/0.5.3.md`](docs/releases/0.5.3.md).
 
 Still honest gaps before `v1.0`: GSC service-account auth (OAuth token only today),
 sitemap submit / Yandex recrawl return an explicit `WRITE_DISABLED` (IndexNow really submits),
@@ -90,6 +93,10 @@ lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown                 # week-over-week diff of stored snapshots
 lv24-seo stats --days 7 --json                  # read-only per-provider dashboard snapshot
 lv24-seo crawl --json                           # issues + sitemap↔crawl coverage diff
+lv24-seo logs analyze --file /var/log/nginx/access.log --json   # bot rollups + crawl waste (read-only)
+lv24-seo tasks list --json                      # local finding lifecycle (open → verified)
+mkdir -p backups
+lv24-seo backup create --out "$PWD/backups" --json   # portable zip: config + SQLite history
 lv24-seo export skills --out ./skills           # packaged agent skills from the wheel
 lv24-seo mcp serve                              # stdio MCP server
 lv24-seo install --client claude|opencode|vscode|cursor
@@ -161,14 +168,14 @@ audit → plan → fix → verify.
 | Surface | Examples |
 |---|---|
 | **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions |
-| **MCP tools** | 11 tools across GSC, Yandex, crawl, reports and gated writes — see the table below |
-| **CLI** | 17 top-level commands (10 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `mcp`; read commands accept `--strict` to exit `5` on truncated data |
+| **MCP tools** | 12 tools across GSC, Yandex, crawl, reports, logs and gated writes — see the table below |
+| **CLI** | 20 top-level commands (13 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `logs`, `tasks`, `backup`, `mcp`; read commands accept `--strict` to exit `5` on truncated data |
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
 | **Automation** | cron / systemd timer / Windows Task Scheduler generators and a GitHub Actions recipe |
 
 ### MCP tools
 
-Eleven tools, three resources and three prompts. Nine are read-class: seven pure read-only tools that
+Twelve tools, three resources and three prompts. Ten are read-class: eight pure read-only tools that
 never change provider or local state, plus `seo_crawl_site` and `seo_weekly_report`, which persist
 local snapshots and therefore carry `readOnlyHint: false` (they are not destructive). The two
 provider writes require `allow_write=true`, are annotated `destructiveHint: true`, and use the same
@@ -185,6 +192,7 @@ nothing is sent.
 | `seo_crawl_site` | read + local state | `false` | `false` | Bounded crawl; stores pages and issues (off-loop, 600 s budget) |
 | `seo_weekly_report` | read + local state | `false` | `false` | Weekly digest; stores a report snapshot |
 | `seo_report_diff` | read | `true` | `false` | Diff two stored weekly snapshots |
+| `seo_log_analysis` | read | `true` | `false` | One local nginx JSON log: bot rollups and crawl-waste share (UA-only triage) |
 | `seo_indexing_triage` | read | `true` | `false` | Group indexing problems into an action list |
 | `seo_opportunities` | read | `true` | `false` | Striking-distance and decay opportunities |
 | `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (two-phase gate; `WRITE_DISABLED` in this build) |
@@ -205,7 +213,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 | Chrome UX Report | yes (API key) | origin-level field CWV | — |
 | PageSpeed Insights | yes | lab audits per URL | — |
 | Your site | — | crawl, robots, sitemap, JSON-LD, hreflang, links | — |
-| nginx access logs | — | Python analysis helpers; no log-ingest CLI command yet | — |
+| nginx access logs | — | `logs analyze` + `seo_log_analysis`: bot/day rollups and crawl-waste share (UA-only triage, 100 MiB cap); nothing stored | — |
 
 ## Documents
 
@@ -217,7 +225,8 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
-* [Release notes 0.5.3](docs/releases/0.5.3.md) — what changed in the current engine release
+* [Release notes 0.6.0](docs/releases/0.6.0.md) — release candidate: logs, digest, tasks, backup
+* [Release notes 0.5.3](docs/releases/0.5.3.md) — P0 hardening release
 * [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop) — Tauri shell, 0.3.0 assets and update matrix
 * [Desktop plan](docs/plans/2026-11-14-seo-desktop.md) — shell scope and milestones
 * [Security](SECURITY.md) — token handling, read-only defaults, write gating

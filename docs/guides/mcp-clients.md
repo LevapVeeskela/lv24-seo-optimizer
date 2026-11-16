@@ -313,7 +313,7 @@ in [Agent skills](../skills.md). Without a skill, call `seo_weekly_report` direc
 
 ## Security notes
 
-* Seven of the eleven tools are read-only (`readOnlyHint: true`). `seo_crawl_site` and
+* Eight of the twelve tools are read-only (`readOnlyHint: true`). `seo_crawl_site` and
   `seo_weekly_report` persist local snapshots, so they carry `readOnlyHint: false` and
   `writes_local_state: true` without being destructive. `seo_recrawl_request` and
   `seo_sitemap_submit` are the two write tools (`destructiveHint: true`) and are disabled unless

@@ -150,8 +150,18 @@ sessions and key events. Join to GSC on the URL path, not on the query. Threshol
   Sitemap discovery applies the same origin check to `Sitemap:` lines, index children and
   sitemap redirects. The single exception is `robots.txt` itself, whose redirects are followed
   as RFC 9309 §2.3.1.2 requires (still under the SSRF policy and the redirect cap).
-* Logs: nginx JSON access log → bot verification by **reverse DNS / published IP ranges**, never by UA
-  string alone.
+* Logs: `logs analyze` / `seo_log_analysis` reads **one** local nginx JSON access log
+  (`log_format ... escape=json`) at an absolute path, at most **100 MiB**. Relative paths, globs,
+  UNC/network paths, Windows device names, directories and larger files are rejected with
+  `INVALID_INPUT` before any bytes are read. The file is opened read-only once; nothing is uploaded,
+  stored or appended to the SQLite history. Parsing is tolerant: blank or malformed lines are
+  skipped and counted, and a missing timestamp lands in the `"unknown"` date bucket.
+  Bot classes (`googlebot`, `yandexbot`, `bingbot`, `other`) come from the **user-agent string
+  only**. This is fast triage, not crawler verification: a spoofed UA is not a verified crawler,
+  there is no reverse-DNS or published-IP check, and non-search crawlers (AhrefsBot, SemrushBot)
+  are reported as `other`. `crawl_waste` counts redirects, errors, assets, `/api/` calls and
+  tracking-parameter requests once per request, so the share stays inside `0..1`; `p95_ms` is the
+  nearest-rank 95th percentile of `request_time`. Log-based findings are not written to the store.
 
 ## 8. Optional paid adapters (BYO key, off by default)
 

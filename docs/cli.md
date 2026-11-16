@@ -1,6 +1,11 @@
 # CLI reference
 
-Every command supports `--json` (machine output), `--config PATH` and a stable exit code.
+The CLI has 20 top-level commands: 13 groups (`auth`, `config`, `gsc`, `yandex`, `sitemap`,
+`indexnow`, `report`, `schedule`, `export`, `logs`, `tasks`, `backup`, `mcp`) and 7 commands
+(`version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`).
+
+Every read/report command supports `--json` (machine output) and a stable exit code; commands that
+use the workspace also accept `--config PATH`.
 Output envelope (`meta.version` is the package version, e.g. `0.1.2`):
 
 ```json
@@ -86,6 +91,37 @@ Lists are capped at 50 per bucket; `counts` are exact. Stored page text is cappe
 characters (`word_count` stays exact), and sitemap documents get a 50 MB body budget with the
 50,000-URL protocol cap.
 
+## Local logs
+
+```bash
+lv24-seo logs analyze --file /var/log/nginx/access.log [--bot googlebot|yandexbot|bingbot|other] [--json]
+```
+
+Read-only analysis of exactly one local nginx JSON access log (`log_format ... escape=json`). The
+path must be absolute and name one regular file of at most **100 MiB**. Relative paths, globs,
+UNC/network paths, Windows device names, directories and larger files fail with `INVALID_INPUT`
+(exit `2`) before any bytes are read. The file is opened read-only once; nothing is uploaded,
+stored or added to the SQLite history.
+
+`data` contains `total_lines`, `parsed_lines`, `skipped_lines`, `bot_daily` and `crawl_waste`:
+
+- `bot_daily` is one row per `(date, bot, status class)` with `hits`, `bytes` and `p95_ms` (the
+  nearest-rank p95 of `request_time`, in milliseconds). Malformed or blank lines are skipped and
+  reported in `warnings`; an entry without a usable timestamp lands in the `"unknown"` date bucket.
+- `crawl_waste` reports `hits`, `bytes`, `share`, `total_hits`, `total_bytes` and a `by_bot` split.
+  Redirects (3xx), errors (4xx+5xx), assets (`/assets/`, `/static/`, asset extensions), `/api/`
+  calls and requests carrying tracking parameters (`utm_`, `fbclid`, `gclid`) are waste. A request
+  matching several categories counts **once**, so `share` stays inside `0..1`.
+- `--bot` scopes `bot_daily` and the headline waste numbers to one class; `by_bot` always covers
+  every parsed request, so one call still shows which crawler causes the waste. Without `--bot`,
+  every request in the log counts, including human and non-search traffic.
+
+Bot classes are **user-agent only** (`googlebot`, `yandexbot`, `bingbot`, `other`). A spoofed UA is
+not a verified crawler: there is no reverse-DNS or published-IP check, and non-search crawlers such
+as AhrefsBot or SemrushBot are deliberately reported as `other`. `meta` carries `source: "log_file"`,
+`file`, `size_bytes`, `bot`, `total` (rollup rows), `truncated: false`, `data_age_days: null` and the
+limitations list. The same contract is exposed as the `seo_log_analysis` MCP tool.
+
 ## Dashboard stats
 
 ```bash
@@ -168,6 +204,19 @@ the new language; the English digest stays compatible with pre-localization ledg
 material gate runs first, so with `only_on_change` enabled a pure locale switch can still be
 suppressed when the period has no material change.
 
+When the two GSC windows are comparable and the local store holds at least one crawl issue or page
+row, the weekly report adds an **attributed change digest** section. Each item pairs a significant,
+non-flat headline change with a candidate cause (`new_crawl_issue`, `resolved_crawl_issue`,
+`indexing_event`, `page_state` or `unexplained`), a confidence (`high`/`medium`/`low`), up to three
+evidence rows (rule id and URL, indexing event, or page field) and a `next_action`. With no matching
+evidence the item stays `unexplained` and says so — the digest never invents a cause to fill the gap.
+A rule known not to move search metrics (image alt text, HTML `lang`) is never offered as a cause;
+an unknown rule is only low-confidence evidence. Items are capped at 8 and evidence at 3 per item;
+the section carries `total`, `truncated` and `data_age` (the oldest evidence date actually shown),
+and its limitation codes are merged into the report's `limitations`. Stored evidence today is the
+`issues` and `pages` tables; there is no indexing-event table, so `indexing_event` appears only when
+a caller supplies those rows. Without comparable GSC windows the section is absent.
+
 ```bash
 lv24-seo report diff [--base START..END] [--head START..END] [--markdown] [--strict] [--json]
 ```
@@ -186,6 +235,61 @@ for different periods.
 
 Planned for the next wave: `report indexing`, `report opportunities`, `report history`
 (see `docs/plans/2026-11-10-implementation-plan.md`, WP5.5).
+
+## Tasks
+
+```bash
+lv24-seo tasks list [--property ID] [--kind KIND] [--state open|in_progress|verified|dismissed] [--limit 200] [--json]
+lv24-seo tasks add --kind KIND --url URL --rule RULE [--property ID] [--payload JSON] [--json]
+lv24-seo tasks update TASK_ID --state open|in_progress|verified|dismissed [--json]
+```
+
+The local finding lifecycle lives in SQLite (schema v3). A task is keyed by
+`(kind, property_id, url, rule_id)`, so `tasks add` is idempotent: it returns
+`data.outcome: created`, `existing` or `reopened` instead of duplicating a finding. A `verified` task
+observed again reopens to `open` — the recurrence is a proven regression; a `dismissed` task stays
+dismissed until an explicit update. A repeated add without `--payload` is a true no-op; with
+`--payload` it refreshes the evidence and `updated_at` without resetting triage or `created_at`.
+
+| From | Allowed to |
+|---|---|
+| `open` | `in_progress`, `verified`, `dismissed` |
+| `in_progress` | `open`, `verified`, `dismissed` |
+| `verified` | `open`, `dismissed` |
+| `dismissed` | `open`, `in_progress` |
+
+Re-applying the current state is a no-op; any other move is `INVALID_INPUT` and names the allowed
+set. `list` is newest-first and bounded (`--limit` 1..1000, default 200); when capped it returns
+`ok: true` with `meta.truncated: true` and a limitation. `--payload` must be a JSON object and
+rejects credential-shaped keys (`token`, `secret`, `password`, `api_key`, `authorization`), so
+evidence can never become a secret store. The commands need an initialised workspace; without the
+data directory they fail with `CONFIG_INVALID` and a `next_action`.
+
+## Backup
+
+```bash
+lv24-seo backup create --out /absolute/existing/dir [--force] [--json]
+```
+
+Writes one portable `lv24-seo-backup-YYYYMMDDTHHMMSSZ.zip` to an existing absolute directory. The
+archive contains:
+
+- `manifest.json` — format `lv24-seo-backup` v1, engine and schema versions, creation time, every
+  payload file with its size and SHA-256, totals, a bounded summary and limitations;
+- `seo.toml` — the validated config with secret-looking keys masked as `***` and
+  `storage.data_dir` reset to `./data`, so an unpacked bundle keeps its data next to its own
+  config. A config that does not validate is kept as a redacted raw copy with a warning;
+- `data/seo.sqlite3` — a consistent copy made through the SQLite backup API, forced to a
+  single-file DELETE journal. Report snapshots live in the `snapshots` table and travel inside it.
+
+`secrets.json`, provider tokens, logs, raw provider responses and caches are never included. The
+source workspace is only read (`mode=ro`, `PRAGMA query_only`); the archive is written to a
+temporary file and renamed atomically. `--force` replaces an archive with the same timestamped
+name; without it an existing file is `INVALID_INPUT`. Limits: 4 MiB config, 2 GiB database (plus
+WAL). The envelope carries `archive_path`, `archive_size`, `archive_sha256`, the full `manifest`
+and a flat `summary`. **Restore is not implemented** — unpack the archive yourself and re-run
+`lv24-seo init`/`auth set` as needed. A corrupt source is `STORE_CORRUPT` and is left untouched
+(no `.corrupt-*` copy is written by this command).
 
 ## Scheduling
 

@@ -1,6 +1,7 @@
 # Quickstart
 
-Verified against the 0.5.3 CLI (`lv24-seo <command> --help` is the authority when in doubt).
+Verified against the 0.6.0 release-candidate CLI (`lv24-seo <command> --help` is the authority when
+in doubt).
 
 ## 1. Install
 
@@ -77,7 +78,24 @@ created the data dir) and writes `report.json`/`report.html` to `--out`.
 Add `--send` to deliver through the configured email/Telegram channels — without
 it nothing is sent.
 
-## 7. Schedule it
+## 7. Local insights: logs, tasks and backup
+
+```bash
+lv24-seo logs analyze --file /var/log/nginx/access.log --json   # bot rollups + crawl-waste share
+lv24-seo tasks list --json                                      # tracked findings
+mkdir -p backups
+lv24-seo backup create --out "$PWD/backups" --json               # config + SQLite history zip
+```
+
+`logs analyze` reads exactly one local nginx JSON access log (absolute path, max 100 MiB) and never
+stores or uploads it. Bot classes are user-agent only, so treat them as triage, not verified crawler
+identity. `tasks list` shows tasks recorded with `tasks add`; an add is idempotent per
+`(kind, property, url, rule)` and `tasks update` moves a task through
+`open → in_progress → verified`. `backup create` writes a portable zip with a redacted `seo.toml`,
+a consistent SQLite copy and a SHA-256 manifest. Restore is not implemented, so keep the archive as
+your manual restore source.
+
+## 8. Schedule it
 
 ```bash
 lv24-seo schedule install --kind weekly --cron "0 6 * * 1" --config ./seo.toml --print
@@ -94,7 +112,7 @@ it; systemd timers run on the system clock; Task Scheduler gets an aware
 `StartBoundary` with a UTC offset when the zone resolves, host-local time
 otherwise. Each backend prints its limits as warnings.
 
-## 8. Use it from an agent
+## 9. Use it from an agent
 
 ```bash
 lv24-seo install --client claude     # writes the MCP server entry

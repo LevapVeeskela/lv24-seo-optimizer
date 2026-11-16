@@ -2,7 +2,7 @@
 
 Design rules:
 
-* **11 tools, not 50.** Agents pick better from a small, opinionated surface; the API shape stays
+* **12 tools, not 50.** Agents pick better from a small, opinionated surface; the API shape stays
   behind the adapter.
 * Names `{source}_{verb}_{object}` for primitives, `seo_{task}` for composed workflows.
 * Read-only by default. Two tools persist local snapshots and carry `readOnlyHint: false` with
@@ -79,6 +79,9 @@ query window + Metrika sessions + Bing/CrUX/PSI when configured + stored crawl i
 period. Returns
 `{period, previous_period, headline, sources, sources_failed, complete, issues, opportunities, limitations}`.
 The headline compares GSC windows only; CrUX is field data, PSI is lab data, and the two are never merged.
+When the GSC windows are comparable and the store holds crawl issues or page rows, the report also
+carries the additive `digest` section (cause, confidence, evidence, next action per material change;
+see `docs/cli.md`).
 
 ### `seo_report_diff`
 
@@ -89,6 +92,20 @@ A metric present in only one snapshot is listed in `unknown_metrics` (never zero
 `meta.complete` are `false` when either snapshot lacks a headline comparison or the period lengths
 differ. Needs `lv24-seo init` and two `report weekly` runs; otherwise `INVALID_INPUT` /
 `CONFIG_INVALID` with a `next_action`. Same data as `lv24-seo report diff`.
+
+### `seo_log_analysis`
+
+Inputs: `file` (required, absolute path to one nginx JSON access log, max 100 MiB) and `bot`
+(optional: `googlebot`, `yandexbot`, `bingbot` or `other`; default `""` means every request).
+Read-only and local: no provider call, no store and no workspace, nothing is uploaded or persisted.
+Returns `{total_lines, parsed_lines, skipped_lines, bot_daily:[{date,bot,status,hits,bytes,p95_ms}],
+crawl_waste:{hits,bytes,share,total_hits,total_bytes,by_bot}}` with `meta.source: "log_file"`,
+`meta.truncated: false`, `meta.data_age_days: null` and a limitations list. Relative paths, globs,
+UNC/device paths, directories and files over 100 MiB return `INVALID_INPUT` before reading. Bot
+classification is **user-agent only** (`googlebot`/`yandexbot`/`bingbot`/`other`): a spoofed UA is
+not a verified crawler, there is no reverse-DNS or published-IP check, and non-search crawlers are
+reported as `other`. Waste counts redirects, errors, assets, `/api/` calls and tracking-parameter
+requests once per request, so `share` stays inside `0..1`. Same data as `lv24-seo logs analyze`.
 
 ### `seo_indexing_triage`
 
@@ -140,7 +157,7 @@ tool and still write local snapshots.
 
 | Tools | `kind` | `writes_local_state` | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
 |---|---|---|---|---|---|
-| `seo_properties`, `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_report_diff`, `seo_indexing_triage`, `seo_opportunities` | read | `false` | `true` | `false` | `true` |
+| `seo_properties`, `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_report_diff`, `seo_indexing_triage`, `seo_log_analysis`, `seo_opportunities` | read | `false` | `true` | `false` | `true` |
 | `seo_crawl_site`, `seo_weekly_report` | read | `true` | `false` | `false` | `false` |
 | `seo_recrawl_request`, `seo_sitemap_submit` | write | `false` | `false` | `true` | `false` |
 
@@ -165,7 +182,7 @@ Exactly three resources — there is no `seo://property/{id}/baseline`.
 | `indexing_triage` | triage only, output as a fix plan |
 | `content_opportunities` | opportunities → prioritised backlog |
 
-Total: 11 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
+Total: 12 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
 `lv24_seo/mcp/registry.py` — never edit it by hand.
 
 ## Error contract

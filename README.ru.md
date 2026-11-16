@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.5.3).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (0.6.0 release candidate; опубликован 0.5.3).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -23,6 +23,8 @@ lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown            # разница двух сохранённых недельных снапшотов
 lv24-seo stats --days 7 --json             # срез по провайдерам для дашборда
 lv24-seo crawl --json                      # проблемы + сверка sitemap ↔ краул
+lv24-seo logs analyze --file /var/log/nginx/access.log --json  # боты и доля мусорного обхода
+lv24-seo tasks list --json                 # локальный жизненный цикл находок
 lv24-seo export skills --out ./skills      # скиллы из wheel-пакета
 ```
 
@@ -37,9 +39,9 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 | Слой | Что даёт |
 |---|---|
 | Источники | GSC, Вебмастер, Метрика, Bing/IndexNow, CrUX, PSI, собственный краул, логи nginx |
-| Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), триаж индексации, striking distance, деградация контента, техрегрессии |
-| MCP | 11 инструментов, 3 ресурса, 3 промпта; без записи к провайдеру по умолчанию — таблица ниже |
-| CLI | 17 команд верхнего уровня (10 групп + 7 команд): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `mcp` |
+| Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), атрибутированные изменения (причина/уверенность/доказательства), триаж индексации, striking distance, деградация контента, техрегрессии |
+| MCP | 12 инструментов, 3 ресурса, 3 промпта; без записи к провайдеру по умолчанию — таблица ниже |
+| CLI | 20 команд верхнего уровня (13 групп + 7 команд): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `logs`, `tasks`, `backup`, `mcp` |
 | Скиллы | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
 | Автоматизация | cron / systemd timer / Планировщик Windows, рецепт GitHub Actions |
 
@@ -71,11 +73,11 @@ Windows) общий только при одном и том же workspace/data
 
 ### MCP-инструменты
 
-Одиннадцать инструментов, три ресурса и три промпта. Девять относятся к чтению: семь инструментов,
+Двенадцать инструментов, три ресурса и три промпта. Десять относятся к чтению: восемь инструментов,
 доступных только для чтения, не меняют состояние провайдера и локальное состояние; `seo_crawl_site`
 и `seo_weekly_report` сохраняют локальные снимки, поэтому у них `readOnlyHint: false` (они не
 destructive). Два write-инструмента требуют `allow_write=true`, помечены `destructiveHint: true`
-и в 0.5.3 отвечают `WRITE_DISABLED`, пока write-адаптеры не подключены.
+и в этой сборке отвечают `WRITE_DISABLED`, пока write-адаптеры не подключены.
 
 | Инструмент | Тип | `readOnlyHint` | `destructiveHint` | Что делает |
 |---|---|---|---|---|
@@ -86,10 +88,11 @@ destructive). Два write-инструмента требуют `allow_write=tr
 | `seo_crawl_site` | чтение + локальное состояние | `false` | `false` | Ограниченный краул; сохраняет страницы и проблемы |
 | `seo_weekly_report` | чтение + локальное состояние | `false` | `false` | Недельный дайджест; сохраняет снимок отчёта |
 | `seo_report_diff` | чтение | `true` | `false` | Дифф двух сохранённых недельных снимков |
+| `seo_log_analysis` | чтение | `true` | `false` | Один локальный nginx JSON-лог: боты по дням и доля мусорного обхода (UA-only) |
 | `seo_indexing_triage` | чтение | `true` | `false` | Группирует проблемы индексации в план действий |
 | `seo_opportunities` | чтение | `true` | `false` | Striking distance и деградация контента |
-| `seo_recrawl_request` | запись | `false` | `true` | Ставит URL в очередь переобхода Яндекса (gated; `WRITE_DISABLED` в 0.5.3) |
-| `seo_sitemap_submit` | запись | `false` | `true` | Отправляет или удаляет sitemap (gated; `WRITE_DISABLED` в 0.5.3) |
+| `seo_recrawl_request` | запись | `false` | `true` | Ставит URL в очередь переобхода Яндекса (gated; `WRITE_DISABLED` в этой сборке) |
+| `seo_sitemap_submit` | запись | `false` | `true` | Отправляет или удаляет sitemap (gated; `WRITE_DISABLED` в этой сборке) |
 
 Ресурсы: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Промпты:
 `weekly_seo_review`, `indexing_triage`, `content_opportunities`. Полные входы, выходы и
@@ -107,10 +110,13 @@ destructive). Два write-инструмента требуют `allow_write=tr
 
 ## Статус
 
-Бета (v0.5.3). Открытые честные ограничения: OAuth-токен GSC (service account — позже),
-`sitemap submit` / `recrawl` отвечают `WRITE_DISABLED` (IndexNow реально отправляет),
-`crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`). Исправления
-0.5.3 — в [`docs/releases/0.5.3.md`](docs/releases/0.5.3.md).
+Бета (0.6.0 release candidate; опубликован 0.5.3). Открытые честные ограничения: OAuth-токен GSC
+(service account — позже), `sitemap submit` / `recrawl` отвечают `WRITE_DISABLED` (IndexNow
+реально отправляет), `crawl.concurrency` зарезервирован (краулер последовательный с
+`Crawl-delay`), анализ логов определяет ботов только по User-Agent, а восстановление из
+`backup create` пока не реализовано. Новое в 0.6.0 RC — в
+[`docs/releases/0.6.0.md`](docs/releases/0.6.0.md); исправления 0.5.3 — в
+[`docs/releases/0.5.3.md`](docs/releases/0.5.3.md).
 
 ## Для агентов
 
