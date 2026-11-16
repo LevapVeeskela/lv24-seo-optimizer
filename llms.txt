@@ -6,7 +6,7 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.7.0` (release candidate; `0.6.0` is the latest published build): 6 provider
+- Engine `lv24-seo 0.7.0` (current published build): 6 provider
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
@@ -20,9 +20,8 @@
   100 MiB cap, read-only), an attributed change digest in `report weekly`, the `tasks` finding
   lifecycle (schema v3), and `backup create` portable zip bundles.
 - Skills: `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit`.
-- Desktop `0.4.0`: Windows NSIS + portable ZIP, Linux AppImage/deb/rpm, macOS arm64/x64 DMG;
-  signed updates for NSIS, `.app` and AppImage; bundles engine `0.6.0`. Desktop `0.5.0` is not
-  released.
+- Desktop `0.5.0`: Windows NSIS + portable ZIP, Linux AppImage/deb/rpm, macOS arm64/x64 DMG;
+  signed updates for NSIS, `.app` and AppImage; bundles engine `0.7.0`.
 - Desktop and CLI share one OS keychain entry per provider (service `lv24-seo`); the opt-in
   `<data-dir>/secrets.json` fallback is shared only with the same workspace/data directory.
 

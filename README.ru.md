@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.7.0, release candidate).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.7.0).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -52,19 +52,19 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 
 ## Десктоп
 
-Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.4.0** — оболочка Tauri v2 с
+Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.5.0** — оболочка Tauri v2 с
 дашбордом, просмотром недельного отчёта, редактором конфигурации и сценарием «рекомендации →
-агенту». Она несёт закреплённый сайдкар `lv24-seo` (`0.6.0` в текущей сборке десктопа) и не
+агенту». Она несёт закреплённый сайдкар `lv24-seo` (`0.7.0` в текущей сборке десктопа) и не
 добавляет собственной логики провайдеров.
 
 | Платформа | Файлы | Автообновление |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.4.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.4.0_x64-portable.zip` | только NSIS |
-| Linux x64 | `LV24.SEO.Optimizer_0.4.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.4.0_amd64.deb`, `LV24.SEO.Optimizer-0.4.0-1.x86_64.rpm` | только AppImage |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.5.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.5.0_x64-portable.zip` | только NSIS |
+| Linux x64 | `LV24.SEO.Optimizer_0.5.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.5.0_amd64.deb`, `LV24.SEO.Optimizer-0.5.0-1.x86_64.rpm` | только AppImage |
 | macOS 13+ arm64/x64 | DMG, `.app.tar.gz` (+ `.sig`) | только `.app` |
 
 deb, rpm и portable ZIP ставятся вручную (MSI не выпускается); у `0.1.0` нет обновлятора. Релизы
-`0.2.x` публикуют `latest.json` и `SHA256SUMS.txt`.
+публикуют `latest.json` и `SHA256SUMS.txt`.
 
 **Одно хранилище секретов.** Десктоп и CLI используют одну и ту же запись OS-keychain на
 провайдера (и на секрет доставки): сервис `lv24-seo`, имена `gsc_token`,
@@ -78,18 +78,19 @@ Windows) общий только при одном и том же workspace/data
 
 ### MCP-инструменты
 
-Двенадцать инструментов, три ресурса и три промпта. Десять относятся к чтению: восемь инструментов,
-доступных только для чтения, не меняют состояние провайдера и локальное состояние; `seo_crawl_site`
-и `seo_weekly_report` сохраняют локальные снимки, поэтому у них `readOnlyHint: false` (они не
-destructive). Два write-инструмента требуют `allow_write=true`, помечены `destructiveHint: true`
-и в этой сборке отвечают `WRITE_DISABLED`, пока write-адаптеры не подключены.
+Двенадцать инструментов, три ресурса и три промпта. Девять относятся к чтению: семь инструментов,
+доступных только для чтения, не меняют состояние провайдера и локальное состояние; `seo_crawl_site`,
+`seo_weekly_report` и `yandex_indexing_state` сохраняют локальные снимки или события индексации,
+поэтому у них `readOnlyHint: false` (они не destructive). Два write-инструмента требуют
+`allow_write=true`, помечены `destructiveHint: true` и в этой сборке отвечают `WRITE_DISABLED`, пока
+write-адаптеры не подключены.
 
 | Инструмент | Тип | `readOnlyHint` | `destructiveHint` | Что делает |
 |---|---|---|---|---|
 | `seo_properties` | чтение | `true` | `false` | Настроенные провайдеры, цели и наличие токенов |
 | `gsc_search_analytics` | чтение | `true` | `false` | Строки GSC по запросам/страницам/странам/устройствам |
 | `yandex_query_stats` | чтение | `true` | `false` | Топ запросов Яндекса для хоста |
-| `yandex_indexing_state` | чтение | `true` | `false` | История индексации, события и проблемы |
+| `yandex_indexing_state` | чтение + локальное состояние | `false` | `false` | История индексации, события и проблемы; сохраняет события провайдера при наличии хранилища |
 | `seo_crawl_site` | чтение + локальное состояние | `false` | `false` | Ограниченный краул; сохраняет страницы и проблемы |
 | `seo_weekly_report` | чтение + локальное состояние | `false` | `false` | Недельный дайджест; сохраняет снимок отчёта |
 | `seo_report_diff` | чтение | `true` | `false` | Дифф двух сохранённых недельных снимков |
@@ -115,12 +116,12 @@ destructive). Два write-инструмента требуют `allow_write=tr
 
 ## Статус
 
-Бета (v0.7.0, release candidate). Открытые честные ограничения: OAuth-токен GSC
+Бета (v0.7.0). Открытые честные ограничения: OAuth-токен GSC
 (service account — позже), `sitemap submit` / `recrawl` отвечают `WRITE_DISABLED` (IndexNow
 реально отправляет), `crawl.concurrency` зарезервирован (краулер последовательный с
 `Crawl-delay`), анализ логов определяет ботов только по User-Agent, `portfolio list` и
 `backup restore` доступны только в CLI, а CWV-секция строится лишь по сохранённым field-данным
-CrUX/PSI. `0.6.0` остаётся последней опубликованной сборкой до запуска release workflow.
+CrUX/PSI. `0.7.0` — текущая опубликованная сборка, десктоп `0.5.0` несёт движок `0.7.0`.
 Новое в 0.7.0 — в [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md); новое в 0.6.0 — в
 [`docs/releases/0.6.0.md`](docs/releases/0.6.0.md).
 
