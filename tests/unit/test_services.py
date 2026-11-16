@@ -217,6 +217,25 @@ class FakeWebmasterClient:
         )
 
 
+class FakeWebmasterUrlEventsClient(FakeWebmasterClient):
+    """A client whose event history carries per-URL samples plus one aggregate row."""
+
+    def search_urls_events(self, host_id: str) -> ProviderResult[dict[str, Any]]:
+        return _result(
+            "yandex_webmaster",
+            [
+                {
+                    "url": "https://example.com/a",
+                    "event": "APPEARED_IN_SEARCH",
+                    "event_date": "2026-11-08T10:00:00,000+0300",
+                    "title": "Page A",
+                },
+                {"date": "2026-11-08", "event": "URL_ADDED", "count": 3},
+            ],
+            property_id=host_id,
+        )
+
+
 class FakeMetrikaClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -558,6 +577,72 @@ def test_yandex_indexing_combines_all_reads() -> None:
     assert set(response["meta"]["calls"]) == {"summary", "history", "events", "problems"}
 
 
+def test_yandex_indexing_stores_per_url_events_and_skips_aggregates(store: Store) -> None:
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": FakeWebmasterUrlEventsClient()},
+    )
+
+    response = service.yandex_indexing()
+
+    assert response["ok"] is True
+    assert response["meta"]["indexing_events"] == {
+        "new": 1,
+        "existing": 0,
+        "skipped": 1,
+        "truncated": 0,
+    }
+    [event] = store.list_indexing_events(property_id=PROPERTY)
+    assert event["provider"] == "yandex_webmaster"
+    assert event["url"] == "https://example.com/a"
+    assert event["event"] == "indexed"
+    assert event["event_date"] == "2026-11-08"
+    assert event["detail"]["provider_event"] == "APPEARED_IN_SEARCH"
+    assert event["detail"]["title"] == "Page A"
+    assert any("without url/event/date" in item for item in response["meta"]["limitations"])
+
+
+def test_yandex_indexing_does_not_invent_urls_from_aggregate_events(store: Store) -> None:
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": FakeWebmasterClient()},
+    )
+
+    response = service.yandex_indexing()
+
+    assert response["ok"] is True
+    assert store.list_indexing_events(property_id=PROPERTY) == []
+    assert response["meta"]["indexing_events"]["skipped"] == 1
+    assert any("no per-URL identity" in item for item in response["meta"]["limitations"])
+
+
+def test_yandex_indexing_survives_an_indexing_event_write_failure(
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(*_args: Any, **_kwargs: Any) -> str:
+        raise RuntimeError("storage exploded")
+
+    monkeypatch.setattr(store, "upsert_indexing_event", boom)
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": FakeWebmasterUrlEventsClient()},
+    )
+
+    response = service.yandex_indexing()
+
+    assert response["ok"] is True
+    assert response["data"]["events"]
+    assert any("could not be saved" in item for item in response["warnings"])
+    assert store.list_indexing_events(property_id=PROPERTY) == []
+
+
 def test_yandex_queries_missing_token_fails_with_warning() -> None:
     service = SeoService(_config(), secrets=_secrets())
 
@@ -713,8 +798,280 @@ def test_weekly_report_passes_stored_digest_evidence(
     assert evidence["issue_changes"][0]["state"] == "open"
     assert evidence["issue_changes"][0]["first_seen"]
     assert evidence["pages"][0]["index_state"] == "noindex"
-    # The store has no indexing-event table yet: the input is omitted, not faked.
+    # No stored indexing event in the window: the input stays absent, not faked as empty.
     assert "indexing_events" not in evidence
+
+
+def test_weekly_report_passes_stored_indexing_events(
+    store: Store,
+    builder_capture: dict[str, Any],
+) -> None:
+    event_day = (utc_now() - timedelta(days=4)).date().isoformat()
+    store.upsert_indexing_event(
+        "yandex_webmaster",
+        PROPERTY,
+        "https://example.com/a",
+        "noindex_added",
+        event_day,
+        detail={"status": "excluded"},
+    )
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    [event] = builder_capture["digest_evidence"]["indexing_events"]
+    assert event["url"] == "https://example.com/a"
+    assert event["event"] == "noindex_added"
+    assert event["event_date"] == event_day
+
+
+def test_weekly_report_passes_stored_cwv_rows(
+    store: Store,
+    builder_capture: dict[str, Any],
+) -> None:
+    day = (utc_now() - timedelta(days=4)).date()
+    store.upsert_metric_daily(
+        PROPERTY,
+        "crux",
+        day,
+        scope="phone",
+        key="https://example.com/blog/1",
+        metric="lcp",
+        value=3000.0,
+    )
+    store.upsert_metric_daily(
+        PROPERTY,
+        "crux",
+        day,
+        scope="phone",
+        key="https://example.com/blog/2",
+        metric="cls",
+        value=0.08,
+    )
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    rows = builder_capture["cwv_rows"]
+    assert {row["url"] for row in rows} == {
+        "https://example.com/blog/1",
+        "https://example.com/blog/2",
+    }
+    assert {row["device"] for row in rows} == {"phone"}
+    assert builder_capture["cwv_limit"] == 5
+
+
+def test_weekly_report_uses_the_latest_cwv_observation_per_url(
+    store: Store,
+    builder_capture: dict[str, Any],
+) -> None:
+    old = (utc_now() - timedelta(days=6)).date()
+    new = (utc_now() - timedelta(days=3)).date()
+    for day, value in ((old, 5000.0), (new, 3000.0)):
+        store.upsert_metric_daily(
+            PROPERTY,
+            "crux",
+            day,
+            scope="phone",
+            key="https://example.com/blog/1",
+            metric="lcp",
+            value=value,
+        )
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    [row] = [item for item in builder_capture["cwv_rows"] if item["metric"] == "lcp"]
+    assert row["p75"] == 3000.0
+    assert row["date"] == new.isoformat()
+
+
+def test_weekly_report_renders_the_cwv_section_with_the_real_builder(store: Store) -> None:
+    store.upsert_metric_daily(
+        PROPERTY,
+        "crux",
+        (utc_now() - timedelta(days=4)).date(),
+        scope="phone",
+        key="https://example.com/blog/1",
+        metric="lcp",
+        value=3000.0,
+    )
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    sections = {section["key"]: section for section in response["data"]["sections"]}
+    assert "cwv" in sections
+    assert sections["cwv"]["rows"][0]["template"] == "/blog/{id}"
+    assert "cwv_p75_worst_page" in response["data"]["limitations"]
+
+
+def test_weekly_report_omits_cwv_without_url_device_rows(
+    store: Store,
+    builder_capture: dict[str, Any],
+) -> None:
+    store.upsert_metric_daily(
+        PROPERTY,
+        "crux",
+        (utc_now() - timedelta(days=4)).date(),
+        scope="origin",
+        key="https://example.com",
+        metric="lcp",
+        value=3000.0,
+    )
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    assert "cwv_rows" not in builder_capture
+
+
+def test_weekly_report_only_passes_events_inside_the_compared_windows(
+    store: Store,
+    builder_capture: dict[str, Any],
+) -> None:
+    inside = (utc_now() - timedelta(days=4)).date().isoformat()
+    store.upsert_indexing_event(
+        "yandex_webmaster", PROPERTY, "https://example.com/inside", "indexed", inside
+    )
+    store.upsert_indexing_event(
+        "yandex_webmaster",
+        PROPERTY,
+        "https://example.com/old",
+        "indexed",
+        (utc_now() - timedelta(days=40)).date().isoformat(),
+    )
+    store.upsert_indexing_event(
+        "yandex_webmaster",
+        PROPERTY,
+        "https://example.com/future",
+        "indexed",
+        (utc_now() + timedelta(days=2)).date().isoformat(),
+    )
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    events = builder_capture["digest_evidence"]["indexing_events"]
+    assert [event["url"] for event in events] == ["https://example.com/inside"]
+
+
+def test_weekly_report_caps_indexing_events_and_says_so(
+    store: Store,
+    builder_capture: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(services, "_DIGEST_EVIDENCE_LIMIT", 2)
+    for offset in (4, 5, 6):
+        store.upsert_indexing_event(
+            "yandex_webmaster",
+            PROPERTY,
+            f"https://example.com/{offset}",
+            "noindex_added",
+            (utc_now() - timedelta(days=offset)).date().isoformat(),
+        )
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    assert len(builder_capture["digest_evidence"]["indexing_events"]) == 2
+    assert any(
+        limitation.startswith("digest evidence capped at 2 issues")
+        for limitation in response["data"]["limitations"]
+    )
+
+
+def test_weekly_report_counts_a_malformed_event_instead_of_guessing(
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        store,
+        "list_indexing_events",
+        lambda **_kwargs: [{"url": None, "event": "noindex_added", "event_date": None}],
+    )
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    assert "digest_evidence_malformed" in response["data"]["limitations"]
+    digest = {section["key"]: section for section in response["data"]["sections"]}["digest"]
+    assert all(row["cause"] == "unexplained" for row in digest["rows"])
+
+
+def test_weekly_report_attributes_a_change_to_a_stored_indexing_event(
+    store: Store,
+) -> None:
+    store.upsert_indexing_event(
+        "yandex_webmaster",
+        PROPERTY,
+        "https://example.com/a",
+        "noindex_added",
+        (utc_now() - timedelta(days=4)).date().isoformat(),
+    )
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    digest = {section["key"]: section for section in response["data"]["sections"]}["digest"]
+    explained = [row for row in digest["rows"] if row["cause"] == "indexing_event"]
+    assert explained
+    assert explained[0]["evidence"][0]["reason"] == "noindex_added"
+    assert explained[0]["evidence"][0]["kind"] == "indexing_event"
 
 
 def test_weekly_report_omits_digest_evidence_without_stored_rows(
@@ -732,6 +1089,7 @@ def test_weekly_report_omits_digest_evidence_without_stored_rows(
 
     assert response["ok"] is True
     assert "digest_evidence" not in builder_capture
+    assert "cwv_rows" not in builder_capture
 
 
 def test_weekly_report_omits_digest_evidence_without_a_comparison(
@@ -756,6 +1114,7 @@ def test_weekly_report_omits_digest_evidence_without_a_comparison(
 
     assert response["ok"] is True
     assert "digest_evidence" not in builder_capture
+    assert "cwv_rows" not in builder_capture
 
 
 def test_weekly_report_renders_the_digest_section_with_the_real_builder(

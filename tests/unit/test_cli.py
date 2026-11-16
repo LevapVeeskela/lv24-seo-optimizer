@@ -475,17 +475,27 @@ def test_export_tools_writes_valid_json(tmp_path: Path) -> None:
     assert "seo_log_analysis" in names
 
 
-def test_root_command_tree_exposes_twenty_top_level_entries() -> None:
+def test_root_command_tree_exposes_twenty_one_top_level_entries() -> None:
     groups = {info.name for info in cli_main.app.registered_groups}
     commands = {getattr(info.callback, "__name__", "") for info in cli_main.app.registered_commands}
 
-    assert {"logs", "tasks", "backup"} <= groups
-    assert len(groups) == 13
+    assert {"logs", "tasks", "backup", "portfolio"} <= groups
+    assert len(groups) == 14
     assert commands == {"version", "doctor", "init", "properties", "stats", "crawl", "install"}
-    assert len(groups) + len(commands) == 20
+    assert len(groups) + len(commands) == 21
     help_text = _stdout(_invoke("--help"))
-    for name in ("logs", "tasks", "backup"):
+    for name in ("logs", "tasks", "backup", "portfolio"):
         assert name in help_text
+
+
+def test_portfolio_list_is_registered_and_scans_local_projects(workspace: Path) -> None:
+    payload = _json(_invoke("portfolio", "list", "--root", str(workspace.parent), "--json"))
+
+    assert payload["ok"] is True
+    sites = payload["data"]["sites"]
+    assert len(sites) == 1
+    assert sites[0]["config_path"] == str(workspace)
+    assert payload["meta"]["read_only"] is True
 
 
 def test_schedule_print_cron(workspace: Path) -> None:
