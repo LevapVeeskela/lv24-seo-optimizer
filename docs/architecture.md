@@ -76,6 +76,7 @@ Rules:
 | `crawl_runs` | legacy crawl metadata (superseded by `runs kind=crawl`) | `id`, `start_url`, `started_at`, `finished_at`, `urls`, `errors`, `status` |
 | `issues` | crawl + provider findings | `rule_id`, `severity`, `property_id`, `url`, `detail_json`, `first_seen`, `last_seen`, `state` (`open`/`fixed`/`ignored`) |
 | `tasks` | finding/task lifecycle (v3) | `kind`, `property_id`, `url`, `rule_id`, `state` (`open`/`in_progress`/`verified`/`dismissed`), `payload_json`, `created_at`, `updated_at`; unique on `(kind, property_id, url, rule_id)` |
+| `indexing_events` | provider-reported per-URL index status (v4) | `provider`, `property_id`, `url`, `event`, `event_date`, `detail_json`, `first_seen`, `last_seen`; unique on `(provider, property_id, url, event, event_date)` |
 | `snapshots` | diff base for reports | `kind`, `property_id`, `period`, `content_hash`, `payload_gz` |
 | `sends` | delivery ledger | `kind`, `property_id`, `period`, `content_hash`, `channel`, `sent_at`, `status` |
 | `bot_daily` | nginx log rollup | `property_id`, `date`, `bot`, `status`, `hits`, `bytes`, `p95_ms` |
@@ -90,8 +91,13 @@ Migration 2 marks pre-migration **GSC** daily rows (other sources are untouched)
 original window cannot be recovered. Normal daily reads exclude them. Repository callers may
 explicitly use `include_legacy=True` to inspect retained data; no historical rows are deleted.
 Migration 3 adds the `tasks` table (state `CHECK` plus two indexes) and is applied on the next open;
-a fresh database records versions 1..3 in `schema_migrations`. The task natural key is
+migration 4 adds `indexing_events` (provider-reported per-URL index status) with two indexes, and a
+fresh database records versions 1..4 in `schema_migrations`. The task natural key is
 `(kind, property_id, url, rule_id)`, so re-running a crawl or decay scan never duplicates a task.
+The indexing-event natural key is `(provider, property_id, url, event, event_date)`: a replayed
+provider sync updates `last_seen`/`detail_json` instead of inserting a duplicate, and `first_seen`
+never moves. Daily aggregate history rows from Yandex carry no URL, so they are skipped rather than
+assigned a guessed one. Both migrations are additive; no user data is rewritten or deleted.
 `bot_daily` stays a reserved table: `logs analyze` and `seo_log_analysis` return their rollups
 in-memory and do not persist them, so log history is not stored.
 
@@ -121,6 +127,7 @@ traceback instead of being disguised as a disk problem.
 | `analysis/opportunities.py` | current + previous GSC `query`/`page` rows | striking distance (pos 8–20, impressions ≥ N), CTR gaps, decayed pages (vanished rows count as zero only with complete, untruncated coverage) |
 | `analysis/indexing.py` | URL Inspection + Yandex indexing + crawl | reason buckets + next action |
 | `analysis/digest.py` | significant delta rows + stored issues/pages (+ optional indexing events) | attributed change digest: cause, confidence, evidence, next action, `unexplained` when nothing matches |
+| `analysis/cwv.py` | stored CrUX/PSI field rows (URL, device, metric, p75, optional previous p75) | CWV by normalized URL template and device: per-metric p75/status/regression, top-N templates, limitations |
 | `analysis/logs.py` | one local nginx JSON access log | bot/day/status rollups, nearest-rank p95 and crawl-waste share (read-only, UA-only bot classes) |
 | `analysis/rules/` | crawl results | one module per rule, `RULE_ID`, `SEVERITY`, `check(ctx)` |
 | `analysis/fusion.py` | per-provider query rows | joined view with explicit provider caveats (no fake query×page join) |
@@ -132,19 +139,27 @@ query level (clicks/impressions) separately, and the report labels which engine 
 
 * `report/builders.py` produce a `Report` dataclass (JSON-serialisable, canonical English).
   `Report.to_dict()` has no locale field: snapshots, report diff and MCP payloads do not change
-  with the display language. `build_weekly` accepts an opt-in `digest_evidence` mapping; without
-  it the historical section list is unchanged. With it, the builder adds a bounded `digest`
-  section whose rows carry `metric`, `change`, `cause`, `confidence`, `evidence` and
-  `next_action`; `ReportSection` gained optional `total`/`truncated`/`data_age` fields that are
-  only serialised for sections that set them.
+  with the display language. `build_weekly` accepts an opt-in `digest_evidence` mapping and an
+  opt-in `cwv_rows` sequence (`cwv_limit`, default 5); without them the historical section list is
+  unchanged. With `digest_evidence` the builder adds a bounded `digest` section whose rows carry
+  `metric`, `change`, `cause`, `confidence`, `evidence` and `next_action`; `ReportSection` gained
+  optional `total`/`truncated`/`data_age` fields that are only serialised for sections that set them.
 * The digest is honest by construction: only significant, non-flat delta rows are explained; a
   change with no matching evidence stays `unexplained`; rules that cannot move search metrics
   (image alt, HTML `lang`) are never candidates; unknown rules are low-confidence only; items are
   capped at 8 and evidence at 3 per item, with `total`/`truncated` describing the full set and
   `data_age` the oldest evidence date actually shown. Evidence rows without a rule id/URL are
   dropped and counted in `malformed_rows`, never guessed at. The weekly service supplies stored
-  `issues` and `pages` rows only (there is no indexing-event table yet) and omits the section when
-  the GSC windows are not comparable or the store has no evidence at all.
+  `issues`, `pages` and (schema v4) `indexing_events` rows; events are read only inside the two
+  compared windows, each source is capped at 500 rows and a hit cap becomes a limitation. The
+  section is omitted when the GSC windows are not comparable or the store has no evidence at all.
+* `analysis/cwv.py` turns stored CrUX/PSI field rows into a bounded **CWV by template** section:
+  rows are grouped by normalized URL template and device, a template p75 is the worst page p75 in
+  its group, and a regression is a p75 increase of at least 5% (above 0.01 for CLS). The section
+  shows at most five templates, regressed first, then the largest relative regression; origin
+  aggregates, lab scores and rows without a URL or known device are excluded with explicit
+  limitation codes. The service passes rows only when the store has them, so a report without CWV
+  data keeps the historical shape, and no provider is called to build the section.
 * `report/i18n.py` is presentation-only: locale catalogs (`en`, `ru`, `zh`), plural rules and
   number/percent/position/date formatting. An unknown locale falls back to English; an invalid
   numeric or date value renders as empty text, never as `0`.
@@ -168,10 +183,11 @@ query level (clicks/impressions) separately, and the report labels which engine 
 
 ## 6. Surfaces
 
-* **CLI** parses args → builds one `composition.Workspace` (config + shared SQLite history) →
-  runs one service operation → closes storage afterwards. Read commands accept `--strict`, which
-  sets `meta.strict` and turns a truncated success into exit `5`; the envelope stays `ok: true`
-  because the data is valid, only incomplete.
+* **CLI** parses args → builds one `composition.Workspace` (config + shared SQLite history) → runs
+  one service operation → closes storage afterwards. Read commands accept `--strict`, which sets
+  `meta.strict` and turns a truncated success into exit `5`; the envelope stays `ok: true` because
+  the data is valid, only incomplete. `portfolio list` is the exception to the one-workspace shape:
+  it scans many configs read-only through `core/portfolio.py` and opens no provider.
 * **MCP** tools call the same services through the same composition root, so CLI and MCP share
   one history; the store closes when the transport stops. Without `init`, both run store-less
   with an explicit warning.
@@ -252,5 +268,35 @@ are excluded. Every payload member is hashed before it is written, the archive i
 directory and renamed atomically, so a failed run leaves no half-written archive. Caps: 4 MiB config
 and 2 GiB database (plus WAL); a larger source must be archived manually. A corrupt source is
 `STORE_CORRUPT` and is left untouched — the store's usual `.corrupt-*` copy is deliberately not
-written by this command. **Restore is not implemented**; the manifest is the documented contract
-for a manual restore.
+written by this command.
+
+Restore is two-phase and lives in the same module. `plan_restore` validates the archive and target
+without writing outside a temporary directory, then returns a `RestorePlan` with a `confirm_token`
+(300 s TTL) bound to the archive bytes and the target state. `apply_restore` refuses without
+`allow_write` (`WRITE_DISABLED`) and re-verifies the token, manifest hash and pre-state
+(`CONFIRM_REQUIRED` on a changed archive/workspace, expiry or replay). It extracts into a temporary
+directory inside the target data directory, accepts only the exact manifest members (no absolute
+paths, `..`, symlinks or extra files), re-verifies every hash, runs `PRAGMA quick_check` on the
+restored database, copies the current database to `<db>.pre-restore-<utc>` (and the config to
+`seo.toml.pre-restore-<utc>` when replaced), then atomically replaces the files. The database is
+always restored to `<config dir>/data/seo.sqlite3`; an archived config pointing elsewhere is
+`INVALID_INPUT`. A config that does not validate is written alongside as
+`seo.toml.restored-<utc>`. Restore replaces files, never merges rows, and provider tokens are not in
+the archive.
+
+## 10. Portfolio scan
+
+`core/portfolio.py` implements `lv24-seo portfolio list --root ABS`, a read-only roll-up over
+sibling project folders. It walks at most three levels below the root, skips hidden/tooling and
+symlinked directories, and inspects at most 50 `seo.toml` files (`--limit` 1..50). Discovery counts
+every config, so a capped scan reports `truncated` and the real `total` instead of a partial
+portfolio as complete. Each site's config is loaded with `env={}` (an ambient `LV24_SEO_DATA_DIR`
+cannot redirect the portfolio) and its relative data dir is anchored to that config's folder.
+
+The scan never writes and never calls a provider or a secret store. SQLite is opened with
+`immutable=1` for a quiescent database or `mode=ro` for a live WAL; a pending rollback journal or an
+uncheckpointed WAL without `-shm` is reported as `STORE_UNAVAILABLE` instead of being opened
+read-write. A broken config or unreadable database becomes a per-site `error` object and the rest of
+the portfolio still scans. Rows carry local activity only: crawl runs, report snapshots, open/total/
+critical issues and their latest timestamps. The same core module is intended for the desktop and a
+future MCP tool; 0.7.0 exposes it only through the CLI.

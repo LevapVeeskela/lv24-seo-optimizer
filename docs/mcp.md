@@ -5,10 +5,10 @@ Design rules:
 * **12 tools, not 50.** Agents pick better from a small, opinionated surface; the API shape stays
   behind the adapter.
 * Names `{source}_{verb}_{object}` for primitives, `seo_{task}` for composed workflows.
-* Read-only by default. Two tools persist local snapshots and carry `readOnlyHint: false` with
-  `writes_local_state: true`; gated write tools carry `destructiveHint: true`, require
-  `allow_write=true` and a confirm token from a dry run, and use the same idempotency ledger as the
-  CLI.
+* Read-only by default. Three tools persist local state (crawl/weekly snapshots and indexing
+  events) and carry `readOnlyHint: false` with `writes_local_state: true`; gated write tools carry
+  `destructiveHint: true`, require `allow_write=true` and a confirm token from a dry run, and use the
+  same idempotency ledger as the CLI.
 * Every read response includes `truncated`, `total`, `data_age_days` and `limitations[]`.
 * Read tools take no `format` parameter; responses are compact JSON, and the weekly report renders
   markdown through `seo://report/latest` (or `report weekly --out`).
@@ -54,6 +54,11 @@ Inputs: none beyond the configured host (the tool reads it from config).
 Returns indexing history buckets, in-search page counts, diagnostics with severity and dates.
 `limitations: ["no_per_url_sitemap_errors"]`.
 
+When a workspace store exists, the call also upserts provider-reported per-URL events into
+`indexing_events` (schema v4). The write is idempotent per
+`(provider, property_id, url, event, event_date)`, and a storage failure is a warning rather than a
+failed read. Inputs and the returned shape are unchanged; the tool count is unchanged.
+
 ### `seo_crawl_site`
 
 Crawls a site (default 500 URLs, max 5000), respects robots.txt, returns a summary plus rule violations
@@ -79,9 +84,10 @@ query window + Metrika sessions + Bing/CrUX/PSI when configured + stored crawl i
 period. Returns
 `{period, previous_period, headline, sources, sources_failed, complete, issues, opportunities, limitations}`.
 The headline compares GSC windows only; CrUX is field data, PSI is lab data, and the two are never merged.
-When the GSC windows are comparable and the store holds crawl issues or page rows, the report also
-carries the additive `digest` section (cause, confidence, evidence, next action per material change;
-see `docs/cli.md`).
+When the GSC windows are comparable and the store holds crawl issues, page rows or indexing events,
+the report also carries the additive `digest` section (cause, confidence, evidence, next action per
+material change; see `docs/cli.md`). When the store holds CrUX/PSI field rows, it adds the additive
+`cwv` section (top 5 templates by device, p75/status/regression; see `docs/cli.md`).
 
 ### `seo_report_diff`
 
@@ -157,12 +163,13 @@ tool and still write local snapshots.
 
 | Tools | `kind` | `writes_local_state` | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
 |---|---|---|---|---|---|
-| `seo_properties`, `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_report_diff`, `seo_indexing_triage`, `seo_log_analysis`, `seo_opportunities` | read | `false` | `true` | `false` | `true` |
-| `seo_crawl_site`, `seo_weekly_report` | read | `true` | `false` | `false` | `false` |
+| `seo_properties`, `gsc_search_analytics`, `yandex_query_stats`, `seo_report_diff`, `seo_indexing_triage`, `seo_log_analysis`, `seo_opportunities` | read | `false` | `true` | `false` | `true` |
+| `seo_crawl_site`, `seo_weekly_report`, `yandex_indexing_state` | read | `true` | `false` | `false` | `false` |
 | `seo_recrawl_request`, `seo_sitemap_submit` | write | `false` | `false` | `true` | `false` |
 
-The two local-state tools persist crawl or weekly snapshots; they never mutate provider state and
-need no confirm token. The two write tools remain gated by `allow_write=true` plus the confirm token.
+The three local-state tools persist crawl/weekly snapshots or indexing events; they never mutate
+provider state and need no confirm token. The two write tools remain gated by `allow_write=true` plus
+the confirm token.
 
 ## Resources
 
@@ -183,7 +190,9 @@ Exactly three resources — there is no `seo://property/{id}/baseline`.
 | `content_opportunities` | opportunities → prioritised backlog |
 
 Total: 12 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
-`lv24_seo/mcp/registry.py` — never edit it by hand.
+`lv24_seo/mcp/registry.py` — never edit it by hand. The 0.7.0 release adds no MCP tool and changes
+no input: `portfolio list` and `backup restore` are CLI-only, and the new report content is additive
+inside `seo_weekly_report`.
 
 ## Error contract
 

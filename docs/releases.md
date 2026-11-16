@@ -7,8 +7,9 @@ The pipeline is **release plumbing only**: it verifies the exact tagged commit (
 offline tests, schema drift, installed-wheel smoke), builds the sdist/wheel, publishes them to
 PyPI with OIDC Trusted Publishing, publishes the thin `@lv24/seo` npm launcher with npm OIDC
 trusted publishing, and publishes `server.json` to the MCP Registry. No long-lived NPM_TOKEN or
-PyPI token exists. The current release is `0.6.0` (notes: [`releases/0.6.0.md`](releases/0.6.0.md));
-`0.5.3` was the previous P0 hardening release.
+PyPI token exists. The current release is `0.7.0` (release candidate; notes:
+[`releases/0.7.0.md`](releases/0.7.0.md)); `0.6.0` remains the latest published build until this
+release workflow runs, and `0.5.3` was the previous P0 hardening release.
 
 | Artifact | Built by | Published by | Cost |
 |---|---|---|---|
@@ -363,8 +364,10 @@ metadata in place.
 ### Data and configuration
 
 The SQLite store under `data/` is user data. Releases must ship forward migrations; there is no
-automatic downgrade. Before upgrading, back up `data/seo.sqlite3` (and `-wal`/`-shm` if present). To
-roll back a bad CLI, restore that backup and install the previous version explicitly with
+automatic downgrade. Before upgrading, run `lv24-seo backup create --out ABS` (or copy
+`data/seo.sqlite3` and its `-wal`/`-shm` sidecars). To roll back a bad CLI, restore with
+`lv24-seo backup restore` (two-phase: plan, then `--allow-write --confirm TOKEN`) or copy the
+backup back, then install the previous version explicitly with
 `uvx --from lv24-seo==PREVIOUS`. Keep `seo.toml` in version control so config changes are reviewable.
 
 ## Cost
