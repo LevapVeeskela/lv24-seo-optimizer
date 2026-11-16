@@ -32,6 +32,7 @@ from lv24_seo.core.backup import (
     apply_restore,
     create_backup,
     plan_restore,
+    restore_to_directory,
 )
 from lv24_seo.core.errors import (
     CONFIRM_REQUIRED,
@@ -827,3 +828,263 @@ def test_cli_restore_allow_write_without_confirm_writes_nothing(tmp_path: Path) 
     assert payload["meta"]["dry_run"] is True
     assert any("nothing was written" in item for item in payload["warnings"])
     assert not target.exists()
+
+
+# -- non-destructive restore to a new directory ----------------------------------------------
+
+
+def test_restore_to_directory_extracts_config_database_and_snapshots(tmp_path: Path) -> None:
+    config, _, db_path = _workspace(tmp_path)
+    archive = _archive(tmp_path, config)
+    source_config = config.read_bytes()
+    source_db = hashlib.sha256(db_path.read_bytes()).hexdigest()
+    target = tmp_path / "restored"
+
+    result = restore_to_directory(archive_path=archive, directory=target)
+
+    assert result.directory == target
+    assert result.config_path == target / "seo.toml"
+    assert result.database_path == target / "data" / "seo.sqlite3"
+    assert result.database_in_archive is True
+    assert result.database_sha256 is not None
+    assert result.quick_check == "ok"
+    assert result.properties == 1
+    assert result.snapshots == 1
+    assert result.schema_version == SCHEMA_VERSION
+    assert result.warnings == ()
+    assert result.config_path.is_file()
+    assert result.database_path is not None and result.database_path.is_file()
+    assert sorted(item.name for item in target.iterdir()) == ["data", "seo.toml"]
+
+    restored = tomllib.loads(result.config_path.read_text(encoding="utf-8"))
+    assert restored["storage"]["data_dir"] == "./data"
+    conn = sqlite3.connect(result.database_path)
+    try:
+        assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert conn.execute("SELECT COUNT(*) FROM properties").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+    # The current workspace is byte-for-byte untouched.
+    assert config.read_bytes() == source_config
+    assert hashlib.sha256(db_path.read_bytes()).hexdigest() == source_db
+
+
+@pytest.mark.parametrize("non_empty", [False, True])
+def test_restore_to_directory_refuses_an_existing_directory(
+    tmp_path: Path, non_empty: bool
+) -> None:
+    config, _, _ = _workspace(tmp_path)
+    archive = _archive(tmp_path, config)
+    target = tmp_path / "restored"
+    target.mkdir()
+    if non_empty:
+        (target / "keep.txt").write_text("user data", encoding="utf-8")
+
+    with pytest.raises(SeoError) as exc:
+        restore_to_directory(archive_path=archive, directory=target)
+
+    assert exc.value.code == INVALID_INPUT
+    assert "already exists" in exc.value.message
+    assert not (target / "seo.toml").exists()
+    if non_empty:
+        assert (target / "keep.txt").read_text(encoding="utf-8") == "user data"
+
+
+@pytest.mark.parametrize("member", ["../escape.txt", "/absolute.txt", "C:/evil.txt"])
+def test_restore_to_directory_rejects_zip_slip_members(tmp_path: Path, member: str) -> None:
+    archive = _build_archive(
+        tmp_path / "hostile.zip",
+        files={CONFIG_MEMBER: _valid_config_bytes()},
+        extra_members={member: b"payload"},
+    )
+    target = tmp_path / "restored"
+
+    with pytest.raises(SeoError) as exc:
+        restore_to_directory(archive_path=archive, directory=target)
+
+    assert exc.value.code == INVALID_INPUT
+    assert "unsafe member" in exc.value.message
+    assert not target.exists()
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_restore_to_directory_verifies_member_hashes(tmp_path: Path) -> None:
+    config, _, _ = _workspace(tmp_path)
+    archive = _archive(tmp_path, config)
+    _rewrite_member(archive, DATABASE_MEMBER, b"not a database")
+    target = tmp_path / "restored"
+
+    with pytest.raises(SeoError) as exc:
+        restore_to_directory(archive_path=archive, directory=target)
+
+    assert exc.value.code == INVALID_INPUT
+    assert "does not match the manifest" in exc.value.message
+    assert not target.exists()
+
+
+def test_restore_to_directory_rejects_a_corrupt_database(tmp_path: Path) -> None:
+    archive = _build_archive(
+        tmp_path / "corrupt.zip",
+        files={CONFIG_MEMBER: _valid_config_bytes(), DATABASE_MEMBER: b"not a database"},
+    )
+    target = tmp_path / "restored"
+
+    with pytest.raises(SeoError) as exc:
+        restore_to_directory(archive_path=archive, directory=target)
+
+    assert exc.value.code == INVALID_INPUT
+    assert "not a valid SQLite file" in exc.value.message
+    assert not target.exists()
+
+
+def test_restore_to_directory_without_database_reports_honestly(tmp_path: Path) -> None:
+    archive = _minimal_archive(tmp_path)
+    target = tmp_path / "restored"
+
+    result = restore_to_directory(archive_path=archive, directory=target)
+
+    assert result.database_path is None
+    assert result.database_in_archive is False
+    assert result.quick_check is None
+    assert result.snapshots is None
+    assert any("contains no database" in item for item in result.warnings)
+    assert (target / "seo.toml").is_file()
+    assert not (target / "data").exists()
+
+
+def test_restore_to_directory_requires_an_existing_parent(tmp_path: Path) -> None:
+    config, _, _ = _workspace(tmp_path)
+    archive = _archive(tmp_path, config)
+
+    with pytest.raises(SeoError) as exc:
+        restore_to_directory(archive_path=archive, directory=tmp_path / "missing" / "restored")
+
+    assert exc.value.code == INVALID_INPUT
+    assert "parent does not exist" in exc.value.message
+
+
+def test_cli_restore_to_directory_json_envelope(tmp_path: Path) -> None:
+    config, _, _ = _workspace(tmp_path)
+    archive = _archive(tmp_path, config)
+    target = tmp_path / "restored"
+
+    result = RUNNER.invoke(
+        backup_app,
+        ["restore", "--file", str(archive), "--to", str(target), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = _payload(result)
+    assert payload["ok"] is True
+    assert payload["meta"]["dry_run"] is False
+    assert payload["meta"]["destructive"] is False
+    assert payload["meta"]["writes_new_directory"] is True
+    assert payload["meta"]["format"] == BACKUP_FORMAT
+    data = payload["data"]
+    assert data["status"] == "restored"
+    assert data["mode"] == "to_directory"
+    assert data["target"]["directory"] == str(target)
+    assert data["target"]["config_path"] == str(target / "seo.toml")
+    assert data["target"]["database_path"] == str(target / "data" / "seo.sqlite3")
+    assert data["database"]["in_archive"] is True
+    assert data["database"]["restored"] is True
+    assert data["database"]["quick_check"] == "ok"
+    assert data["database"]["snapshots"] == 1
+    assert data["config"]["valid"] is True
+    assert "confirm_token" not in data
+    assert payload["warnings"] == []
+    assert target.is_dir()
+
+
+def test_cli_restore_to_directory_human_output(tmp_path: Path) -> None:
+    config, _, _ = _workspace(tmp_path)
+    archive = _archive(tmp_path, config)
+    target = tmp_path / "restored"
+
+    result = RUNNER.invoke(
+        backup_app,
+        ["restore", "--file", str(archive), "--to", str(target)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "restore:" in result.output
+    assert "mode: new directory" in result.output
+    assert "status: restored" in result.output
+    assert f"directory: {target}" in result.output
+    assert "quick_check: ok" in result.output
+    assert "snapshots: 1" in result.output
+    assert "confirm token:" not in result.output
+
+
+def test_cli_restore_to_and_config_are_mutually_exclusive(tmp_path: Path) -> None:
+    config, _, _ = _workspace(tmp_path)
+    archive = _archive(tmp_path, config)
+    target = tmp_path / "restored"
+
+    result = RUNNER.invoke(
+        backup_app,
+        [
+            "restore",
+            "--file",
+            str(archive),
+            "--to",
+            str(target),
+            "--config",
+            str(tmp_path / "seo.toml"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2, result.output
+    payload = _payload(result)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == INVALID_INPUT
+    assert "mutually exclusive" in payload["error"]["message"]
+    assert not target.exists()
+
+
+def test_cli_restore_requires_to_or_config(tmp_path: Path) -> None:
+    config, _, _ = _workspace(tmp_path)
+    archive = _archive(tmp_path, config)
+
+    result = RUNNER.invoke(backup_app, ["restore", "--file", str(archive), "--json"])
+
+    assert result.exit_code == 2, result.output
+    payload = _payload(result)
+    assert payload["error"]["code"] == INVALID_INPUT
+    assert "needs --to DIR or --config ABS" in payload["error"]["message"]
+
+
+def test_cli_restore_to_rejects_write_flags(tmp_path: Path) -> None:
+    config, _, _ = _workspace(tmp_path)
+    archive = _archive(tmp_path, config)
+    target = tmp_path / "restored"
+
+    result = RUNNER.invoke(
+        backup_app,
+        ["restore", "--file", str(archive), "--to", str(target), "--allow-write", "--json"],
+    )
+
+    assert result.exit_code == 2, result.output
+    payload = _payload(result)
+    assert payload["error"]["code"] == INVALID_INPUT
+    assert "only apply to the in-place restore" in payload["error"]["message"]
+    assert not target.exists()
+
+
+def test_cli_restore_to_requires_an_absolute_directory(tmp_path: Path) -> None:
+    config, _, _ = _workspace(tmp_path)
+    archive = _archive(tmp_path, config)
+
+    result = RUNNER.invoke(
+        backup_app,
+        ["restore", "--file", str(archive), "--to", "restored", "--json"],
+    )
+
+    assert result.exit_code == 2, result.output
+    payload = _payload(result)
+    assert payload["error"]["code"] == INVALID_INPUT
+    assert "must be absolute" in payload["error"]["message"]
+    assert not (tmp_path / "restored").exists()

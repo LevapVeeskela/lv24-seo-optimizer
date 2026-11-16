@@ -284,6 +284,17 @@ always restored to `<config dir>/data/seo.sqlite3`; an archived config pointing 
 `seo.toml.restored-<utc>`. Restore replaces files, never merges rows, and provider tokens are not in
 the archive.
 
+`restore_to_directory` (CLI `backup restore --to DIR`) reuses the same archive reader and member
+validation but writes a new workspace instead of replacing one. The target must be an absolute path
+that does not exist (its parent must), so an existing directory is never merged or overwritten.
+The archive is validated twice — once before the target is created and again while it is extracted
+into a temporary directory inside the target — and every member hash and the manifest hash must
+match. The database passes `PRAGMA quick_check` before and after the move, then the staging
+directory is removed. This mode issues no confirm token and needs no `allow_write` because no
+pre-existing file is touched; a failure removes only the directory the call created. An archive
+without a database yields a config-only directory with `database.in_archive: false` and an explicit
+warning instead of an empty database.
+
 ## 10. Portfolio scan
 
 `core/portfolio.py` implements `lv24-seo portfolio list --root ABS`, a read-only roll-up over

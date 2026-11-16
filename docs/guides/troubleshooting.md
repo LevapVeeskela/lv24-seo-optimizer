@@ -337,6 +337,10 @@ These commands add no new error codes; they reuse `INVALID_INPUT` (exit `2`), `C
 | `backup create` says “the archive already exists” | The timestamped name already exists (a rerun in the same second) | Pass `--force` to replace it, or wait a second |
 | `backup create` returns `STORE_CORRUPT` | The source database is not valid SQLite | The source is left untouched and no archive is written; inspect or restore it from another copy |
 | `backup create` warns “the database was not found” | A config-only workspace | The archive contains `seo.toml` only; run `init` if you expected history |
+| `backup restore --to` says “the restore directory already exists” | `--to` never merges or overwrites, including an empty directory | Choose a path that does not exist yet (the parent must exist) |
+| `backup restore --to` says “the archive contains no database” | A config-only archive | No database is invented; the restored directory holds only `seo.toml` |
+| `backup restore` says “unsafe member path” | The archive was edited or made by another tool | Use an archive from `backup create`; absolute paths, `..`, backslashes and symlink members are rejected |
+| `backup restore --config` returns `CONFIRM_REQUIRED` | The token expired, the archive changed, or the workspace changed after the plan | Re-run without `--confirm`, review the fresh plan, then pass the new token within 5 minutes |
 
 ## Empty or partial reports
 

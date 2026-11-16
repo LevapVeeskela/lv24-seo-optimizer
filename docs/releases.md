@@ -365,9 +365,10 @@ metadata in place.
 
 The SQLite store under `data/` is user data. Releases must ship forward migrations; there is no
 automatic downgrade. Before upgrading, run `lv24-seo backup create --out ABS` (or copy
-`data/seo.sqlite3` and its `-wal`/`-shm` sidecars). To roll back a bad CLI, restore with
-`lv24-seo backup restore` (two-phase: plan, then `--allow-write --confirm TOKEN`) or copy the
-backup back, then install the previous version explicitly with
+`data/seo.sqlite3` and its `-wal`/`-shm` sidecars). To roll back a bad CLI, inspect the archive with
+`lv24-seo backup restore --to ABS` (new directory, no token) or replace the workspace with
+`lv24-seo backup restore --config ABS` (two-phase: plan, then `--allow-write --confirm TOKEN`), or
+copy the backup back, then install the previous version explicitly with
 `uvx --from lv24-seo==PREVIOUS`. Keep `seo.toml` in version control so config changes are reviewable.
 
 ## Cost
