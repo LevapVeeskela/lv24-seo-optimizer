@@ -5,8 +5,8 @@ All notable changes to this project are documented here. Format follows
 
 ## [0.8.0] - 2026-11-16
 
-Release notes: [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md). Status: release candidate; `0.7.0`
-remains the latest published build until the release workflow runs.
+Release notes: [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md). Status: released 2026-11-16;
+`0.8.0` is the latest published build on PyPI, npm and the MCP Registry.
 
 Minor release: adds the URL+device CWV writer, GSC service-account authentication, richer Yandex
 Webmaster indicators, non-destructive `backup restore --to`, and a plan-by-default `schedule`
