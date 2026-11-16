@@ -186,7 +186,7 @@ query level (clicks/impressions) separately, and the report labels which engine 
 * Write-gate claims are `pending` until the provider confirms the write, then promoted to `sent`;
   a provider exception releases the claim so a retry is allowed. A completed or in-flight claim is
   a duplicate. A crash between provider success and promotion leaves a `pending` row that is
-  treated as in-flight; 0.5.2 has no TTL or automatic cleanup.
+  treated as in-flight; the engine has no TTL or automatic cleanup.
 * The crawler is serial with `Crawl-delay` pacing; `concurrency` stays reserved. Read POST retry
   opt-in changes retry safety, not concurrency.
 

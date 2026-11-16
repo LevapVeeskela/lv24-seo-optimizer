@@ -3,6 +3,59 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.5.3] - 2026-11-16
+
+Release notes: [`docs/releases/0.5.3.md`](docs/releases/0.5.3.md).
+
+P0 wave: honest provider data, a hardened crawl and a two-phase MCP write gate. No schema migration
+and no new CLI command or MCP tool. Read commands gain `--strict`, which adds `meta.strict` and exits
+`5` on a truncated success; the two MCP write tools gain dry-run and confirm inputs.
+
+### Fixed
+
+- GSC: a truncated search-analytics walk omits `total` (`null`) instead of presenting the capped row
+  count as a full answer; `data_age_days` is floored at the documented 3-day lag.
+- Yandex Metrika: `stat/v1/data` pages by `offset` until `total_rows`, a short page or a cap (10,000
+  rows / 100 pages); a full page without `total_rows` is `truncated: true`.
+- Bing: `data_age_days` comes from the newest dated row in each endpoint; an empty or undated feed
+  still reports 0, which is not proof of freshness.
+- Yandex Webmaster: an empty indexing or search-URL history returns `rows: []`, `total: 0` and the
+  `empty_history` limitation; `degraded_host` is reserved for a host-scoped 404 or `HOST_NOT_LOADED`.
+  Pagination totals come only from explicit grand-total keys, never a bare page `count`.
+- Crawl: redirect chains are flagged only above two hops; soft 404 requires a not-found phrase and an
+  empty body or explicit `404`/`410` marker; robots patterns match linearly with length caps, a `429`
+  is retried once with `Retry-After`, and a robots `429` defers the crawl instead of failing open.
+- Crawl: sitemap `<loc>` values must share the site origin (`off_origin_loc` otherwise), and Markdown
+  output escapes provider-controlled text so a title cannot inject links, HTML or `@` mentions.
+- Store: SQLite failures are typed as retryable `STORE_LOCKED`, `STORE_CORRUPT` (byte copy preserved
+  as `<db>.corrupt-<utc>` in `detail.backup_path`) and `STORE_UNAVAILABLE`, each with `next_action`.
+- `doctor`: a declared but missing or unwritable data directory is fatal (`ok: false`), and
+  `meta.data_dir_declared` records whether it was declared.
+- Scheduler: repairing an unterminated managed cron block removes only lv24-seo lines, keeps other
+  user jobs and warns to review `crontab -l`.
+
+### Changed
+
+- `--strict` on `stats`, `gsc query`, `yandex queries`, `yandex indexing`, `crawl`, `report weekly`
+  and `report diff`: a truncated success exits `5` with at least one `meta.limitations` entry;
+  without `--strict` truncation still exits `0`. `report diff --markdown` now exits with the envelope
+  code.
+- Write commands resolve the idempotency ledger from the workspace selected by `--config`, so
+  `--config /srv/site/seo.toml` uses `/srv/site/data` from any working directory.
+- MCP writes implement the two-phase contract: `allow_write=true`, a dry run returning `plan_hash` /
+  `confirm_token` (300 s TTL), an apply that checks the plan hash, and the shared SQLite replay
+  ledger; the secret is `LV24_SEO_WRITE_SECRET`. The shipped engine service still returns
+  `WRITE_DISABLED`.
+- `seo_crawl_site` runs off the event loop on a worker thread with its own store and a 600 s budget;
+  other tools keep serving, and a timeout returns a retryable `UPSTREAM_UNAVAILABLE`.
+- MCP registry inputs match the real tool signatures, and `schemas/tools.json` is regenerated.
+
+### Infrastructure
+
+- CI adds a wheel-contract job against the installed wheel, Windows and macOS to the offline test
+  matrix, pip-audit over the locked runtime set and dependabot; the release workflow requires release
+  notes for the tag, and `paths-ignore` no longer skips `skills/*/SKILL.md`.
+
 ## [0.5.2] - 2026-11-15
 
 Release notes: [`docs/releases/0.5.2.md`](docs/releases/0.5.2.md).
