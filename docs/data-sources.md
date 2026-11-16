@@ -109,6 +109,18 @@ notification settings, Yandex Business card/reviews.
 | PSI | `GET https://www.googleapis.com/pagespeedonline/v5/runPagespeed` — ~25k/day; Lighthouse lab + (deprecated) field block |
 | Metrics | LCP ≤ 2.5 s, INP ≤ 200 ms, CLS ≤ 0.1 (p75) |
 
+**Field vs lab.** CrUX is the field source of record. `lv24-seo cwv collect` queries it per URL and
+`formFactor` (`PHONE`, `DESKTOP`, `TABLET`) and persists each p75 into `metric_daily` as
+`source=crux`, `scope=<device>`, `key=<url>`, metric `LCP`/`INP`/`CLS`/`FCP`/`TTFB`, dated on the
+fetch day. That is the exact shape the weekly CWV-by-template section reads. A 404 is "no field
+data" (`low_traffic`), not a zero row. CrUX data lags ~2 days, so `data_age_days` is never 0.
+
+PSI is **lab** data: one synthetic Lighthouse load, never averaged across runs and never merged with
+field p75. `cwv collect --source psi` returns lab rows for diagnosis but does not persist them; a
+stored Lighthouse score would be read back as field data by the CWV builder. PSI has only `mobile`
+and `desktop` strategies: `tablet` is skipped and reported as `psi_tablet_unsupported`, never mapped
+to another device. PSI works keyless; CrUX requires a Google API key.
+
 **Rules:** use CrUX for field data, PSI for lab diagnosis only, cache 24 h, never average lab runs.
 
 ## 6. GA4 (optional)

@@ -475,16 +475,93 @@ def test_export_tools_writes_valid_json(tmp_path: Path) -> None:
     assert "seo_log_analysis" in names
 
 
-def test_root_command_tree_exposes_twenty_one_top_level_entries() -> None:
+def test_cwv_collect_help_lists_the_documented_options() -> None:
+    result = _invoke("cwv", "collect", "--help")
+
+    assert result.exit_code == 0
+    help_text = _stdout(result)
+    for flag in ("--url", "--device", "--source", "--limit", "--config", "--json"):
+        assert flag in help_text
+    assert "phone, desktop, tablet or all" in help_text
+
+
+def test_cwv_collect_emits_the_standard_envelope(
+    monkeypatch: pytest.MonkeyPatch, workspace: Path
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_collect(
+        self: Any,
+        *,
+        urls: Sequence[str],
+        device: str = "phone",
+        source: str = "crux",
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        del self
+        captured.update(urls=list(urls), device=device, source=source, limit=limit)
+        return ok(
+            {
+                "date": "2026-11-16",
+                "property_id": "sc-domain:example.com",
+                "rows": [],
+                "lab": [],
+                "skipped_urls": [],
+                "written": {"crux": 0, "psi": 0},
+                "sources": {},
+            },
+            meta={
+                "source": source,
+                "devices": [device],
+                "total": 1,
+                "processed": 1,
+                "truncated": False,
+                "data_age_days": 2,
+                "limitations": [],
+            },
+        )
+
+    monkeypatch.setattr(cli_main.SeoService, "cwv_collect", fake_collect)
+    payload = _json(
+        _invoke(
+            "cwv",
+            "collect",
+            "--url",
+            "https://example.com/blog/42",
+            "--device",
+            "phone",
+            "--source",
+            "crux",
+            "--limit",
+            "5",
+            "--config",
+            str(workspace),
+            "--json",
+        )
+    )
+
+    assert captured == {
+        "urls": ["https://example.com/blog/42"],
+        "device": "phone",
+        "source": "crux",
+        "limit": 5,
+    }
+    assert payload["ok"] is True
+    assert payload["meta"]["total"] == 1
+    assert payload["meta"]["truncated"] is False
+    assert payload["data"]["written"] == {"crux": 0, "psi": 0}
+
+
+def test_root_command_tree_exposes_twenty_two_top_level_entries() -> None:
     groups = {info.name for info in cli_main.app.registered_groups}
     commands = {getattr(info.callback, "__name__", "") for info in cli_main.app.registered_commands}
 
-    assert {"logs", "tasks", "backup", "portfolio"} <= groups
-    assert len(groups) == 14
+    assert {"logs", "tasks", "backup", "portfolio", "cwv"} <= groups
+    assert len(groups) == 15
     assert commands == {"version", "doctor", "init", "properties", "stats", "crawl", "install"}
-    assert len(groups) + len(commands) == 21
+    assert len(groups) + len(commands) == 22
     help_text = _stdout(_invoke("--help"))
-    for name in ("logs", "tasks", "backup", "portfolio"):
+    for name in ("logs", "tasks", "backup", "portfolio", "cwv"):
         assert name in help_text
 
 

@@ -10,7 +10,10 @@
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
-- CLI: 21 top-level commands (14 groups + 7 commands), every command with `--json`.
+- CLI: 22 top-level commands (15 groups + 7 commands), every command with `--json`.
+- Core Web Vitals writer: `lv24-seo cwv collect --url URL [--url URL ...] --device all --source crux`
+  persists CrUX URL+device p75 rows (`metric_daily`: `source=crux`, `scope=<device>`, `key=<url>`)
+  for the weekly `cwv` section; PSI lab rows are returned but never persisted.
 - MCP: 12 tools (10 read-class, including 3 local-state writers with `readOnlyHint: false`; 2 gated
   provider writes that return `WRITE_DISABLED` in this build), 3 resources, 3 prompts.
 - New in 0.7.0: `portfolio list` (read-only multi-site roll-up), two-phase `backup restore`,

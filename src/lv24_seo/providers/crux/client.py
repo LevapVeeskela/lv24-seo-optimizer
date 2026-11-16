@@ -4,6 +4,12 @@ CrUX is the only free source of real-user Core Web Vitals. Its honesty quirk is 
 low-traffic URL answers ``404`` instead of an empty record; that is "no field data", not a
 failure, so the adapter turns it into an empty :class:`ProviderResult` carrying
 ``LOW_TRAFFIC``. Callers can then fall back to lab data (PSI) without a special case.
+
+URL queries accept an optional ``formFactor`` (``PHONE``/``DESKTOP``/``TABLET``). The
+device is a property of the request, not of the metric, so ``origin()`` and ``url()``
+without a device keep their historical body and row shape. When a device is requested,
+each row additionally carries ``url`` and ``device`` so a writer can persist the row
+without re-deriving the request.
 """
 
 from __future__ import annotations
@@ -28,6 +34,17 @@ _NO_FIELD_DATA_WARNING = "no field data"
 
 # Timing metrics are milliseconds; layout shift is a unitless 0..1 score.
 _SCORE_METRICS = frozenset({"cumulative_layout_shift"})
+
+# Canonical device aliases -> CrUX ``formFactor`` enum. ``mobile`` is the CLI/PSI word
+# for the same population CrUX calls ``PHONE``.
+_DEVICE_ALIASES: dict[str, str] = {
+    "phone": "PHONE",
+    "mobile": "PHONE",
+    "smartphone": "PHONE",
+    "desktop": "DESKTOP",
+    "tablet": "TABLET",
+    "tablets": "TABLET",
+}
 
 # Core Web Vitals first, then the supporting timings; unknown metrics sort alphabetically.
 _METRIC_ORDER = (
@@ -58,12 +75,24 @@ class CruxClient:
         """Field metrics for every URL under ``origin``."""
         return self._query("origin", origin)
 
-    def url(self, url: str) -> ProviderResult[Row]:
-        """Field metrics for a single page."""
-        return self._query("url", url)
+    def url(self, url: str, form_factor: str | None = None) -> ProviderResult[Row]:
+        """Field metrics for a single page, optionally for one device.
 
-    def _query(self, field: str, value: str) -> ProviderResult[Row]:
+        ``form_factor`` accepts the CrUX enum names and the CLI aliases (``phone``,
+        ``mobile``, ``desktop``, ``tablet``). Omitting it keeps the historical
+        device-agnostic request and row shape.
+        """
+        return self._query("url", url, form_factor=form_factor)
+
+    def _query(
+        self,
+        field: str,
+        value: str,
+        *,
+        form_factor: str | None = None,
+    ) -> ProviderResult[Row]:
         target = _require_target(value, field)
+        device = _form_factor(form_factor)
         if not self._api_key:
             raise SeoError(
                 code=AUTH_REQUIRED,
@@ -72,9 +101,13 @@ class CruxClient:
                 detail={"provider": "crux"},
             )
 
+        body: dict[str, str] = {field: target}
+        if device is not None:
+            body["formFactor"] = device
+
         try:
             payload: object = self._http.post_json(
-                self._endpoint(), json={field: target}, retry=True, rate_limit_key="crux"
+                self._endpoint(), json=body, retry=True, rate_limit_key="crux"
             )
         except SeoError as error:
             if error.code == PROPERTY_NOT_FOUND:
@@ -86,6 +119,8 @@ class CruxClient:
         rows = _rows_from(payload)
         if not rows:
             return _empty_result(target)
+        if device is not None:
+            rows = _with_device(rows, target, device)
         return ProviderResult(
             source="crux",
             property_id=target,
@@ -108,6 +143,30 @@ def _require_target(value: str, field: str) -> str:
             detail={"provider": "crux", "field": field},
         )
     return target
+
+
+def _form_factor(value: str | None) -> str | None:
+    """Normalise a device alias to the CrUX enum, or ``None`` when no device was asked."""
+    if value is None:
+        return None
+    key = value.strip().casefold()
+    if not key:
+        return None
+    device = _DEVICE_ALIASES.get(key)
+    if device is None:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"unsupported CrUX form factor: {value!r}",
+            next_action="use phone, desktop or tablet",
+            detail={"provider": "crux", "field": "form_factor"},
+        )
+    return device
+
+
+def _with_device(rows: list[Row], url: str, device: str) -> list[Row]:
+    """Attach the request's URL and canonical device to every metric row."""
+    canonical = device.lower()
+    return [{**row, "url": url, "device": canonical} for row in rows]
 
 
 def _invalid_target(error: SeoError, field: str) -> SeoError:

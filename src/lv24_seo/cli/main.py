@@ -74,6 +74,11 @@ indexnow_app = typer.Typer(
     add_completion=False, no_args_is_help=True, help="IndexNow submission (write, gated)."
 )
 report_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Build reports.")
+cwv_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Core Web Vitals collection (CrUX field, PSI lab).",
+)
 schedule_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Host scheduler jobs.")
 export_app = typer.Typer(
     add_completion=False, no_args_is_help=True, help="Export machine contracts."
@@ -86,6 +91,7 @@ app.add_typer(yandex_app, name="yandex", help="Yandex Webmaster.")
 app.add_typer(sitemap_app, name="sitemap", help="Sitemap submission (write, gated).")
 app.add_typer(indexnow_app, name="indexnow", help="IndexNow submission (write, gated).")
 app.add_typer(report_app, name="report", help="Build reports.")
+app.add_typer(cwv_app, name="cwv", help="Collect URL+device Core Web Vitals.")
 app.add_typer(schedule_app, name="schedule", help="Host scheduler jobs.")
 app.add_typer(export_app, name="export", help="Export machine contracts.")
 app.add_typer(logs_app, name="logs", help="Analyze local nginx JSON access logs (read-only).")
@@ -994,6 +1000,64 @@ def _weekly(
     if out is not None and payload.get("ok"):
         payload.setdefault("meta", {})["artifacts"] = _write_report(out, payload, config)
     return payload
+
+
+# -- core web vitals -------------------------------------------------------------------------
+
+
+@cwv_app.command("collect")
+def cwv_collect(
+    url: Annotated[
+        list[str],
+        typer.Option("--url", help="Absolute page URL; repeat the flag for more pages."),
+    ],
+    device: Annotated[
+        str,
+        typer.Option("--device", help="phone, desktop, tablet or all."),
+    ] = "phone",
+    source: Annotated[
+        str,
+        typer.Option("--source", help="crux (field), psi (lab) or both."),
+    ] = "crux",
+    limit: Annotated[
+        int,
+        typer.Option("--limit", min=1, max=50, help="Maximum URLs to query (1..50)."),
+    ] = 10,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Collect URL+device CWV and persist CrUX field rows for `report weekly`."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.cwv_collect(
+            urls=url, device=device, source=source, limit=limit
+        ),
+        persist=True,
+    )
+    emit(payload, as_json=as_json, lines=_cwv_lines(payload))
+
+
+def _cwv_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    meta = payload.get("meta") or {}
+    if not isinstance(data, Mapping) or not isinstance(meta, Mapping):
+        return ["cwv: no data"]
+    written = int(meta.get("written") or 0)
+    lines = [
+        f"cwv: {written} field row(s) written for {data.get('date') or '-'}",
+        f"source: {meta.get('source') or '-'} · devices: {', '.join(meta.get('devices') or [])}",
+        f"urls: {meta.get('urls_selected') or 0}/{meta.get('urls_total') or 0}",
+    ]
+    limitations = meta.get("limitations") or []
+    if limitations:
+        lines.append("limitations: " + ", ".join(str(item) for item in limitations))
+    return lines
 
 
 # -- automation ------------------------------------------------------------------------------
