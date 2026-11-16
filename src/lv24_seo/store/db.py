@@ -49,7 +49,7 @@ _WAL_ATTEMPTS = 5
 _WAL_RETRY_SECONDS = 0.05
 
 #: Current schema version. Bump when appending to ``_MIGRATIONS``.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     # v1 backfills databases created before ``schema_migrations`` /
@@ -105,6 +105,27 @@ _MIGRATIONS: tuple[tuple[int, str, str], ...] = (
             ON tasks (property_id, state, updated_at);
         CREATE INDEX IF NOT EXISTS idx_tasks_kind_state
             ON tasks (kind, state, updated_at);
+        """,
+    ),
+    (
+        4,
+        "indexing_events provider-reported index status table",
+        """
+        CREATE TABLE IF NOT EXISTS indexing_events (
+            provider    TEXT NOT NULL,
+            property_id TEXT NOT NULL,
+            url         TEXT NOT NULL,
+            event       TEXT NOT NULL,
+            event_date  TEXT NOT NULL,
+            detail_json TEXT,
+            first_seen  TEXT NOT NULL,
+            last_seen   TEXT NOT NULL,
+            UNIQUE (provider, property_id, url, event, event_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_indexing_events_property_date
+            ON indexing_events (property_id, event_date);
+        CREATE INDEX IF NOT EXISTS idx_indexing_events_property_url
+            ON indexing_events (property_id, url, event_date);
         """,
     ),
 )

@@ -196,8 +196,8 @@ def build_digest(
     ``issue_changes`` are crawl issues with ``rule_id``/``url`` and either an
     explicit ``change`` (``new``/``resolved``), a ``state`` of ``fixed`` or a
     ``first_seen`` inside the current period. ``indexing_events`` carry
-    ``url`` plus ``reason``/``event``. ``pages`` carry ``url`` and the crawl
-    fields ``status``/``index_state``/``canonical``.
+    ``url`` plus ``reason``/``event`` and a ``date``/``event_date``/``seen_at``.
+    ``pages`` carry ``url`` and the crawl fields ``status``/``index_state``/``canonical``.
     """
     issues, malformed_issues = _normalize_issues(issue_changes, period_start, period_end)
     events, malformed_events = _normalize_events(indexing_events)
@@ -343,7 +343,10 @@ def _normalize_events(
             {
                 "url": url,
                 "reason": reason,
-                "date": _day(row.get("date")) or _day(row.get("seen_at")),
+                # The store column is ``event_date``; older callers used ``date``/``seen_at``.
+                "date": _day(row.get("date"))
+                or _day(row.get("event_date"))
+                or _day(row.get("seen_at")),
             }
         )
     return events, malformed

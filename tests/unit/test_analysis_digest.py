@@ -184,6 +184,43 @@ def test_indexing_event_explains_a_worsening_metric() -> None:
     assert digest.data_age == "2026-11-06"
 
 
+def test_indexing_event_from_the_store_uses_event_date() -> None:
+    # Store rows name the day ``event_date``; the digest must not lose it.
+    digest = _digest(
+        indexing_events=[
+            {
+                "provider": "yandex_webmaster",
+                "url": "https://example.com/a",
+                "event": "noindex_added",
+                "event_date": "2026-11-06",
+            }
+        ]
+    )
+
+    item = digest.items[0]
+    assert item.cause == "indexing_event"
+    assert item.evidence[0] == {
+        "kind": "indexing_event",
+        "url": "https://example.com/a",
+        "reason": "noindex_added",
+        "date": "2026-11-06",
+    }
+    assert digest.data_age == "2026-11-06"
+
+
+def test_indexing_event_without_a_parsable_date_keeps_its_evidence() -> None:
+    digest = _digest(
+        indexing_events=[
+            {"url": "https://example.com/a", "event": "noindex_added", "event_date": "unknown"}
+        ]
+    )
+
+    item = digest.items[0]
+    assert item.cause == "indexing_event"
+    assert "date" not in item.evidence[0]
+    assert digest.data_age is None
+
+
 def test_page_state_explains_a_worsening_metric() -> None:
     digest = _digest(
         pages=[
