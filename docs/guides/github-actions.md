@@ -114,8 +114,8 @@ jobs:
             seo-db-${{ github.ref_name }}-
 
       - name: Materialise the Google service account
-        # Service account JSON cannot be pasted into seo.toml (it is a secret), and it
-        # must be a file for the Google auth library. Decode it into the runner temp dir.
+        # Service account JSON cannot be pasted into seo.toml (it is a secret), and the engine
+        # reads the key from an absolute path. Decode it into the runner temp dir.
         # Delete this step if you do not use Search Console.
         env:
           GSC_SERVICE_ACCOUNT_B64: ${{ secrets.LV24_SEO_GSC_SERVICE_ACCOUNT_B64 }}
@@ -249,11 +249,15 @@ not environment overrides.
    the secret at rest, and the workflow writes it only to `$RUNNER_TEMP` for the job.
 
 After the first run, `lv24-seo properties --json` under the same environment should list Search
-Console as ready. If it still reports `gsc: token missing`, the build does not read the
-service-account file yet and GSC rows are skipped (the rest of the report is unaffected).
+Console as ready. The engine reads the file once per process, signs an RS256 JWT, exchanges it at
+`https://oauth2.googleapis.com/token`, and caches the short-lived access token until 60 seconds
+before expiry. If it still reports `gsc: token missing`, check that the path is absolute and
+readable in the job and run `lv24-seo doctor --json`; the `gsc_auth` check names the problem without
+printing the key.
 
-An interactive OAuth setup (`LV24_SEO_GSC_CLIENT_ID`/`SECRET`) needs a browser loopback and a refresh
-token, so it is a local flow; for unattended CI the service account is the intended path.
+An interactive OAuth setup with a browser loopback and a refresh token is not built in; for
+unattended CI the service account is the intended path. A plain access token from a local flow can
+still be stored with `lv24-seo auth set --provider gsc`, but it expires after about an hour.
 
 ### 4. Yandex Webmaster and Metrika
 
@@ -355,6 +359,7 @@ Secrets are never written to the cache or the artifact; the service-account JSON
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Exit `3`, `AUTH_REQUIRED`, or HTTP `401` | Token expired/revoked, secret missing or misnamed, service-account key deleted | Re-authenticate with `lv24-seo auth set --provider <name> --stdin` and update the secret; for GSC create a new JSON key and add the new service account to the property |
+| `CONFIG_INVALID` for `service_account_file` | The path is relative, missing, unreadable or not valid JSON | Use an absolute path inside the job (`$RUNNER_TEMP/secrets/gsc.json`), check the decode step, and run `lv24-seo doctor --json`; the `gsc_auth` check names the problem without printing the key |
 | One provider is missing from the report | Its token is absent/empty, so the aggregate report skips that engine and warns `<engine>: token missing` | Compare `lv24-seo properties --json` under the same environment; set the matching secret. A single-engine command fails with `AUTH_REQUIRED` instead of skipping |
 | HTTP `403` | GSC service account not added to the property, wrong property string (`sc-domain:` vs `https://`), API not enabled; Yandex host not verified for the account | Grant Full/Owner in Search Console; copy the exact property/host id; enable the API. Do not retry a 403 in a loop |
 | `429`, `QUOTA_EXCEEDED`, exit `4` | GSC 1,200 QPM / 50,000 rows per day per site, Metrika 5,000 req/day, Yandex recrawl quota | Wait for `Retry-After`, reduce `--limit` (query commands) or `--days` (report), split the work. Scheduled runs must not hammer the API |

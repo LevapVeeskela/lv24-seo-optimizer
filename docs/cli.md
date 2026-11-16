@@ -56,6 +56,33 @@ lv24-seo auth logout --provider <name>
 `auth set` reads the secret from stdin or a hidden prompt, stores it in the OS keychain (or the
 `0600` file fallback), and prints only `{provider, stored, source}`.
 
+### Google Search Console credentials
+
+`auth set --provider gsc` stores a **plain OAuth access token** (`Authorization: Bearer`), which
+normally expires after about an hour. For unattended runs use a service-account JSON key instead:
+
+```bash
+export LV24_SEO_GSC_SERVICE_ACCOUNT_FILE=/etc/lv24-seo/gsc-service-account.json   # absolute
+lv24-seo properties --json                                                         # gsc ready
+```
+
+```powershell
+$env:LV24_SEO_GSC_SERVICE_ACCOUNT_FILE = "C:\lv24-seo\gsc-service-account.json"
+lv24-seo properties --json
+```
+
+The same path can live in `seo.toml` as `providers.gsc.service_account_file`. The service-account
+file is tried first (`LV24_SEO_GSC_SERVICE_ACCOUNT_FILE` overrides the config value when both are
+set), then the `gsc_token` secret. A `gsc_token` value that is a service-account JSON object is also
+accepted; a plain token keeps the old bearer behaviour.
+The engine reads the key once per process, signs an RS256 JWT, exchanges it at the Google token
+endpoint, caches the access token and refreshes it 60 seconds before expiry. Relative, missing or
+unreadable files return `CONFIG_INVALID` with a next action.
+
+`auth status` reports only stored secrets (`env`, `keyring`, `file`); it does not inspect the
+service-account file. `properties` and `doctor` (the `gsc_auth` check) are the readiness surfaces,
+and neither prints the key.
+
 ## Data
 
 ```bash

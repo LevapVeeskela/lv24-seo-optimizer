@@ -86,10 +86,16 @@ class ProjectConfig(_StrictModel):
 
 
 class GscConfig(_StrictModel):
-    """Google Search Console property and credential source."""
+    """Google Search Console property and credential source.
+
+    ``service_account_file`` is an absolute path to a service-account JSON key and is
+    configuration, not a secret; the key itself stays outside the repository. A relative
+    path is rejected at use time because it would depend on the working directory.
+    """
 
     property: str = ""
     auth: str = "keychain"
+    service_account_file: str = ""
 
 
 class YandexWebmasterConfig(_StrictModel):
@@ -224,6 +230,7 @@ class SeoConfig(_StrictModel):
 _ENV_STRING_PATHS: dict[str, tuple[str, ...]] = {
     "LV24_SEO_DATA_DIR": ("storage", "data_dir"),
     "LV24_SEO_GSC_PROPERTY": ("providers", "gsc", "property"),
+    "LV24_SEO_GSC_SERVICE_ACCOUNT_FILE": ("providers", "gsc", "service_account_file"),
     "LV24_SEO_YANDEX_HOST_ID": ("providers", "yandex_webmaster", "host_id"),
     "LV24_SEO_YANDEX_METRIKA_COUNTER": ("providers", "yandex_metrika", "counter"),
     "LV24_SEO_SMTP_HOST": ("report", "email", "smtp_host"),

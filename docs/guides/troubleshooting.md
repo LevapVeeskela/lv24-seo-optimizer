@@ -90,11 +90,25 @@ Provider-side lifetimes:
 | Google OAuth refresh token | until revoked | The OAuth app must be in production (published). In testing mode, refresh tokens expire after 7 days |
 | Google service account | no expiry | Must be added to the property as Full/Owner |
 
-**Current build caveat:** there is no OAuth refresh flow and no service-account auth. `auth set
---provider gsc` stores a single string and sends it as `Authorization: Bearer`. That is a Google
-**access token**, which normally lives about an hour. Store a fresh one per run; the long
-refresh-token lifetimes above apply once the refresh flow lands. Yandex tokens are static and work
-for their full lifetime.
+**GSC service accounts:** set `providers.gsc.service_account_file` or
+`LV24_SEO_GSC_SERVICE_ACCOUNT_FILE` to an **absolute** path to the JSON key. The engine reads the
+key once per process, signs an RS256 JWT, exchanges it at the Google token endpoint, caches the
+access token and refreshes it 60 seconds before expiry. A relative, missing or unreadable file is
+`CONFIG_INVALID`; an invalid JSON/key or a rejected exchange is `CONFIG_INVALID`/`AUTH_INVALID` with
+a next action. `auth set --provider gsc` still stores a plain OAuth access token, which normally
+lives about an hour and is not refreshed. `auth status` reports only stored secrets; a configured
+service-account file is reported by `properties` and by the `gsc_auth` check in `doctor`. Yandex
+tokens are static and work for their full lifetime.
+
+### Service-account file errors
+
+| Message | Cause | Fix |
+|---|---|---|
+| `Google service account file path must be absolute` | A relative `service_account_file` | Use an absolute path (or `~`-expanded) in `seo.toml`/the environment |
+| `Google service account file not found` / `is not a file` | Wrong path or a directory | Point at the downloaded JSON key; keep it outside the repository |
+| `cannot read the Google service account file` | Permissions or a locked volume | Fix permissions or move the key to a readable location |
+| `... is not valid JSON` / `is not a service-account key` | Truncated or wrong JSON | Download a new key from Google Cloud → IAM → Service accounts → Keys |
+| `Google rejected the service-account token request` | Key revoked, clock skew, or API disabled | Create a new key, check the system clock, enable the Search Console API |
 
 `auth status` reports `present` and the source (`env`, `keyring`, `file`) but never a value. An
 environment token is read-only: `auth set` and `auth logout` return `WRITE_DISABLED` while it is

@@ -17,6 +17,9 @@ default_property = "sc-domain:example.com"
 
 [providers.gsc]
 property = "sc-domain:example.com"
+# Optional: absolute path to a service-account JSON key added to the property as Full/Owner.
+# The path is configuration, not a secret; the JSON itself never belongs in the repository.
+# service_account_file = "/etc/lv24-seo/gsc-service-account.json"
 # Reserved auth label; credentials resolve from env, optional keyring, then opt-in file fallback.
 auth = "keychain"
 
@@ -127,6 +130,34 @@ be a valid IANA name; an invalid zone fails config validation with `CONFIG_INVAL
 stays date-based and is not converted. Scheduler generators apply the same zone where the backend
 supports it — see [scheduling](scheduling.md).
 
+## Google Search Console authentication
+
+GSC accepts two credential forms. Resolution order for every GSC command (`properties`, `stats`,
+`gsc query`, `report weekly`, the MCP GSC tools) is:
+
+1. the service-account file: `providers.gsc.service_account_file`, or
+   `LV24_SEO_GSC_SERVICE_ACCOUNT_FILE` when set (the global environment-over-file rule applies);
+2. the `gsc_token` secret — `LV24_SEO_GSC_TOKEN`, the OS keychain entry written by
+   `lv24-seo auth set --provider gsc`, or the opt-in `0600` secrets file.
+
+A service-account file must be an **absolute** path; `~` is expanded. A relative, missing or
+unreadable file fails with `CONFIG_INVALID` and a next action instead of silently falling back to a
+token. The engine reads and validates the JSON once per process, signs an RS256 JWT (`iss`, `scope`,
+`aud`, `exp`), exchanges it at the key's `token_uri` with
+`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`, and caches the resulting access token. The
+token is refreshed 60 seconds before expiry, so a long-lived MCP server survives token rotation. The
+JSON and private key are never printed, logged or put in an error message; only the file path is
+reported.
+
+`gsc_token` keeps the historical behaviour: a plain string is sent as
+`Authorization: Bearer <token>` and is **not** refreshed. A value that is a service-account JSON
+object (detected by `"type": "service_account"` plus `private_key`) is accepted as well, so a
+single-secret CI setup works without a file.
+
+`lv24-seo auth status` is keychain/env/file-secret only; it does not inspect
+`service_account_file`. Use `lv24-seo properties --json` or `lv24-seo doctor --json` (the `gsc_auth`
+check) for readiness; neither prints the key.
+
 ## Secrets
 
 | Source | How |
@@ -136,8 +167,10 @@ supports it — see [scheduling](scheduling.md).
 | Environment | `LV24_SEO_YANDEX_WEBMASTER_TOKEN=…` |
 | Headless fallback | `LV24_SEO_ALLOW_FILE_SECRETS=1` + `data/secrets.json` (0600, warning on every run) |
 
-Credentials currently use manually supplied access tokens/API keys. There is no built-in refresh-token
-or service-account flow. Expiry depends on the provider and grant; presence does not prove validity.
+Credentials are either manually supplied access tokens/API keys or, for GSC, a service-account JSON
+key. The service-account flow signs and refreshes its own short-lived access token; plain tokens and
+API keys have no refresh flow. Expiry depends on the provider and grant; presence does not prove
+validity.
 
 `lv24-seo auth status` reports provider, secret presence and storage source, never the token.
 It does not verify permissions or perform an API call.
