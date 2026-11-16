@@ -7,16 +7,20 @@ no network, clock or filesystem access.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from lv24_seo.analysis.logs import (
     LogEntry,
+    analyze_log_file,
     bot_daily,
     classify_bot,
     crawl_waste,
+    crawl_waste_report,
     parse_nginx_json,
 )
+from lv24_seo.core.errors import INVALID_INPUT, SeoError
 
 GOOGLEBOT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 YANDEXBOT = "Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)"
@@ -364,3 +368,221 @@ def test_crawl_waste_counts_assets(path: str) -> None:
 def test_crawl_waste_does_not_treat_pages_or_api_as_assets(path: str) -> None:
     result = crawl_waste([_entry(path=path, status=200)])
     assert result["asset_ratio"] == 0.0
+
+
+# --- waste report and file analysis (F3) -------------------------------------------------------
+
+
+def test_crawl_waste_report_adds_volume_and_per_bot_split() -> None:
+    report = crawl_waste_report(_mixed_entries())
+
+    assert report == {
+        "hits": 8,
+        "bytes": 8000,
+        "share": 0.8,
+        "total_hits": 10,
+        "total_bytes": 10000,
+        "by_bot": [{"bot": "googlebot", "hits": 8, "bytes": 8000, "share": 0.8, "total_hits": 10}],
+    }
+
+
+def test_crawl_waste_report_scopes_the_headline_but_not_the_bot_split() -> None:
+    entries = [*_mixed_entries(), _entry(path="/yandex-only", status=200, ua=YANDEXBOT)]
+
+    report = crawl_waste_report(entries, bot="yandexbot")
+
+    assert (report["hits"], report["bytes"], report["share"], report["total_hits"]) == (
+        0,
+        0,
+        0.0,
+        1,
+    )
+    assert report["total_bytes"] == 1000
+    assert [row["bot"] for row in report["by_bot"]] == ["googlebot", "yandexbot"]
+    assert report["by_bot"][1]["share"] == 0.0
+
+
+def test_crawl_waste_report_rejects_an_unknown_bot() -> None:
+    with pytest.raises(SeoError) as excinfo:
+        crawl_waste_report(_mixed_entries(), bot="ahrefsbot")
+
+    assert excinfo.value.code == INVALID_INPUT
+    assert "googlebot" in (excinfo.value.next_action or "")
+
+
+def _log_lines() -> list[str]:
+    return [
+        _line(
+            time_iso8601="2026-11-10T09:00:00+00:00",
+            request="GET / HTTP/1.1",
+            status=200,
+            body_bytes_sent=100,
+            http_user_agent=GOOGLEBOT,
+            request_time=0.05,
+        ),
+        _line(
+            time_iso8601="2026-11-10T10:00:00+00:00",
+            request="GET /missing HTTP/1.1",
+            status=404,
+            body_bytes_sent=10,
+            http_user_agent=GOOGLEBOT,
+        ),
+        _line(
+            time_iso8601="2026-11-10T11:00:00+00:00",
+            request="GET /old HTTP/1.1",
+            status=301,
+            body_bytes_sent=5,
+            http_user_agent=GOOGLEBOT,
+        ),
+        _line(
+            time_iso8601="2026-11-11T09:00:00+00:00",
+            request="GET /news HTTP/1.1",
+            status=200,
+            body_bytes_sent=20,
+            http_user_agent=YANDEXBOT,
+        ),
+        _line(
+            time_iso8601="2026-11-11T10:00:00+00:00",
+            request="GET /assets/app.js HTTP/1.1",
+            status=200,
+            body_bytes_sent=7,
+            http_user_agent=BROWSER,
+        ),
+        "",
+        "not json",
+    ]
+
+
+def _write_log(tmp_path: Path) -> Path:
+    path = tmp_path / "access.log"
+    path.write_text("\n".join(_log_lines()) + "\n", encoding="utf-8")
+    return path
+
+
+def test_analyze_log_file_counts_lines_and_reports_bot_rollups(tmp_path: Path) -> None:
+    path = _write_log(tmp_path)
+
+    analysis = analyze_log_file(str(path))
+
+    assert (analysis.total_lines, analysis.parsed_lines, analysis.skipped_lines) == (7, 5, 2)
+    assert analysis.bot is None
+    assert [row["bot"] for row in analysis.bot_daily] == [
+        "googlebot",
+        "googlebot",
+        "googlebot",
+        "other",
+        "yandexbot",
+    ]
+    assert analysis.bot_daily[2]["status"] == "4xx"
+    assert analysis.crawl_waste == {
+        "hits": 3,
+        "bytes": 22,
+        "share": 0.6,
+        "total_hits": 5,
+        "total_bytes": 142,
+        "by_bot": [
+            {"bot": "googlebot", "hits": 2, "bytes": 15, "share": 0.667, "total_hits": 3},
+            {"bot": "other", "hits": 1, "bytes": 7, "share": 1.0, "total_hits": 1},
+            {"bot": "yandexbot", "hits": 0, "bytes": 0, "share": 0.0, "total_hits": 1},
+        ],
+    }
+    assert analysis.warnings() == ["skipped 2 of 7 lines: blank or not nginx JSON"]
+    meta = analysis.meta()
+    assert meta["file"] == str(path)
+    assert meta["size_bytes"] == path.stat().st_size
+    assert meta["total"] == 5
+    assert meta["truncated"] is False
+    assert meta["data_age_days"] is None
+    assert any("user-agent" in item for item in meta["limitations"])
+    assert any("human" in item for item in meta["limitations"])
+
+
+def test_analyze_log_file_bot_filter_scopes_daily_rows(tmp_path: Path) -> None:
+    path = _write_log(tmp_path)
+
+    analysis = analyze_log_file(str(path), bot="GOOGLEBOT")
+
+    assert analysis.bot == "googlebot"
+    assert {row["bot"] for row in analysis.bot_daily} == {"googlebot"}
+    assert len(analysis.bot_daily) == 3
+    assert analysis.crawl_waste["total_hits"] == 3
+    assert analysis.crawl_waste["share"] == 0.667
+    assert [row["bot"] for row in analysis.crawl_waste["by_bot"]] == [
+        "googlebot",
+        "other",
+        "yandexbot",
+    ]
+
+
+def test_analyze_log_file_empty_file_is_a_valid_zero_report(tmp_path: Path) -> None:
+    path = tmp_path / "empty.log"
+    path.write_text("", encoding="utf-8")
+
+    analysis = analyze_log_file(str(path))
+
+    assert analysis.to_dict() == {
+        "total_lines": 0,
+        "parsed_lines": 0,
+        "skipped_lines": 0,
+        "bot_daily": [],
+        "crawl_waste": {
+            "hits": 0,
+            "bytes": 0,
+            "share": 0.0,
+            "total_hits": 0,
+            "total_bytes": 0,
+            "by_bot": [],
+        },
+    }
+    assert analysis.warnings() == ["no parsable nginx JSON lines in this file"]
+
+
+def test_analyze_log_file_rejects_an_oversized_file(tmp_path: Path) -> None:
+    path = tmp_path / "big.log"
+    path.write_text("x" * 64, encoding="utf-8")
+
+    with pytest.raises(SeoError) as excinfo:
+        analyze_log_file(str(path), max_bytes=32)
+
+    assert excinfo.value.code == INVALID_INPUT
+    assert excinfo.value.detail == {"size_bytes": 64, "max_bytes": 32}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "access.log",
+        "*.log",
+        "//server/share/access.log",
+        r"\\server\share\access.log",
+    ],
+)
+def test_analyze_log_file_rejects_relative_glob_and_unc_paths(raw: str) -> None:
+    with pytest.raises(SeoError) as excinfo:
+        analyze_log_file(raw)
+
+    assert excinfo.value.code == INVALID_INPUT
+
+
+@pytest.mark.parametrize("name", ["NUL", "COM1.txt"])
+def test_analyze_log_file_rejects_windows_device_names(name: str, tmp_path: Path) -> None:
+    with pytest.raises(SeoError) as excinfo:
+        analyze_log_file(str(tmp_path / name))
+
+    assert excinfo.value.code == INVALID_INPUT
+
+
+def test_analyze_log_file_rejects_directories_and_missing_files(tmp_path: Path) -> None:
+    for candidate in (tmp_path, tmp_path / "missing.log"):
+        with pytest.raises(SeoError) as excinfo:
+            analyze_log_file(str(candidate))
+        assert excinfo.value.code == INVALID_INPUT
+
+
+def test_analyze_log_file_rejects_an_unknown_bot(tmp_path: Path) -> None:
+    path = _write_log(tmp_path)
+
+    with pytest.raises(SeoError) as excinfo:
+        analyze_log_file(str(path), bot="ahrefsbot")
+
+    assert excinfo.value.code == INVALID_INPUT

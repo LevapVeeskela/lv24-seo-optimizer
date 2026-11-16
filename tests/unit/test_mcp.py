@@ -164,6 +164,55 @@ class WeeklyService(ReadService):
         return WEEKLY_PAYLOAD
 
 
+DIGEST_WEEKLY_PAYLOAD = ok(
+    {
+        "kind": "weekly",
+        "property_id": "sc-domain:example.com",
+        "period": {"start": "2026-11-01", "end": "2026-11-07"},
+        "generated_at": "2026-11-08T06:00:00+00:00",
+        "headline": "Clicks +12.5%",
+        "sections": [
+            {
+                "key": "digest",
+                "title": "Attributed change digest",
+                "summary": "3 material changes: 1 with matching evidence, 2 unexplained",
+                "rows": [
+                    {
+                        "metric": "clicks",
+                        "change": {
+                            "current": 15.0,
+                            "previous": 10.0,
+                            "abs_delta": 5.0,
+                            "pct_delta": 50.0,
+                            "direction": "up",
+                            "good": True,
+                        },
+                        "cause": "unexplained",
+                        "confidence": "low",
+                        "evidence": [],
+                        "next_action": "collect evidence",
+                    }
+                ],
+                "notes": [],
+                "total": 3,
+                "truncated": True,
+                "data_age": "2026-11-05",
+            }
+        ],
+        "limitations": [],
+        "warnings": [],
+    }
+)
+
+
+class DigestWeeklyService(WeeklyService):
+    def weekly_report(
+        self, *, days: int = 7, lag_days: int = 2, send: bool = False
+    ) -> dict[str, Any]:
+        self.send = send
+        return DIGEST_WEEKLY_PAYLOAD
+
+
 class TriageService(ReadService):
     def yandex_indexing(self) -> dict[str, Any]:
         return ok(
@@ -236,9 +285,9 @@ def test_create_server_lists_exactly_the_registry_tools() -> None:
     server = create_server(None)
     tools = _tools(server)
 
-    assert len(tools) == len(TOOLS) == 11
+    assert len(tools) == len(TOOLS) == 12
     assert [tool.name for tool in tools] == [spec.name for spec in TOOLS]
-    assert len({tool.name for tool in tools}) == 11
+    assert len({tool.name for tool in tools}) == 12
 
 
 def test_tool_metadata_and_annotations_match_registry() -> None:
@@ -389,6 +438,17 @@ def test_weekly_report_is_cached_for_the_resource_and_never_sends() -> None:
     assert "2026-11-01 - 2026-11-07" in markdown
 
 
+def test_weekly_report_resource_keeps_bounded_section_metadata() -> None:
+    server = create_server(DigestWeeklyService())
+
+    result = _call(server, "seo_weekly_report")
+
+    assert result.is_error is False
+    markdown = _read(server, "seo://report/latest")
+    assert "Showing 1 of 3 changes" in markdown
+    assert "Oldest evidence: 2026-11-05" in markdown
+
+
 def test_indexing_triage_builds_buckets_from_yandex_events() -> None:
     result = _call(create_server(TriageService()), "seo_indexing_triage")
     payload = _payload(result)
@@ -420,6 +480,104 @@ def test_opportunities_uses_two_gsc_windows_and_real_rows() -> None:
     assert {item["kind"] for item in opportunities} >= {"striking_distance", "ctr_gap"}
     assert all("expected_gain" in item for item in opportunities)
     assert any("estimate" in item for item in payload["meta"]["limitations"])
+
+
+LOG_GOOGLEBOT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+LOG_BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120 Safari/537.36"
+
+
+def _access_log(tmp_path: Path) -> Path:
+    lines = [
+        {
+            "time_iso8601": "2026-11-10T09:00:00+00:00",
+            "request": "GET / HTTP/1.1",
+            "status": 200,
+            "body_bytes_sent": 100,
+            "http_user_agent": LOG_GOOGLEBOT,
+        },
+        {
+            "time_iso8601": "2026-11-10T10:00:00+00:00",
+            "request": "GET /missing HTTP/1.1",
+            "status": 404,
+            "body_bytes_sent": 10,
+            "http_user_agent": LOG_GOOGLEBOT,
+        },
+        {
+            "time_iso8601": "2026-11-10T11:00:00+00:00",
+            "request": "GET /assets/app.js HTTP/1.1",
+            "status": 200,
+            "body_bytes_sent": 7,
+            "http_user_agent": LOG_BROWSER,
+        },
+        "",
+        "not json",
+    ]
+    path = tmp_path / "access.log"
+    path.write_text(
+        "\n".join(line if isinstance(line, str) else json.dumps(line) for line in lines) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_log_analysis_schema_requires_file_and_optional_bot() -> None:
+    tools = {tool.name: tool for tool in _tools(create_server(ReadService()))}
+
+    schema = _schema(tools["seo_log_analysis"])
+
+    assert schema["properties"]["file"]["type"] == "string"
+    assert schema["properties"]["bot"]["type"] == "string"
+    assert schema["properties"]["bot"]["default"] == ""
+    assert schema["required"] == ["file"]
+
+
+def test_log_analysis_reads_one_local_file(tmp_path: Path) -> None:
+    path = _access_log(tmp_path)
+
+    result = _call(create_server(ReadService()), "seo_log_analysis", {"file": str(path)})
+
+    assert result.is_error is False
+    payload = _payload(result)
+    assert payload["data"]["total_lines"] == 5
+    assert payload["data"]["parsed_lines"] == 3
+    assert payload["data"]["skipped_lines"] == 2
+    assert payload["data"]["crawl_waste"]["hits"] == 2
+    assert payload["data"]["crawl_waste"]["share"] == 0.667
+    assert payload["meta"]["source"] == "log_file"
+    assert payload["meta"]["truncated"] is False
+    assert payload["meta"]["data_age_days"] is None
+    assert payload["meta"]["limitations"]
+    assert payload["warnings"] == ["skipped 2 of 5 lines: blank or not nginx JSON"]
+
+
+def test_log_analysis_bot_filter_scopes_the_rollup(tmp_path: Path) -> None:
+    path = _access_log(tmp_path)
+
+    result = _call(
+        create_server(ReadService()),
+        "seo_log_analysis",
+        {"file": str(path), "bot": "googlebot"},
+    )
+
+    payload = _payload(result)
+    assert result.is_error is False
+    assert payload["meta"]["bot"] == "googlebot"
+    assert {row["bot"] for row in payload["data"]["bot_daily"]} == {"googlebot"}
+    assert payload["data"]["crawl_waste"]["total_hits"] == 2
+    assert payload["data"]["crawl_waste"]["share"] == 0.5
+
+
+def test_log_analysis_rejects_a_relative_path_without_reading(tmp_path: Path) -> None:
+    result = _call(
+        create_server(ReadService()),
+        "seo_log_analysis",
+        {"file": "access.log"},
+    )
+
+    assert result.is_error is True
+    payload = _payload(result)
+    assert payload["error"]["code"] == INVALID_INPUT
+    assert "absolute" in payload["error"]["message"]
 
 
 # -- errors ----------------------------------------------------------------------------------

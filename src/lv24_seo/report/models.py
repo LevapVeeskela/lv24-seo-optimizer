@@ -12,22 +12,38 @@ from typing import Any
 
 @dataclass(slots=True)
 class ReportSection:
-    """One block of a report: a headline sentence plus optional rows/notes."""
+    """One block of a report: a headline sentence plus optional rows/notes.
+
+    ``total``/``truncated``/``data_age`` are optional bounded-response metadata.
+    They stay ``None`` for every historical section, so the serialized shape of
+    an existing report is unchanged; a section that caps its rows (the change
+    digest) sets them and they are then part of the payload.
+    """
 
     key: str
     title: str
     summary: str
     rows: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    total: int | None = None
+    truncated: bool | None = None
+    data_age: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "key": self.key,
             "title": self.title,
             "summary": self.summary,
             "rows": self.rows,
             "notes": self.notes,
         }
+        if self.total is not None:
+            payload["total"] = self.total
+        if self.truncated is not None:
+            payload["truncated"] = self.truncated
+        if self.data_age is not None:
+            payload["data_age"] = self.data_age
+        return payload
 
 
 @dataclass(slots=True)

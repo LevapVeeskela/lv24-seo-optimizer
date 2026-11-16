@@ -141,6 +141,15 @@ _SEVERITY_KEYS: dict[str, str] = {
     "low": "issue.low",
     "unknown": "issue.unknown",
 }
+_DIGEST_CAUSES: tuple[str, ...] = (
+    "new_crawl_issue",
+    "resolved_crawl_issue",
+    "indexing_event",
+    "page_state",
+    "unexplained",
+)
+_DIGEST_CONFIDENCES: tuple[str, ...] = ("high", "medium", "low")
+_DIGEST_FIELDS: tuple[str, ...] = ("status", "index_state", "canonical")
 _SOURCE_ORDER: tuple[str, ...] = (
     "gsc",
     "yandex_webmaster",
@@ -188,6 +197,10 @@ _LIMITATION_KEYS: dict[str, str] = {
     "paid_provider": "notes.limitation.paid_provider",
     "partial_response": "notes.limitation.partial_response",
     "empty_history": "notes.limitation.empty_history",
+    "digest_no_comparison": "notes.limitation.digest_no_comparison",
+    "digest_no_evidence": "notes.limitation.digest_no_evidence",
+    "digest_no_matching_evidence": "notes.limitation.digest_no_matching_evidence",
+    "digest_evidence_malformed": "notes.limitation.digest_evidence_malformed",
 }
 # Builder warnings that are system statements, not provider prose. They are
 # localized; anything else stays verbatim.
@@ -218,6 +231,7 @@ _METRIC_SCHEMA_KEYS: frozenset[str] = frozenset(
 _WEEKLY_KEYS: frozenset[str] = frozenset(
     {
         "headline",
+        "digest",
         "gsc",
         "traffic",
         "opportunities",
@@ -316,6 +330,58 @@ _ENGLISH: dict[str, str] = {
     "notes.limitation.paid_provider": "This provider requires a paid plan.",
     "notes.limitation.partial_response": "The provider returned a partial response.",
     "notes.limitation.empty_history": "The provider has no history for this window yet.",
+    "notes.limitation.digest_no_comparison": (
+        "Change digest: no comparison window, so metric changes cannot be attributed."
+    ),
+    "notes.limitation.digest_no_evidence": (
+        "Change digest: no crawl, indexing or page-state evidence was supplied."
+    ),
+    "notes.limitation.digest_no_matching_evidence": (
+        "Change digest: stored evidence did not match every material change."
+    ),
+    "notes.limitation.digest_evidence_malformed": (
+        "Change digest: some evidence rows were ignored because they lacked an identifier."
+    ),
+    "section.digest": "Attributed change digest",
+    "digest.cause": "Candidate cause",
+    "digest.confidence": "Confidence",
+    "digest.evidence": "Evidence",
+    "digest.next_action": "Next action",
+    "digest.cause.new_crawl_issue": "New crawl issue",
+    "digest.cause.resolved_crawl_issue": "Resolved crawl issue",
+    "digest.cause.indexing_event": "Indexing event",
+    "digest.cause.page_state": "Page state",
+    "digest.cause.unexplained": "No matching evidence",
+    "digest.cause.unknown": "Unclassified cause",
+    "digest.confidence.high": "High",
+    "digest.confidence.medium": "Medium",
+    "digest.confidence.low": "Low",
+    "digest.field.status": "Status",
+    "digest.field.index_state": "Index state",
+    "digest.field.canonical": "Canonical",
+    "digest.none": "No material metric change to explain.",
+    "digest.no_comparison": "No comparison window: metric changes cannot be attributed.",
+    "digest.no_evidence": (
+        "No crawl issue, indexing event or page state evidence was provided; "
+        "causes are not attributed."
+    ),
+    "digest.truncated": "Showing {shown} of {total} changes.",
+    "digest.data_age": "Oldest evidence: {date}",
+    "digest.unknown_target": "the reported issue",
+    "digest.next_action.new_crawl_issue": "Fix {target}, then re-crawl and re-check {metric}.",
+    "digest.next_action.resolved_crawl_issue": (
+        "Confirm the {target} fix is live, then re-check {metric} after the next crawl."
+    ),
+    "digest.next_action.indexing_event": (
+        "Review the indexing event for {target}, then request a recrawl."
+    ),
+    "digest.next_action.page_state": (
+        "Restore the indexable state of {target}, then re-check {metric} after the next crawl."
+    ),
+    "digest.next_action.unexplained": (
+        "Collect crawl issues, indexing events and page state for the affected URLs; "
+        "no cause is attributed."
+    ),
     "warning.no_metrics": "No metrics for either period; delta rows are all zero.",
     "warning.previous_no_metrics": (
         "The previous period has no metrics, so deltas cannot be significant."
@@ -345,6 +411,7 @@ _ENGLISH_COUNTS: dict[str, tuple[str, str]] = {
     ),
     "issue.count": ("{count} issue", "{count} issues"),
     "issue.checks": ("{count} rule", "{count} rules"),
+    "digest.count": ("{count} material change", "{count} material changes"),
 }
 
 _REPORT_TYPES: dict[str, str] = {
@@ -571,6 +638,13 @@ class _Messages:
             text = ""
         return text or _inline(value)
 
+    def date(self, value: object) -> str:
+        try:
+            text = _inline(self._tr.date(value))
+        except Exception:  # pragma: no cover - translator contract degrades, never crashes
+            text = ""
+        return text or _format_date(_inline(value))
+
     def period(self, start: object, end: object) -> str:
         try:
             text = _inline(self._tr.period(start, end))
@@ -628,6 +702,18 @@ class _IssueGroup:
     count: int
 
 
+@dataclass(frozen=True, slots=True)
+class _DigestItem:
+    metric_label: str
+    change: str
+    cause: str
+    cause_label: str
+    confidence: str
+    confidence_label: str
+    evidence: tuple[str, ...]
+    next_action: str
+
+
 @dataclass(slots=True)
 class _Issues:
     total: int = 0
@@ -683,6 +769,9 @@ class _View:
     issues: _Issues
     sources: list[_Source]
     sources_empty: bool
+    digest: list[_DigestItem]
+    digest_empty: str
+    digest_meta: str
     notes: list[str]
     warnings: list[str]
     extras: list[_GenericSection]
@@ -1068,6 +1157,138 @@ def _build_issues(report: Report, msgs: _Messages) -> _Issues:
     return _Issues(total=total, unique_rules=len(rules), groups=issue_groups)
 
 
+def _digest_change(metric: str, change: Mapping[str, Any], msgs: _Messages) -> str:
+    current = _number(change.get("current"))
+    if current is None:
+        return ""
+    previous = _number(change.get("previous"))
+    if previous is None:
+        return _format_metric(metric, current, msgs)
+    kpi = _Kpi(
+        key=metric,
+        label="",
+        value=current,
+        previous=previous,
+        abs_delta=_number(change.get("abs_delta")),
+        pct_delta=_number(change.get("pct_delta")),
+        significant=True,
+        good=_optional_flag(change.get("good")),
+    )
+    delta = _kpi_delta(kpi, msgs)
+    left = _format_metric(metric, previous, msgs)
+    right = _format_metric(metric, current, msgs)
+    return f"{left} \u2192 {right} ({delta})" if delta else f"{left} \u2192 {right}"
+
+
+def _digest_evidence_text(row: Mapping[str, Any], msgs: _Messages) -> str:
+    kind = _prose(row.get("kind")).casefold()
+    url = _prose(row.get("url"))
+    parts: tuple[object, ...]
+    if kind == "crawl_issue":
+        severity = _prose(row.get("severity")).casefold()
+        severity_label = msgs.t(_SEVERITY_KEYS[severity]) if severity in _SEVERITY_KEYS else ""
+        parts = (_prose(row.get("rule_id")), url, severity_label)
+    elif kind == "indexing_event":
+        parts = (_prose(row.get("reason")), url, _prose(row.get("date")))
+    elif kind == "page_state":
+        field = _prose(row.get("field")).casefold()
+        label = msgs.t(f"digest.field.{field}") if field in _DIGEST_FIELDS else _humanize(field)
+        value = _flat_value(row.get("value"))
+        parts = (f"{label}: {value}" if value else label, url)
+    else:
+        return ""
+    return " \u00b7 ".join(part for part in parts if part)
+
+
+def _digest_action_text(
+    cause: str,
+    evidence: Sequence[Mapping[str, Any]],
+    metric: str,
+    msgs: _Messages,
+) -> str:
+    first = evidence[0] if evidence else {}
+    if cause in {"new_crawl_issue", "resolved_crawl_issue"}:
+        target = _prose(first.get("rule_id")) or msgs.t("digest.unknown_target")
+    elif cause in {"indexing_event", "page_state"}:
+        target = _prose(first.get("url")) or msgs.t("digest.unknown_target")
+    else:
+        return msgs.t("digest.next_action.unexplained")
+    return msgs.t(f"digest.next_action.{cause}", target=target, metric=msgs.t(f"kpi.{metric}"))
+
+
+def _digest_empty_text(report: Report, msgs: _Messages) -> str:
+    codes = {_prose(value).casefold() for value in report.limitations}
+    section = report.section("digest")
+    if section is not None:
+        codes.update(_prose(note).casefold() for note in section.notes)
+    if "digest_no_comparison" in codes:
+        return msgs.t("digest.no_comparison")
+    if "digest_no_evidence" in codes:
+        return msgs.t("digest.no_evidence")
+    return msgs.t("digest.none")
+
+
+def _digest_meta_text(section: ReportSection, shown: int, msgs: _Messages) -> str:
+    parts: list[str] = []
+    if section.truncated and section.total is not None:
+        parts.append(
+            msgs.t(
+                "digest.truncated",
+                shown=msgs.number(float(shown)),
+                total=msgs.number(float(section.total)),
+            )
+        )
+    if section.data_age:
+        parts.append(msgs.t("digest.data_age", date=msgs.date(section.data_age)))
+    return " \u00b7 ".join(parts)
+
+
+def _build_digest(report: Report, msgs: _Messages) -> tuple[list[_DigestItem], str, str]:
+    """Read the ``digest`` section defensively; unknown rows are skipped, never guessed."""
+    section = report.section("digest")
+    if section is None:
+        return [], "", ""
+    items: list[_DigestItem] = []
+    for row in _mapping_rows(section.rows):
+        metric = _metric_key(row)
+        if metric is None:
+            continue
+        raw_change = row.get("change")
+        change = raw_change if isinstance(raw_change, Mapping) else row
+        change_text = _digest_change(metric, change, msgs)
+        if not change_text:
+            continue
+        cause = _prose(row.get("cause")).casefold()
+        if cause not in _DIGEST_CAUSES:
+            cause = "unknown"
+        confidence = _prose(row.get("confidence")).casefold()
+        if confidence not in _DIGEST_CONFIDENCES:
+            confidence = "low"
+        raw_evidence = row.get("evidence")
+        evidence_rows = (
+            [item for item in raw_evidence if isinstance(item, Mapping)]
+            if isinstance(raw_evidence, (list, tuple))
+            else []
+        )
+        evidence = tuple(
+            text for item in evidence_rows if (text := _digest_evidence_text(item, msgs))
+        )
+        items.append(
+            _DigestItem(
+                metric_label=msgs.t(f"kpi.{metric}"),
+                change=change_text,
+                cause=cause,
+                cause_label=msgs.t(f"digest.cause.{cause}"),
+                confidence=confidence,
+                confidence_label=msgs.t(f"digest.confidence.{confidence}"),
+                evidence=evidence,
+                next_action=_digest_action_text(cause, evidence_rows, metric, msgs),
+            )
+        )
+    empty = "" if items else _digest_empty_text(report, msgs)
+    return items, empty, _digest_meta_text(section, len(items), msgs)
+
+
 def _canonical_source(name: str) -> str:
     key = _inline(name).casefold().replace("-", "_").replace(" ", "_")
     return _ENGINE_ALIASES.get(key, key)
@@ -1433,6 +1654,7 @@ def _build_view(report: Report, msgs: _Messages) -> _View:
         )
         issues = _build_issues(report, msgs)
         sources = _collect_sources(report, msgs)
+        digest, digest_empty, digest_meta = _build_digest(report, msgs)
         notes, warnings = _build_notes(report, msgs)
         if any(source.scope for source in sources):
             _append_unique(
@@ -1461,6 +1683,9 @@ def _build_view(report: Report, msgs: _Messages) -> _View:
         opportunity_scope = ""
         issues = _Issues()
         sources = []
+        digest = []
+        digest_empty = ""
+        digest_meta = ""
         notes, warnings = _build_notes(report, msgs)
         extras = [_generic_section(section, msgs) for section in report.sections]
         intro = _inline(report.headline)
@@ -1488,6 +1713,9 @@ def _build_view(report: Report, msgs: _Messages) -> _View:
         issues=issues,
         sources=sources,
         sources_empty=not sources,
+        digest=digest,
+        digest_empty=digest_empty,
+        digest_meta=digest_meta,
         notes=notes,
         warnings=warnings,
         extras=extras,
@@ -1664,6 +1892,31 @@ def _text_opportunities(lines: list[str], view: _View, msgs: _Messages, width: i
         lines.extend(_wrap_lines(view.opportunity_footnote, width))
 
 
+def _text_digest(lines: list[str], view: _View, msgs: _Messages, width: int) -> None:
+    if not view.digest and not view.digest_empty:
+        return
+    lines.append("")
+    lines.extend(_wrap_lines(msgs.t("section.digest"), width))
+    if view.digest_meta:
+        lines.extend(_wrap_lines(view.digest_meta, width))
+    if not view.digest:
+        lines.extend(_wrap_lines(view.digest_empty, width))
+        return
+    for index, item in enumerate(view.digest, start=1):
+        lines.extend(_wrap_lines(f"{index}. {item.metric_label}: {item.change}", width))
+        cause_line = (
+            f"{msgs.t('digest.cause')}: {item.cause_label} "
+            f"({msgs.t('digest.confidence')}: {item.confidence_label})"
+        )
+        lines.extend(_wrap_lines(cause_line, width, indent="   "))
+        for position, evidence in enumerate(item.evidence):
+            prefix = f"{msgs.t('digest.evidence')}: " if position == 0 else ""
+            lines.extend(_wrap_lines(f"{prefix}{evidence}", width, indent="   "))
+        lines.extend(
+            _wrap_lines(f"{msgs.t('digest.next_action')}: {item.next_action}", width, indent="   ")
+        )
+
+
 def _text_issues(lines: list[str], view: _View, msgs: _Messages, width: int) -> None:
     lines.append("")
     lines.extend(_wrap_lines(msgs.t("section.issues"), width))
@@ -1744,6 +1997,7 @@ def _render_text(report: Report, *, locale: str, width: int) -> str:
     _text_header(lines, view, width)
     if report.kind == "weekly":
         _text_kpis(lines, view, msgs, width)
+        _text_digest(lines, view, msgs, width)
         if view.critical_count:
             _text_issues(lines, view, msgs, width)
             _text_opportunities(lines, view, msgs, width)
@@ -1937,6 +2191,93 @@ def _markdown_section(section: ReportSection) -> str:
     return "\n".join(lines)
 
 
+def _md_number(value: float) -> str:
+    return f"{value:.0f}" if float(value).is_integer() else f"{value:.4g}"
+
+
+def _md_metric(metric: str, value: float) -> str:
+    if metric == "ctr":
+        return f"{value * 100:.2f}%"
+    if metric == "position":
+        return f"{value:.1f}"
+    return _md_number(value)
+
+
+def _md_delta(metric: str, change: Mapping[str, Any]) -> str:
+    abs_delta = _number(change.get("abs_delta"))
+    pct_delta = _number(change.get("pct_delta"))
+    if metric == "position":
+        return f" ({abs_delta:+.1f})" if abs_delta is not None else ""
+    if pct_delta is not None:
+        return f" ({pct_delta:+.1f}%)"
+    return f" ({abs_delta:+.1f})" if abs_delta is not None else ""
+
+
+def _digest_md_evidence(entry: Mapping[str, Any]) -> str:
+    kind = _prose(entry.get("kind"))
+    parts: tuple[object, ...]
+    if kind == "crawl_issue":
+        parts = (entry.get("rule_id"), entry.get("url"), entry.get("severity"))
+    elif kind == "indexing_event":
+        parts = (entry.get("reason"), entry.get("url"), entry.get("date"))
+    else:
+        value = _flat_value(entry.get("value"))
+        field_name = _prose(entry.get("field"))
+        parts = (f"{field_name}: {value}" if value else field_name, entry.get("url"))
+    return " \u00b7 ".join(_markdown_text(part) for part in parts if _prose(part))
+
+
+def _digest_markdown(section: ReportSection) -> str:
+    """Canonical English Markdown for the digest: one block per material change."""
+    lines = [f"## {_markdown_text(_prose(section.title) or 'Attributed change digest')}"]
+    summary = _stringify(section.summary)
+    if summary.strip():
+        lines.extend(["", _markdown_text(summary)])
+    rows = _mapping_rows(section.rows)
+    meta: list[str] = []
+    if section.truncated and section.total is not None:
+        meta.append(f"Showing {len(rows)} of {section.total} changes")
+    if section.data_age:
+        meta.append(f"Oldest evidence: {section.data_age}")
+    if meta:
+        joined = " \u00b7 ".join(meta)
+        lines.extend(["", f"_{_markdown_text(joined)}_"])
+    for row in rows:
+        metric = _prose(row.get("metric"))
+        if not metric:
+            continue
+        raw_change = row.get("change")
+        change = raw_change if isinstance(raw_change, Mapping) else row
+        current = _number(change.get("current"))
+        previous = _number(change.get("previous"))
+        lines.extend(["", f"### {_markdown_text(metric)}"])
+        if current is not None and previous is not None:
+            lines.append(
+                f"- Change: {_md_metric(metric, previous)} -> "
+                f"{_md_metric(metric, current)}{_md_delta(metric, change)}"
+            )
+        elif current is not None:
+            lines.append(f"- Change: {_md_metric(metric, current)}")
+        cause = _prose(row.get("cause")).casefold()
+        if cause not in _DIGEST_CAUSES:
+            cause = "unexplained"
+        confidence = _prose(row.get("confidence")).casefold()
+        if confidence not in _DIGEST_CONFIDENCES:
+            confidence = "low"
+        lines.append(f"- Cause: {cause} (confidence: {confidence})")
+        raw_evidence = row.get("evidence")
+        if isinstance(raw_evidence, (list, tuple)):
+            for entry in raw_evidence:
+                if isinstance(entry, Mapping):
+                    text = _digest_md_evidence(entry)
+                    if text:
+                        lines.append(f"- Evidence: {text}")
+        action = _prose(row.get("next_action"))
+        if action:
+            lines.append(f"- Next action: {_markdown_text(action)}")
+    return "\n".join(lines)
+
+
 def render_markdown(report: Report) -> str:
     """Render *report* as a Markdown document."""
     blocks: list[str] = []
@@ -1955,7 +2296,10 @@ def render_markdown(report: Report) -> str:
         blocks.append("\n".join(header))
 
     for section in report.sections:
-        blocks.append(_markdown_section(section))
+        if section.key == "digest":
+            blocks.append(_digest_markdown(section))
+        else:
+            blocks.append(_markdown_section(section))
 
     if report.warnings:
         blocks.append(
@@ -2078,6 +2422,39 @@ def _html_opportunities(view: _View, msgs: _Messages) -> str:
         parts.append("</div>")
     if view.opportunity_footnote:
         parts.append(_html_paragraph(view.opportunity_footnote, _SMALL_STYLE))
+    return "".join(parts)
+
+
+def _html_digest(view: _View, msgs: _Messages) -> str:
+    if not view.digest and not view.digest_empty:
+        return ""
+    parts = [f'<h2 style="{_H2_STYLE}">{_e(msgs.t("section.digest"))}</h2>']
+    if view.digest_meta:
+        parts.append(_html_paragraph(view.digest_meta, _SMALL_STYLE))
+    if not view.digest:
+        parts.append(_html_paragraph(view.digest_empty, _P_STYLE))
+        return "".join(parts)
+    for item in view.digest:
+        parts.append(
+            f'<div style="padding:10px 0;border-bottom:1px solid {_BORDER};">'
+            f'<div style="font-size:15px;line-height:1.4;font-weight:600;color:{_TEXT};'
+            f'word-break:break-word;">{_e(item.metric_label)}: {_e(item.change)}</div>'
+            f'<div style="margin-top:4px;font-size:12px;line-height:1.5;color:{_MUTED};">'
+            f"{_e(msgs.t('digest.cause'))}: {_e(item.cause_label)} \u00b7 "
+            f"{_e(msgs.t('digest.confidence'))}: {_e(item.confidence_label)}</div>"
+        )
+        if item.evidence:
+            parts.append(
+                _html_list(
+                    [f"{msgs.t('digest.evidence')}: {evidence}" for evidence in item.evidence]
+                )
+            )
+        if item.next_action:
+            parts.append(
+                f'<div style="margin-top:2px;font-size:12px;line-height:1.5;color:{_SOFT};">'
+                f"{_e(msgs.t('digest.next_action'))}: {_e(item.next_action)}</div>"
+            )
+        parts.append("</div>")
     return "".join(parts)
 
 
@@ -2269,6 +2646,9 @@ def render_html(report: Report, *, title: str | None = None, locale: str = "en")
 
     body_parts: list[str] = []
     if report.kind == "weekly":
+        digest_html = _html_digest(view, msgs)
+        if digest_html:
+            body_parts.append(digest_html)
         if view.critical_count:
             body_parts.extend(
                 [

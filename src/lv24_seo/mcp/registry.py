@@ -126,6 +126,28 @@ TOOLS: tuple[ToolSpec, ...] = (
         returns="{buckets:[{reason,count,examples,next_action}]}",
     ),
     ToolSpec(
+        name="seo_log_analysis",
+        title="Analyze access log",
+        summary=(
+            "Parse one local nginx JSON access log and report bot crawl rollups and wasted share."
+        ),
+        providers=("logs",),
+        inputs={
+            "file": "absolute path to one nginx JSON access log (max 100 MiB)",
+            "bot": "optional bot filter: googlebot, yandexbot, bingbot or other",
+        },
+        returns=(
+            "{total_lines, parsed_lines, skipped_lines, "
+            "bot_daily:[{date,bot,status,hits,bytes,p95_ms}], "
+            "crawl_waste:{hits,bytes,share,total_hits,total_bytes,by_bot}}"
+        ),
+        limitations=(
+            "user-agent classification only; not a verified-crawler check",
+            "nginx JSON logs only; other formats are skipped",
+            "one local file per call; no rotation, glob or remote fetch",
+        ),
+    ),
+    ToolSpec(
         name="seo_opportunities",
         title="Opportunities",
         summary="Striking-distance queries, CTR gaps, decayed pages, cannibalisation candidates.",

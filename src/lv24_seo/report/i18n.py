@@ -138,6 +138,7 @@ _EN_CATALOG: dict[str, str] = {
     "section.sources": "Data sources",
     "section.notes": "Data notes",
     "section.warnings": "Warnings",
+    "section.digest": "Attributed change digest",
     # Traffic
     "traffic.rows": "Landing pages",
     "traffic.sessions": "Sessions",
@@ -209,6 +210,62 @@ _EN_CATALOG: dict[str, str] = {
     "notes.limitation.paid_provider": "This provider requires a paid plan.",
     "notes.limitation.partial_response": "The provider returned a partial response.",
     "notes.limitation.empty_history": "The provider has no history for this window yet.",
+    "notes.limitation.digest_no_comparison": (
+        "Change digest: no comparison window, so metric changes cannot be attributed."
+    ),
+    "notes.limitation.digest_no_evidence": (
+        "Change digest: no crawl, indexing or page-state evidence was supplied."
+    ),
+    "notes.limitation.digest_no_matching_evidence": (
+        "Change digest: stored evidence did not match every material change."
+    ),
+    "notes.limitation.digest_evidence_malformed": (
+        "Change digest: some evidence rows were ignored because they lacked an identifier."
+    ),
+    # Attributed change digest
+    "digest.count.one": "{count} material change",
+    "digest.count.few": "{count} material changes",
+    "digest.count.many": "{count} material changes",
+    "digest.count.other": "{count} material changes",
+    "digest.cause": "Candidate cause",
+    "digest.confidence": "Confidence",
+    "digest.evidence": "Evidence",
+    "digest.next_action": "Next action",
+    "digest.cause.new_crawl_issue": "New crawl issue",
+    "digest.cause.resolved_crawl_issue": "Resolved crawl issue",
+    "digest.cause.indexing_event": "Indexing event",
+    "digest.cause.page_state": "Page state",
+    "digest.cause.unexplained": "No matching evidence",
+    "digest.cause.unknown": "Unclassified cause",
+    "digest.confidence.high": "High",
+    "digest.confidence.medium": "Medium",
+    "digest.confidence.low": "Low",
+    "digest.field.status": "Status",
+    "digest.field.index_state": "Index state",
+    "digest.field.canonical": "Canonical",
+    "digest.none": "No material metric change to explain.",
+    "digest.no_comparison": "No comparison window: metric changes cannot be attributed.",
+    "digest.no_evidence": (
+        "No crawl issue, indexing event or page state evidence was provided; "
+        "causes are not attributed."
+    ),
+    "digest.truncated": "Showing {shown} of {total} changes.",
+    "digest.data_age": "Oldest evidence: {date}",
+    "digest.unknown_target": "the reported issue",
+    "digest.next_action.new_crawl_issue": ("Fix {target}, then re-crawl and re-check {metric}."),
+    "digest.next_action.resolved_crawl_issue": (
+        "Confirm the {target} fix is live, then re-check {metric} after the next crawl."
+    ),
+    "digest.next_action.indexing_event": (
+        "Review the indexing event for {target}, then request a recrawl."
+    ),
+    "digest.next_action.page_state": (
+        "Restore {target}, then re-check {metric} after the next crawl."
+    ),
+    "digest.next_action.unexplained": (
+        "Collect crawl issues, indexing events and page state for the affected URLs; "
+        "no cause is attributed."
+    ),
     "warning.title": "Warnings",
     "warning.no_metrics": "No metrics for either period; delta rows are all zero.",
     "warning.previous_no_metrics": (
@@ -287,6 +344,7 @@ _RU_CATALOG: dict[str, str] = {
     "section.sources": "Источники данных",
     "section.notes": "Примечания к данным",
     "section.warnings": "Предупреждения",
+    "section.digest": "Разбор изменений",
     # Traffic
     "traffic.rows": "Страницы входа",
     "traffic.sessions": "Сеансы",
@@ -358,6 +416,65 @@ _RU_CATALOG: dict[str, str] = {
     "notes.limitation.paid_provider": "Этот провайдер требует платного тарифа.",
     "notes.limitation.partial_response": "Провайдер вернул частичный ответ.",
     "notes.limitation.empty_history": "У провайдера пока нет истории за это окно.",
+    "notes.limitation.digest_no_comparison": (
+        "Разбор изменений: нет окна сравнения, поэтому изменения показателей нельзя объяснить."
+    ),
+    "notes.limitation.digest_no_evidence": (
+        "Разбор изменений: не переданы данные о проблемах краула, индексации и состоянии страниц."
+    ),
+    "notes.limitation.digest_no_matching_evidence": (
+        "Разбор изменений: сохранённые доказательства подошли не ко всем значимым изменениям."
+    ),
+    "notes.limitation.digest_evidence_malformed": (
+        "Разбор изменений: часть строк доказательств пропущена из-за отсутствия идентификатора."
+    ),
+    # Attributed change digest
+    "digest.count.one": "{count} значимое изменение",
+    "digest.count.few": "{count} значимых изменения",
+    "digest.count.many": "{count} значимых изменений",
+    "digest.count.other": "{count} значимых изменений",
+    "digest.cause": "Возможная причина",
+    "digest.confidence": "Уверенность",
+    "digest.evidence": "Доказательства",
+    "digest.next_action": "Следующее действие",
+    "digest.cause.new_crawl_issue": "Новая проблема краула",
+    "digest.cause.resolved_crawl_issue": "Устранённая проблема краула",
+    "digest.cause.indexing_event": "Событие индексации",
+    "digest.cause.page_state": "Состояние страницы",
+    "digest.cause.unexplained": "Подходящих доказательств нет",
+    "digest.cause.unknown": "Причина не определена",
+    "digest.confidence.high": "Высокая",
+    "digest.confidence.medium": "Средняя",
+    "digest.confidence.low": "Низкая",
+    "digest.field.status": "Статус",
+    "digest.field.index_state": "Состояние индексации",
+    "digest.field.canonical": "Canonical",
+    "digest.none": "Нет значимых изменений показателей для объяснения.",
+    "digest.no_comparison": "Нет окна сравнения: изменения показателей нельзя объяснить.",
+    "digest.no_evidence": (
+        "Нет данных о проблемах краула, событиях индексации и состоянии страниц; "
+        "причины не указываются."
+    ),
+    "digest.truncated": "Показано {shown} из {total} изменений.",
+    "digest.data_age": "Самое старое доказательство: {date}",
+    "digest.unknown_target": "указанная проблема",
+    "digest.next_action.new_crawl_issue": (
+        "Исправьте {target}, затем пересканируйте сайт и проверьте {metric}."
+    ),
+    "digest.next_action.resolved_crawl_issue": (
+        "Убедитесь, что исправление {target} развёрнуто, и проверьте {metric} "
+        "после следующего краула."
+    ),
+    "digest.next_action.indexing_event": (
+        "Проверьте событие индексации для {target} и запросите переобход."
+    ),
+    "digest.next_action.page_state": (
+        "Восстановите {target} и проверьте {metric} после следующего краула."
+    ),
+    "digest.next_action.unexplained": (
+        "Соберите проблемы краула, события индексации и состояние страниц для затронутых "
+        "URL; причина не указывается."
+    ),
     "warning.title": "Предупреждения",
     "warning.no_metrics": "За оба периода нет метрик; строки изменений нулевые.",
     "warning.previous_no_metrics": (
@@ -436,6 +553,7 @@ _ZH_CATALOG: dict[str, str] = {
     "section.sources": "数据来源",
     "section.notes": "数据说明",
     "section.warnings": "警告",
+    "section.digest": "变化归因摘要",
     # Traffic
     "traffic.rows": "着陆页",
     "traffic.sessions": "会话数",
@@ -503,6 +621,46 @@ _ZH_CATALOG: dict[str, str] = {
     "notes.limitation.paid_provider": "该提供商需要付费方案。",
     "notes.limitation.partial_response": "提供商返回了部分响应。",
     "notes.limitation.empty_history": "提供商暂无该时间窗口的历史数据。",
+    "notes.limitation.digest_no_comparison": "变化归因：没有对比周期，无法归因指标变化。",
+    "notes.limitation.digest_no_evidence": "变化归因：未提供抓取、索引或页面状态证据。",
+    "notes.limitation.digest_no_matching_evidence": "变化归因：现有证据未能匹配所有显著变化。",
+    "notes.limitation.digest_evidence_malformed": "变化归因：部分证据行因缺少标识而被忽略。",
+    # Attributed change digest
+    "digest.count.one": "{count} 项显著变化",
+    "digest.count.few": "{count} 项显著变化",
+    "digest.count.many": "{count} 项显著变化",
+    "digest.count.other": "{count} 项显著变化",
+    "digest.cause": "可能原因",
+    "digest.confidence": "置信度",
+    "digest.evidence": "证据",
+    "digest.next_action": "下一步",
+    "digest.cause.new_crawl_issue": "新的抓取问题",
+    "digest.cause.resolved_crawl_issue": "已解决的抓取问题",
+    "digest.cause.indexing_event": "索引事件",
+    "digest.cause.page_state": "页面状态",
+    "digest.cause.unexplained": "没有匹配的证据",
+    "digest.cause.unknown": "未归类的原因",
+    "digest.confidence.high": "高",
+    "digest.confidence.medium": "中",
+    "digest.confidence.low": "低",
+    "digest.field.status": "状态码",
+    "digest.field.index_state": "索引状态",
+    "digest.field.canonical": "规范链接",
+    "digest.none": "没有需要解释的显著指标变化。",
+    "digest.no_comparison": "没有对比周期，无法归因指标变化。",
+    "digest.no_evidence": "未提供抓取问题、索引事件或页面状态证据，因此不归因原因。",
+    "digest.truncated": "显示 {shown}/{total} 项变化。",
+    "digest.data_age": "最早证据：{date}",
+    "digest.unknown_target": "所报告的问题",
+    "digest.next_action.new_crawl_issue": "修复 {target}，然后重新抓取并复查 {metric}。",
+    "digest.next_action.resolved_crawl_issue": (
+        "确认 {target} 的修复已上线，然后在下次抓取后复查 {metric}。"
+    ),
+    "digest.next_action.indexing_event": "查看 {target} 的索引事件，然后申请重新抓取。",
+    "digest.next_action.page_state": "恢复 {target}，然后在下次抓取后复查 {metric}。",
+    "digest.next_action.unexplained": (
+        "收集受影响网址的抓取问题、索引事件和页面状态；不归因原因。"
+    ),
     "warning.title": "警告",
     "warning.no_metrics": "两个周期均无指标，变化行全部为零。",
     "warning.previous_no_metrics": "上一周期没有指标，因此变化无法判定为显著。",

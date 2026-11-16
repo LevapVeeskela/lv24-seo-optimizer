@@ -114,6 +114,9 @@ _YANDEX_MAX_LIMIT = 500
 _STATS_GSC_LIMIT = 5_000
 _STATS_YANDEX_LIMIT = 500
 _STATS_PSI_URL_LIMIT = 5
+# Digest evidence is joined against the bounded delta list, so a larger cap would only
+# slow the report without changing the rendered section.
+_DIGEST_EVIDENCE_LIMIT = 500
 
 _HTTP_SCHEMES = frozenset({"http", "https"})
 # PSI works keyless; a key only raises the quota, so it never blocks client construction.
@@ -172,6 +175,21 @@ def _weekly_builder_compatible(builder: ReportBuilder) -> bool:
     if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
         return True
     return set(parameters) >= _WEEKLY_BUILDER_KEYWORDS
+
+
+def _weekly_builder_accepts(builder: ReportBuilder, keyword: str) -> bool:
+    """Whether an optional builder keyword can be passed without breaking an older builder.
+
+    ``digest_evidence`` is opt-in: a builder from an older wheel still produces the historical
+    report instead of failing with a ``TypeError`` the service would report as ``INTERNAL``.
+    """
+    try:
+        parameters = inspect.signature(builder).parameters
+    except (TypeError, ValueError):
+        return True
+    if keyword in parameters:
+        return True
+    return any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
 
 
 @dataclass(slots=True)
@@ -1456,6 +1474,10 @@ class SeoService:
         period = f"{start.isoformat()}..{current_end.isoformat()}"
 
         stored_issues = self._stored_issue_rows(property_id)
+        # The digest is opt-in: without a comparable GSC window there is nothing to
+        # attribute, and with no stored evidence the section stays absent instead of
+        # claiming a cause.
+        digest_evidence = self._digest_evidence(property_id, limitations) if gsc_complete else None
 
         # Current GSC totals are real even without a comparable previous window;
         # only the previous side is gated on comparability. The fallback gets the
@@ -1499,6 +1521,9 @@ class SeoService:
                 warnings=all_warnings,
             )
         else:
+            digest_kwargs: dict[str, Any] = {}
+            if digest_evidence is not None and _weekly_builder_accepts(builder, "digest_evidence"):
+                digest_kwargs["digest_evidence"] = digest_evidence
             report_obj = builder(
                 property_id=property_id,
                 period_start=start,
@@ -1518,6 +1543,7 @@ class SeoService:
                     impressions_pct=self._config.report.thresholds.impressions_pct,
                     position_abs=self._config.report.thresholds.position_abs,
                 ),
+                **digest_kwargs,
             )
         payload = _report_payload(report_obj)
 
@@ -1597,6 +1623,57 @@ class SeoService:
                 }
             )
         return rows
+
+    def _digest_evidence(
+        self, property_id: str, limitations: list[str]
+    ) -> dict[str, list[dict[str, Any]]] | None:
+        """Stored evidence for the attributed change digest, or ``None`` when there is none.
+
+        The store keeps one row per issue with ``first_seen``/``last_seen`` and the triage
+        ``state`` rather than a per-run issue snapshot. That is enough to say what is new
+        since the previous window (``first_seen`` inside it) and what was triaged as fixed;
+        ``analysis.digest`` applies those rules, so the rows are passed without a guessed
+        ``change``. A missing store, a read failure or an empty result keeps the digest
+        section out of the report entirely. The store has no indexing-event table yet, so
+        that input is omitted and the digest reports the gap instead of inventing events.
+        """
+        if self._store is None:
+            return None
+        try:
+            issues = self._store.list_issues(property_id, state=None, limit=_DIGEST_EVIDENCE_LIMIT)
+            pages = self._store.list_pages(property_id, limit=_DIGEST_EVIDENCE_LIMIT)
+        except Exception:  # storage must never cancel a report
+            logger.warning("weekly: could not read digest evidence")
+            return None
+        if len(issues) >= _DIGEST_EVIDENCE_LIMIT or len(pages) >= _DIGEST_EVIDENCE_LIMIT:
+            limitations.append(
+                f"digest evidence capped at {_DIGEST_EVIDENCE_LIMIT} issues and "
+                f"{_DIGEST_EVIDENCE_LIMIT} pages; an unexplained change may be missing"
+            )
+        issue_changes = [
+            {
+                "rule_id": issue.get("rule_id"),
+                "severity": issue.get("severity"),
+                "url": issue.get("url"),
+                "state": issue.get("state"),
+                "first_seen": issue.get("first_seen"),
+                "last_seen": issue.get("last_seen"),
+            }
+            for issue in issues
+        ]
+        page_rows = [
+            {
+                "url": page.get("url"),
+                "status": page.get("status"),
+                "index_state": page.get("index_state"),
+                "canonical": page.get("canonical"),
+                "last_seen": page.get("last_seen"),
+            }
+            for page in pages
+        ]
+        if not issue_changes and not page_rows:
+            return None
+        return {"issue_changes": issue_changes, "pages": page_rows}
 
     def _deliver_report(self, report: Report, warnings: list[str]) -> bool:
         """Send a built report through the configured channels (best-effort)."""

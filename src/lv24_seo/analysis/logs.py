@@ -28,16 +28,25 @@ import json
 import math
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
+from stat import S_ISDIR, S_ISREG
 from typing import Any
 
+from lv24_seo.core.errors import INVALID_INPUT, SeoError
+
 __all__ = [
+    "BOT_NAMES",
+    "MAX_LOG_BYTES",
+    "LogAnalysis",
     "LogEntry",
+    "analyze_log_file",
     "bot_daily",
     "classify_bot",
     "crawl_waste",
+    "crawl_waste_report",
     "parse_nginx_json",
 ]
 
@@ -82,6 +91,21 @@ _ASSET_EXTENSIONS = (
     ".woff2",
 )
 _PARAM_MARKERS = ("utm_", "fbclid", "gclid")
+
+#: Hard cap for one local log file. A larger file is rejected instead of being read partially:
+#: a half-read log would make the waste share look complete when it is not.
+MAX_LOG_BYTES = 100 * 1024 * 1024
+#: Bot names accepted by ``--bot`` / the MCP ``bot`` argument. They are exactly the values
+#: :func:`classify_bot` can return, so a typo fails instead of silently selecting nothing.
+BOT_NAMES = ("googlebot", "yandexbot", "bingbot", "other")
+
+_GLOB_CHARS = frozenset("*?[")
+_UNC_PREFIXES = ("\\\\", "//")
+_DEVICE_NAMES = (
+    frozenset({"con", "prn", "aux", "nul", "clock$", "conin$", "conout$"})
+    | {f"com{index}" for index in range(1, 10)}
+    | {f"lpt{index}" for index in range(1, 10)}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,7 +227,7 @@ def crawl_waste(entries: Sequence[LogEntry], *, bot: str | None = None) -> dict[
         assets += int(is_asset)
         api_calls += int(is_api)
         params += int(has_param)
-        waste += int(is_redirect or is_error or is_asset or is_api or has_param)
+        waste += int(_is_waste(entry))
 
     return {
         "hits": hits,
@@ -215,6 +239,256 @@ def crawl_waste(entries: Sequence[LogEntry], *, bot: str | None = None) -> dict[
         "param_ratio": _ratio(params, hits),
         "waste_ratio": _ratio(waste, hits),
     }
+
+
+@dataclass(frozen=True, slots=True)
+class LogAnalysis:
+    """One read-only analysis of a local nginx JSON access log."""
+
+    path: Path
+    size_bytes: int
+    total_lines: int
+    parsed_lines: int
+    skipped_lines: int
+    bot: str | None
+    bot_daily: list[dict[str, Any]]
+    crawl_waste: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        """The ``data`` payload shared by the CLI and the MCP tool."""
+        return {
+            "total_lines": self.total_lines,
+            "parsed_lines": self.parsed_lines,
+            "skipped_lines": self.skipped_lines,
+            "bot_daily": self.bot_daily,
+            "crawl_waste": self.crawl_waste,
+        }
+
+    def meta(self) -> dict[str, Any]:
+        """Completeness flags and limitations for the envelope ``meta`` block."""
+        limitations = [
+            "bot classification is user-agent based; a spoofed UA is not a verified crawler",
+            "only nginx JSON access logs (log_format ... escape=json) are parsed",
+            "each request counts once even when it matches several waste categories",
+            "the file is user-supplied; entry freshness is not verified",
+        ]
+        if self.bot is None:
+            limitations.append(
+                "crawl waste covers every request, including human and non-search traffic"
+            )
+        return {
+            "source": "log_file",
+            "file": str(self.path),
+            "size_bytes": self.size_bytes,
+            "bot": self.bot,
+            "total": len(self.bot_daily),
+            "truncated": False,
+            "data_age_days": None,
+            "limitations": limitations,
+        }
+
+    def warnings(self) -> list[str]:
+        """Honest notes about lines that could not be parsed."""
+        notes: list[str] = []
+        if self.skipped_lines:
+            notes.append(
+                f"skipped {self.skipped_lines} of {self.total_lines} lines: blank or not nginx JSON"
+            )
+        if self.parsed_lines == 0:
+            notes.append("no parsable nginx JSON lines in this file")
+        return notes
+
+
+def analyze_log_file(
+    raw: str | Path,
+    *,
+    bot: str | None = None,
+    max_bytes: int = MAX_LOG_BYTES,
+) -> LogAnalysis:
+    """Read one absolute nginx JSON log and roll it up by bot and waste share.
+
+    The file is opened read-only exactly once. Directories, globs, relative paths, UNC/device
+    paths and files above ``max_bytes`` are rejected with ``INVALID_INPUT`` instead of being
+    partially analysed: a half-read log would report a complete-looking waste share.
+    """
+    path, size_bytes = _inspect_log_file(raw, max_bytes=max_bytes)
+    selected_bot = _normalize_bot(bot)
+    total_lines = 0
+
+    def counted(lines: Iterable[str]) -> Iterator[str]:
+        nonlocal total_lines
+        for line in lines:
+            total_lines += 1
+            yield line
+
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            entries = parse_nginx_json(counted(handle))
+    except (OSError, ValueError) as exc:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"cannot read {path}",
+            next_action="check that the file exists and the current user can read it",
+            detail={"error": type(exc).__name__},
+        ) from None
+
+    rows = [
+        {
+            "date": row["date"],
+            "bot": row["bot"],
+            "status": row["status_class"],
+            "hits": row["hits"],
+            "bytes": row["bytes"],
+            "p95_ms": row["p95_ms"],
+        }
+        for row in bot_daily(entries)
+    ]
+    if selected_bot is not None:
+        rows = [row for row in rows if row["bot"] == selected_bot]
+
+    return LogAnalysis(
+        path=path,
+        size_bytes=size_bytes,
+        total_lines=total_lines,
+        parsed_lines=len(entries),
+        skipped_lines=total_lines - len(entries),
+        bot=selected_bot,
+        bot_daily=rows,
+        crawl_waste=crawl_waste_report(entries, bot=selected_bot),
+    )
+
+
+def crawl_waste_report(
+    entries: Sequence[LogEntry],
+    *,
+    bot: str | None = None,
+) -> dict[str, Any]:
+    """Wasted crawl volume for the selected scope plus a per-bot split.
+
+    ``hits``/``bytes``/``share`` describe the requests :func:`crawl_waste` counts as waste;
+    ``total_hits``/``total_bytes`` are the whole selected scope, so ``share`` is reproducible
+    from the two. ``by_bot`` always covers every parsed request, even when ``bot`` narrows the
+    headline, so one call still shows which crawler causes the waste.
+    """
+    wanted = _normalize_bot(bot)
+    ratios = crawl_waste(entries, bot=wanted)
+    selected = [entry for entry in entries if wanted is None or classify_bot(entry.ua) == wanted]
+    wasted = [entry for entry in selected if _is_waste(entry)]
+    return {
+        "hits": len(wasted),
+        "bytes": sum(entry.bytes_sent for entry in wasted),
+        "share": ratios["waste_ratio"],
+        "total_hits": ratios["hits"],
+        "total_bytes": sum(entry.bytes_sent for entry in selected),
+        "by_bot": _waste_by_bot(entries),
+    }
+
+
+def _inspect_log_file(raw: str | Path, *, max_bytes: int) -> tuple[Path, int]:
+    """Validate one user-supplied log path before any bytes are read."""
+    text = str(raw).strip()
+    if not text:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="a log file path is required",
+            next_action="pass an absolute path, for example /var/log/nginx/access.log",
+        )
+    if any(char in text for char in _GLOB_CHARS):
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="the log path must name exactly one file, not a glob",
+            next_action="pass one absolute file path without *, ? or [",
+        )
+    if text.startswith(_UNC_PREFIXES):
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="UNC, network and device paths are not accepted",
+            next_action="copy the log to a local file and pass its absolute path",
+        )
+    candidate = Path(text)
+    if not candidate.is_absolute():
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="the log path must be absolute",
+            next_action=f"pass an absolute path, got {text!r}",
+        )
+    if _device_name(candidate.name):
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="Windows device names are not accepted as log files",
+            next_action="rename the file or pass another absolute path",
+        )
+    try:
+        info = candidate.stat()
+    except (OSError, ValueError):
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{candidate} does not exist or is not accessible",
+            next_action="check the path and the file permissions",
+        ) from None
+    if S_ISDIR(info.st_mode):
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{candidate} is a directory",
+            next_action="pass one log file, not a directory",
+        )
+    if not S_ISREG(info.st_mode):
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{candidate} is not a regular file",
+            next_action="pass one regular log file",
+        )
+    if info.st_size > max_bytes:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{candidate} is larger than the {max_bytes} byte limit",
+            next_action="rotate or split the log, then analyse one part at a time",
+            detail={"size_bytes": info.st_size, "max_bytes": max_bytes},
+        )
+    return candidate, info.st_size
+
+
+def _device_name(name: str) -> bool:
+    """True for a Windows device name such as ``NUL``, ``CON`` or ``COM1.txt``."""
+    return name.split(".", 1)[0].strip().lower() in _DEVICE_NAMES
+
+
+def _normalize_bot(bot: str | None) -> str | None:
+    """Validate ``--bot``/MCP ``bot`` against the values :func:`classify_bot` returns."""
+    if bot is None:
+        return None
+    value = bot.strip().lower()
+    if not value:
+        return None
+    if value not in BOT_NAMES:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"unknown bot {bot!r}",
+            next_action=f"use one of: {', '.join(BOT_NAMES)}",
+            detail={"bot": bot},
+        )
+    return value
+
+
+def _waste_by_bot(entries: Sequence[LogEntry]) -> list[dict[str, Any]]:
+    """Waste volume per UA class over every parsed request, sorted by bot name."""
+    totals: dict[str, list[int]] = {}
+    for entry in entries:
+        row = totals.setdefault(classify_bot(entry.ua), [0, 0, 0])
+        row[0] += 1
+        if _is_waste(entry):
+            row[1] += 1
+            row[2] += entry.bytes_sent
+    return [
+        {
+            "bot": bot,
+            "hits": row[1],
+            "bytes": row[2],
+            "share": _ratio(row[1], row[0]),
+            "total_hits": row[0],
+        }
+        for bot, row in sorted(totals.items())
+    ]
 
 
 # --- parsing helpers ---------------------------------------------------------------------------
@@ -359,6 +633,17 @@ def _p95_ms(samples: Sequence[float]) -> float | None:
     ordered = sorted(samples)
     rank = max(math.ceil(0.95 * len(ordered)) - 1, 0)
     return round(ordered[rank] * 1000.0, 3)
+
+
+def _is_waste(entry: LogEntry) -> bool:
+    """True when one request does not help indexing (redirect, error, asset, API, tracking)."""
+    return (
+        300 <= entry.status <= 399
+        or entry.status >= 400
+        or _is_asset(entry.path)
+        or _base_path(entry.path).startswith("/api/")
+        or _has_tracking_param(entry.path)
+    )
 
 
 def _base_path(path: str) -> str:

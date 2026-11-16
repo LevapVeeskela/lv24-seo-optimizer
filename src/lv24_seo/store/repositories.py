@@ -25,19 +25,34 @@ import hashlib
 import json
 import logging
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, date, datetime
 from pathlib import Path
-from types import TracebackType
-from typing import Any, cast
+from types import MappingProxyType, TracebackType
+from typing import Any, Final, cast
 
 from lv24_seo.core.timeutil import utc_now
 from lv24_seo.store.db import connect, initialize
 from lv24_seo.store.errors import translate_sqlite_error
 
-__all__ = ["Store", "canonical_json", "content_hash"]
+__all__ = ["TASK_STATES", "TASK_TRANSITIONS", "Store", "canonical_json", "content_hash"]
 
 JsonObject = dict[str, Any]
+
+#: Closed task-state set (F2/F7). ``verified`` means a human/agent checked the fix; a later
+#: observation of the same finding reopens it, which is how a regression is proven.
+TASK_STATES: Final[tuple[str, ...]] = ("open", "in_progress", "verified", "dismissed")
+
+#: Allowed moves. Same-state updates are accepted as a no-op; anything else raises ValueError.
+#: ``verified`` can only leave to ``open`` (regressed) or ``dismissed`` (accepted as-is).
+TASK_TRANSITIONS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {
+        "open": frozenset({"in_progress", "verified", "dismissed"}),
+        "in_progress": frozenset({"open", "verified", "dismissed"}),
+        "verified": frozenset({"open", "dismissed"}),
+        "dismissed": frozenset({"open", "in_progress"}),
+    }
+)
 
 
 def canonical_json(payload: object) -> str:
@@ -93,6 +108,27 @@ def _row_to_dict(row: sqlite3.Row) -> JsonObject:
 
 def _decode_json(raw: str | None) -> Any:
     return None if raw is None else json.loads(raw)
+
+
+def _task_row(row: sqlite3.Row) -> JsonObject:
+    item = _row_to_dict(row)
+    raw_payload = cast(str | None, item.pop("payload_json"))
+    item["payload"] = {} if raw_payload is None else _decode_json(raw_payload)
+    return item
+
+
+def _task_identity(
+    kind: str, property_id: str, url: str, rule_id: str
+) -> tuple[str, str, str, str]:
+    for name, value in (
+        ("kind", kind),
+        ("property_id", property_id),
+        ("url", url),
+        ("rule_id", rule_id),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+    return (kind, property_id, url, rule_id)
 
 
 class Store:
@@ -619,6 +655,208 @@ class Store:
             )
         if cursor.rowcount == 0:
             raise KeyError(f"issue {issue_id} not found")
+
+    # -- tasks (finding lifecycle) --------------------------------------------------------------
+
+    def upsert_task(
+        self,
+        kind: str,
+        property_id: str,
+        url: str,
+        rule_id: str,
+        *,
+        payload: JsonObject | None = None,
+        state: str = "open",
+        seen_at: datetime | str | None = None,
+    ) -> str:
+        """Record one observation of a finding as a task; return what happened.
+
+        Returns ``"created"`` on first sight, ``"existing"`` when the task is already tracked,
+        and ``"reopened"`` when a ``verified`` task was observed again -- the recurrence is a
+        proven regression. ``dismissed`` tasks stay dismissed: only an explicit
+        :meth:`update_task_state` brings them back.
+
+        A repeated observation never resets triage: the original ``state`` and ``created_at``
+        are preserved. Supplying ``payload`` refreshes the evidence and advances ``updated_at``;
+        calling again without a payload is a true no-op.
+        """
+        identity = _task_identity(kind, property_id, url, rule_id)
+        if state not in TASK_STATES:
+            raise ValueError(
+                f"unknown task state {state!r}; expected one of {', '.join(TASK_STATES)}"
+            )
+        stamp = _timestamp(seen_at, name="seen_at")
+        payload_json = None if payload is None else canonical_json(payload)
+        # BEGIN IMMEDIATE, not a deferred transaction: the SELECT-then-INSERT must not race a
+        # concurrent crawl that observes the same finding (unique-key violation instead of
+        # idempotency). Nested callers join their outer batch via ``atomic()``.
+        with self.atomic():
+            existing = self.conn.execute(
+                """
+                SELECT id, state
+                FROM tasks
+                WHERE kind = ? AND property_id = ? AND url = ? AND rule_id = ?
+                """,
+                identity,
+            ).fetchone()
+            if existing is None:
+                self.conn.execute(
+                    """
+                    INSERT INTO tasks (
+                        kind, property_id, url, rule_id, state, payload_json, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (*identity, state, payload_json, stamp, stamp),
+                )
+                return "created"
+            if payload_json is not None:
+                self.conn.execute(
+                    "UPDATE tasks SET payload_json = ?, updated_at = ? WHERE id = ?",
+                    (payload_json, stamp, existing["id"]),
+                )
+            reopened = existing["state"] == "verified"
+            if reopened:
+                self.conn.execute(
+                    "UPDATE tasks SET state = 'open', updated_at = ? WHERE id = ?",
+                    (stamp, existing["id"]),
+                )
+        return "reopened" if reopened else "existing"
+
+    def list_tasks(
+        self,
+        *,
+        property_id: str | None = None,
+        kind: str | None = None,
+        state: str | None = None,
+        url: str | None = None,
+        rule_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[JsonObject]:
+        """Tasks newest first, optionally filtered; ``state=None`` returns every state.
+
+        An unknown ``state`` raises :class:`ValueError` instead of silently returning an empty
+        list, so a typo in a filter cannot be mistaken for "no tasks".
+        """
+        if state is not None and state not in TASK_STATES:
+            raise ValueError(
+                f"unknown task state {state!r}; expected one of {', '.join(TASK_STATES)}"
+            )
+        params: dict[str, object] = {
+            "property_id": property_id,
+            "kind": kind,
+            "state": state,
+            "url": url,
+            "rule_id": rule_id,
+            "limit": max(0, int(limit)),
+        }
+        rows = self.conn.execute(
+            """
+            SELECT id, kind, property_id, url, rule_id, state, payload_json,
+                   created_at, updated_at
+            FROM tasks
+            WHERE (:property_id IS NULL OR property_id = :property_id)
+              AND (:kind   IS NULL OR kind = :kind)
+              AND (:state  IS NULL OR state = :state)
+              AND (:url    IS NULL OR url = :url)
+              AND (:rule_id IS NULL OR rule_id = :rule_id)
+            ORDER BY updated_at DESC, id DESC
+            LIMIT :limit
+            """,
+            params,
+        ).fetchall()
+        return [_task_row(row) for row in rows]
+
+    def count_tasks(
+        self,
+        *,
+        property_id: str | None = None,
+        kind: str | None = None,
+        state: str | None = None,
+        url: str | None = None,
+        rule_id: str | None = None,
+    ) -> int:
+        """Number of tasks matching the same filters as :meth:`list_tasks`.
+
+        The WHERE clause is kept in sync with :meth:`list_tasks` deliberately: two call sites
+        are not worth a shared SQL builder, and an f-string query would weaken the audit trail.
+        """
+        if state is not None and state not in TASK_STATES:
+            raise ValueError(
+                f"unknown task state {state!r}; expected one of {', '.join(TASK_STATES)}"
+            )
+        params: dict[str, object] = {
+            "property_id": property_id,
+            "kind": kind,
+            "state": state,
+            "url": url,
+            "rule_id": rule_id,
+        }
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM tasks
+            WHERE (:property_id IS NULL OR property_id = :property_id)
+              AND (:kind   IS NULL OR kind = :kind)
+              AND (:state  IS NULL OR state = :state)
+              AND (:url    IS NULL OR url = :url)
+              AND (:rule_id IS NULL OR rule_id = :rule_id)
+            """,
+            params,
+        ).fetchone()
+        return 0 if row is None else int(row["total"])
+
+    def update_task_state(self, task_id: int, state: str) -> JsonObject:
+        """Move one task to ``state`` and return the updated row.
+
+        Only :data:`TASK_TRANSITIONS` moves are accepted; re-applying the current state is a
+        no-op so a retried CLI call stays idempotent. An unknown id raises :class:`KeyError`
+        and an invalid move raises :class:`ValueError`: silently ignoring either would let a
+        report claim a fix that never happened.
+        """
+        if state not in TASK_STATES:
+            raise ValueError(
+                f"unknown task state {state!r}; expected one of {', '.join(TASK_STATES)}"
+            )
+        # Read and write in one IMMEDIATE transaction: two processes triaging the same task
+        # must not both validate against a stale ``current`` and leave an impossible state.
+        with self.atomic():
+            row = self.conn.execute(
+                """
+                SELECT id, kind, property_id, url, rule_id, state, payload_json,
+                       created_at, updated_at
+                FROM tasks
+                WHERE id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"task {task_id} not found")
+            current = str(row["state"])
+            if current == state:
+                return _task_row(row)
+            allowed = TASK_TRANSITIONS[current]
+            if state not in allowed:
+                raise ValueError(
+                    f"invalid task transition {current} -> {state}; "
+                    f"allowed from {current}: {', '.join(sorted(allowed))}"
+                )
+            self.conn.execute(
+                "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+                (state, _now_iso(), task_id),
+            )
+            updated = self.conn.execute(
+                """
+                SELECT id, kind, property_id, url, rule_id, state, payload_json,
+                       created_at, updated_at
+                FROM tasks
+                WHERE id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if updated is None:  # pragma: no cover - the row cannot vanish inside the transaction
+                raise KeyError(f"task {task_id} not found")
+        return _task_row(updated)
 
     # -- snapshots ----------------------------------------------------------------------------
 

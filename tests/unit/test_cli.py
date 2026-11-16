@@ -468,10 +468,24 @@ def test_export_tools_writes_valid_json(tmp_path: Path) -> None:
 
     document = json.loads(destination.read_text(encoding="utf-8"))
     assert document["schema_version"] == 1
-    assert len(document["tools"]) == payload["data"]["tools"] == 11
+    assert len(document["tools"]) == payload["data"]["tools"] == 12
     names = {tool["name"] for tool in document["tools"]}
     assert "seo_properties" in names
     assert "seo_weekly_report" in names
+    assert "seo_log_analysis" in names
+
+
+def test_root_command_tree_exposes_twenty_top_level_entries() -> None:
+    groups = {info.name for info in cli_main.app.registered_groups}
+    commands = {getattr(info.callback, "__name__", "") for info in cli_main.app.registered_commands}
+
+    assert {"logs", "tasks", "backup"} <= groups
+    assert len(groups) == 13
+    assert commands == {"version", "doctor", "init", "properties", "stats", "crawl", "install"}
+    assert len(groups) + len(commands) == 20
+    help_text = _stdout(_invoke("--help"))
+    for name in ("logs", "tasks", "backup"):
+        assert name in help_text
 
 
 def test_schedule_print_cron(workspace: Path) -> None:
