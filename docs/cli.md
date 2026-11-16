@@ -72,6 +72,12 @@ proof that no row exists behind the cap, so an exact-cap result is never claimed
 truncated GSC result also omits `total` (`null`) — an exact count next to `truncated: true` would
 read as a complete answer. `data_age_days` is floored at the documented 3-day lag.
 
+`yandex queries` returns the documented query indicators as `shows`, `clicks`, `position` and
+`avg_click_position` when Yandex returns them; an indicator the engine does not map is kept under
+`extra_indicators` instead of dropping the row. `yandex indexing` returns the documented
+`indexing/history` series merged per date (`http_2xx`, `http_3xx`, `http_4xx`, `http_5xx`, `other`)
+and the `summary` counters including `site_problems`; a counter the provider omits stays absent.
+
 `crawl` respects `robots.txt`, follows same-host links breadth-first, runs all rules and stores
 pages/issues in SQLite when a store is configured. A sitemap that fails to load reports only the
 exception type in warnings and `limitations[]` — never the URL or query string, which can carry a

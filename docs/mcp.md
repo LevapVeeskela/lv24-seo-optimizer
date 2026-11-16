@@ -45,13 +45,17 @@ warning); a full page is not proof of complete coverage.
 Inputs: `host_id`, `limit` (1..500), `order_by` (`TOTAL_SHOWS` | `TOTAL_CLICKS`).
 The provider accepts an explicit `date_from`/`date_to` window (weekly uses the current
 window, capped at 3,000 rows); the tool exposes top rows without date inputs.
-Returns shows/clicks/position per query with `limitations: ["top_3000_queries", "no_query_page_join"]`.
+Returns shows/clicks/position and, when Yandex returns them, `avg_click_position` and
+`query_id`; an unmapped indicator is kept under `extra_indicators` instead of dropping the row,
+with `limitations: ["top_3000_queries", "no_query_page_join"]`.
 Coverage is partial by design: absent rows are unknown, never zero.
 
 ### `yandex_indexing_state`
 
 Inputs: none beyond the configured host (the tool reads it from config).
-Returns indexing history buckets, in-search page counts, diagnostics with severity and dates.
+Returns indexing history buckets (the documented `HTTP_2XX`/`3XX`/`4XX`/`5XX`/`OTHER` series
+merged per date), summary counters including `site_problems`, in-search page counts, diagnostics
+with severity and dates.
 `limitations: ["no_per_url_sitemap_errors"]`.
 
 When a workspace store exists, the call also upserts provider-reported per-URL events into
