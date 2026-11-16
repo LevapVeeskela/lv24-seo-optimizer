@@ -3,6 +3,49 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.7.0] - 2026-11-16
+
+Release notes: [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md). Status: release candidate; `0.6.0`
+remains the latest published build until the release workflow runs.
+
+Minor release: adds a read-only multi-site portfolio, two-phase backup restore, persisted Yandex
+indexing events (schema migration v4) and a Core Web Vitals by template section in `report weekly`.
+The CLI now has **21 top-level commands**; the MCP surface stays at **12 tools** with no changed
+input.
+
+### Added
+
+- `portfolio list --root ABS [--limit 1..50] [--json]`: read-only roll-up over sibling project
+  folders. Scans `seo.toml` up to three levels deep, reports local crawl/report/issue activity per
+  site, converts per-site failures into `error` objects and never calls a provider or reads a
+  secret. A capped scan reports `truncated`, the real `total` and a limitation.
+- `backup restore --file ABS --config ABS [--allow-write] [--confirm TOKEN] [--json]`: a two-phase
+  restore. The plan validates the archive and returns a 300-second `confirm_token` bound to the
+  archive bytes and target state; apply re-verifies every member hash, runs `PRAGMA quick_check`,
+  copies the current database/config to `.pre-restore-<utc>`, and replaces files atomically.
+  Missing/expired/replayed tokens are `CONFIRM_REQUIRED`; a token without `--allow-write` is
+  `WRITE_DISABLED`.
+- Schema v4 adds `indexing_events`, keyed by `(provider, property_id, url, event, event_date)`.
+  `yandex indexing` persists provider-reported per-URL events when a store exists and reports
+  `new`/`existing`/`skipped`/`truncated` in `meta.indexing_events`. Daily aggregate rows without a
+  URL are skipped; a storage failure is a warning.
+- `report weekly`: an additive `Core Web Vitals by template` (`cwv`) section built from stored
+  CrUX/PSI field rows. It groups by normalized URL template and device, shows at most five
+  templates (regressed first), reports p75/status/regression per metric, and adds explicit
+  limitations for origin aggregates, lab rows, missing URLs/devices and absent comparisons.
+
+### Changed
+
+- The CLI has 21 top-level commands: 14 groups (`auth`, `config`, `gsc`, `yandex`, `sitemap`,
+  `indexnow`, `report`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`) and 7
+  commands (`version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`).
+- The weekly digest now reads stored `indexing_events` inside the compared windows, in addition to
+  `issues` and `pages`. Evidence is capped at 500 rows per source with a limitation when hit.
+- Schema version is 4. Migration 4 is additive and applied on the next open; no user data is
+  rewritten or deleted.
+- The MCP surface is unchanged (12 tools, 3 resources, 3 prompts). Portfolio and restore are
+  CLI-only; `yandex_indexing_state` keeps its tool contract.
+
 ## [0.6.0] - 2026-11-16
 
 Release notes: [`docs/releases/0.6.0.md`](docs/releases/0.6.0.md).

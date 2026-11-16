@@ -1,6 +1,6 @@
 # Quickstart
 
-Verified against the 0.6.0 CLI (`lv24-seo <command> --help` is the authority when
+Verified against the 0.7.0 CLI (`lv24-seo <command> --help` is the authority when
 in doubt).
 
 ## 1. Install
@@ -78,22 +78,29 @@ created the data dir) and writes `report.json`/`report.html` to `--out`.
 Add `--send` to deliver through the configured email/Telegram channels — without
 it nothing is sent.
 
-## 7. Local insights: logs, tasks and backup
+## 7. Local insights: logs, tasks, portfolio and backup
 
 ```bash
 lv24-seo logs analyze --file /var/log/nginx/access.log --json   # bot rollups + crawl-waste share
 lv24-seo tasks list --json                                      # tracked findings
+lv24-seo portfolio list --root /srv/sites --json                # read-only multi-site roll-up
 mkdir -p backups
 lv24-seo backup create --out "$PWD/backups" --json               # config + SQLite history zip
+lv24-seo backup restore --file "$PWD/backups/lv24-seo-backup-<stamp>.zip" \
+  --config "$PWD/seo.toml" --json                                # plan; add --allow-write --confirm TOKEN
 ```
 
 `logs analyze` reads exactly one local nginx JSON access log (absolute path, max 100 MiB) and never
 stores or uploads it. Bot classes are user-agent only, so treat them as triage, not verified crawler
 identity. `tasks list` shows tasks recorded with `tasks add`; an add is idempotent per
 `(kind, property, url, rule)` and `tasks update` moves a task through
-`open → in_progress → verified`. `backup create` writes a portable zip with a redacted `seo.toml`,
-a consistent SQLite copy and a SHA-256 manifest. Restore is not implemented, so keep the archive as
-your manual restore source.
+`open → in_progress → verified`. `portfolio list` scans sibling project folders (absolute `--root`,
+up to three levels deep, at most 50 sites) and reports local crawl/report/issue activity without
+calling a provider. `backup create` writes a portable zip with a redacted `seo.toml`, a consistent
+SQLite copy and a SHA-256 manifest. `backup restore` first validates the archive and returns a
+five-minute `confirm_token`; apply with `--allow-write --confirm TOKEN`. It replaces files (never
+merges rows), copies the current database/config to `.pre-restore-<utc>` first, and does not
+include provider tokens — re-run `auth set` afterwards.
 
 ## 8. Schedule it
 

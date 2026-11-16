@@ -81,7 +81,7 @@
       "title": "Yandex indexing state",
       "description": "Indexing history, in-search page counts and diagnostics for a host.",
       "kind": "read",
-      "writes_local_state": false,
+      "writes_local_state": true,
       "providers": [
         "yandex_webmaster"
       ],
@@ -91,9 +91,9 @@
         "per-URL sitemap errors are not exposed"
       ],
       "annotations": {
-        "readOnlyHint": true,
+        "readOnlyHint": false,
         "destructiveHint": false,
-        "idempotentHint": true
+        "idempotentHint": false
       }
     },
     {

@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.6.0).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.7.0, release candidate).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -25,6 +25,11 @@ lv24-seo stats --days 7 --json             # срез по провайдера�
 lv24-seo crawl --json                      # проблемы + сверка sitemap ↔ краул
 lv24-seo logs analyze --file /var/log/nginx/access.log --json  # боты и доля мусорного обхода
 lv24-seo tasks list --json                 # локальный жизненный цикл находок
+lv24-seo portfolio list --root "$HOME/sites" --json  # read-only сводка по соседним проектам
+mkdir -p backups
+lv24-seo backup create --out "$PWD/backups" --json   # zip: конфиг + история SQLite
+lv24-seo backup restore --file "$PWD/backups/lv24-seo-backup-<stamp>.zip" \
+  --config "$PWD/seo.toml" --json          # план; --allow-write --confirm TOKEN — применить
 lv24-seo export skills --out ./skills      # скиллы из wheel-пакета
 ```
 
@@ -39,9 +44,9 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 | Слой | Что даёт |
 |---|---|
 | Источники | GSC, Вебмастер, Метрика, Bing/IndexNow, CrUX, PSI, собственный краул, логи nginx |
-| Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), атрибутированные изменения (причина/уверенность/доказательства), триаж индексации, striking distance, деградация контента, техрегрессии |
+| Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), атрибутированные изменения (причина/уверенность/доказательства), CWV по шаблонам и устройствам, триаж индексации, striking distance, деградация контента, техрегрессии |
 | MCP | 12 инструментов, 3 ресурса, 3 промпта; без записи к провайдеру по умолчанию — таблица ниже |
-| CLI | 20 команд верхнего уровня (13 групп + 7 команд): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `logs`, `tasks`, `backup`, `mcp` |
+| CLI | 21 команда верхнего уровня (14 групп + 7 команд): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp` |
 | Скиллы | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
 | Автоматизация | cron / systemd timer / Планировщик Windows, рецепт GitHub Actions |
 
@@ -110,13 +115,14 @@ destructive). Два write-инструмента требуют `allow_write=tr
 
 ## Статус
 
-Бета (v0.6.0). Открытые честные ограничения: OAuth-токен GSC
+Бета (v0.7.0, release candidate). Открытые честные ограничения: OAuth-токен GSC
 (service account — позже), `sitemap submit` / `recrawl` отвечают `WRITE_DISABLED` (IndexNow
 реально отправляет), `crawl.concurrency` зарезервирован (краулер последовательный с
-`Crawl-delay`), анализ логов определяет ботов только по User-Agent, а восстановление из
-`backup create` пока не реализовано. Новое в 0.6.0 — в
-[`docs/releases/0.6.0.md`](docs/releases/0.6.0.md); исправления 0.5.3 — в
-[`docs/releases/0.5.3.md`](docs/releases/0.5.3.md).
+`Crawl-delay`), анализ логов определяет ботов только по User-Agent, `portfolio list` и
+`backup restore` доступны только в CLI, а CWV-секция строится лишь по сохранённым field-данным
+CrUX/PSI. `0.6.0` остаётся последней опубликованной сборкой до запуска release workflow.
+Новое в 0.7.0 — в [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md); новое в 0.6.0 — в
+[`docs/releases/0.6.0.md`](docs/releases/0.6.0.md).
 
 ## Для агентов
 

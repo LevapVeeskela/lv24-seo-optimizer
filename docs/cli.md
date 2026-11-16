@@ -1,8 +1,8 @@
 # CLI reference
 
-The CLI has 20 top-level commands: 13 groups (`auth`, `config`, `gsc`, `yandex`, `sitemap`,
-`indexnow`, `report`, `schedule`, `export`, `logs`, `tasks`, `backup`, `mcp`) and 7 commands
-(`version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`).
+The CLI has 21 top-level commands: 14 groups (`auth`, `config`, `gsc`, `yandex`, `sitemap`,
+`indexnow`, `report`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`) and 7
+commands (`version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`).
 
 Every read/report command supports `--json` (machine output) and a stable exit code; commands that
 use the workspace also accept `--config PATH`.
@@ -90,6 +90,15 @@ to load, or URLs went unvisited. No sitemap means an empty diff that says "empty
 Lists are capped at 50 per bucket; `counts` are exact. Stored page text is capped at 20,000
 characters (`word_count` stays exact), and sitemap documents get a 50 MB body budget with the
 50,000-URL protocol cap.
+
+`yandex indexing` also persists provider-reported per-URL events when a workspace exists (schema v4,
+table `indexing_events`). A row is stored only when it carries an absolute URL, an event name and an
+event date; the identity is `(provider, property_id, url, event, event_date)`, so replaying a sync
+never duplicates an event. Daily aggregate history rows have no URL and are skipped instead of being
+assigned a guessed one. When a store exists and events were considered, `meta.indexing_events`
+reports `new`, `existing`, `skipped` and `truncated` counts (at most 500 provider rows are considered
+per call), and a limitation is added when rows were skipped or the 500-row budget was hit. A storage
+failure is a warning; the provider read still succeeds.
 
 ## Local logs
 
@@ -204,18 +213,38 @@ the new language; the English digest stays compatible with pre-localization ledg
 material gate runs first, so with `only_on_change` enabled a pure locale switch can still be
 suppressed when the period has no material change.
 
-When the two GSC windows are comparable and the local store holds at least one crawl issue or page
-row, the weekly report adds an **attributed change digest** section. Each item pairs a significant,
-non-flat headline change with a candidate cause (`new_crawl_issue`, `resolved_crawl_issue`,
-`indexing_event`, `page_state` or `unexplained`), a confidence (`high`/`medium`/`low`), up to three
-evidence rows (rule id and URL, indexing event, or page field) and a `next_action`. With no matching
+When the two GSC windows are comparable and the local store holds at least one crawl issue, page row
+or indexing event, the weekly report adds an **attributed change digest** section. Each item pairs a
+significant, non-flat headline change with a candidate cause (`new_crawl_issue`,
+`resolved_crawl_issue`, `indexing_event`, `page_state` or `unexplained`), a confidence
+(`high`/`medium`/`low`), up to three evidence rows (rule id and URL, indexing event, or page field)
+and a `next_action`. With no matching
 evidence the item stays `unexplained` and says so — the digest never invents a cause to fill the gap.
 A rule known not to move search metrics (image alt text, HTML `lang`) is never offered as a cause;
 an unknown rule is only low-confidence evidence. Items are capped at 8 and evidence at 3 per item;
 the section carries `total`, `truncated` and `data_age` (the oldest evidence date actually shown),
-and its limitation codes are merged into the report's `limitations`. Stored evidence today is the
-`issues` and `pages` tables; there is no indexing-event table, so `indexing_event` appears only when
-a caller supplies those rows. Without comparable GSC windows the section is absent.
+and its limitation codes are merged into the report's `limitations`. Stored evidence is the `issues`
+and `pages` tables plus, since schema v4, `indexing_events`; indexing events are read only inside the
+two compared windows, because an event outside them cannot explain this period's change. Each source
+is capped at 500 rows per report and the limitation says so when the cap is hit. Without comparable
+GSC windows the section is absent.
+
+When the store holds CrUX/PSI **field** rows for the compared windows, the weekly report also adds a
+**Core Web Vitals by template** section (`cwv`). It is opt-in for the caller: the service passes
+stored rows only, and a report built without them keeps the historical section list. Rows are
+grouped by normalized URL template (`/blog/{id}`) and device (`phone`, `desktop`, `tablet`), and the
+section shows at most the **top 5 templates**: regressed templates first, then the largest relative
+regression, then poor-metric count and worst status. Each row carries the template, device, URL
+count, sample/compared counts, core-metric coverage, per-metric `p75` with `status`, previous p75,
+delta and `regressed`, plus the template's worst regression and `poor_metrics`. A regression means a
+p75 increase of at least 5% (and above 0.01 for CLS). Origin aggregates, lab/PSI scores and rows
+without a URL or a known device are not merged into a template; they are counted in
+`limitations` (`cwv_template_missing`, `cwv_device_missing`, `cwv_lab_ignored`,
+`cwv_values_ignored`). The section carries `total`, `truncated` and `data_age`; the
+`cwv_p75_worst_page` limitation states that a template p75 is the worst page p75 in that group,
+not a site-wide average. Missing previous p75 yields `cwv_no_comparison` or
+`cwv_partial_comparison` instead of an invented delta. `report weekly` and `seo_weekly_report`
+share this section; no provider is called to build it.
 
 ```bash
 lv24-seo report diff [--base START..END] [--head START..END] [--markdown] [--strict] [--json]
@@ -244,8 +273,8 @@ lv24-seo tasks add --kind KIND --url URL --rule RULE [--property ID] [--payload 
 lv24-seo tasks update TASK_ID --state open|in_progress|verified|dismissed [--json]
 ```
 
-The local finding lifecycle lives in SQLite (schema v3). A task is keyed by
-`(kind, property_id, url, rule_id)`, so `tasks add` is idempotent: it returns
+The local finding lifecycle lives in SQLite (migration v3; the current schema is v4). A task is keyed
+by `(kind, property_id, url, rule_id)`, so `tasks add` is idempotent: it returns
 `data.outcome: created`, `existing` or `reopened` instead of duplicating a finding. A `verified` task
 observed again reopens to `open` — the recurrence is a proven regression; a `dismissed` task stays
 dismissed until an explicit update. A repeated add without `--payload` is a true no-op; with
@@ -265,14 +294,45 @@ rejects credential-shaped keys (`token`, `secret`, `password`, `api_key`, `autho
 evidence can never become a secret store. The commands need an initialised workspace; without the
 data directory they fail with `CONFIG_INVALID` and a `next_action`.
 
+## Portfolio
+
+```bash
+lv24-seo portfolio list --root /absolute/sites [--limit 1..50] [--json]
+```
+
+Read-only roll-up over sibling project folders. `--root` must be an absolute, existing directory;
+the scan looks for `seo.toml` up to three levels below it and skips hidden, `node_modules`,
+`__pycache__` and `venv` directories plus symlinked directories (cycle safety). At most 50 sites are
+inspected (`--limit` 1..50, default 50). Discovery still counts every config, so a capped result
+returns `meta.truncated: true` with an honest `total` and a limitation instead of presenting a
+partial portfolio as complete.
+
+Each `data.sites[]` row carries `config_path`, `name`, `property`, `base_url`, `data_dir`,
+`db_path`, `db_present`, `crawl_runs`, `last_crawl_at`, `report_snapshots`, `last_report_at`,
+`last_report_period`, `issues_open`, `issues_total`, `issues_critical`, `last_issue_at`,
+`last_activity_at` and `error`. Rows are newest activity first, then by config path. A broken TOML
+file or an unreadable database becomes a per-site `error` object (`CONFIG_INVALID`, `STORE_LOCKED`,
+`STORE_CORRUPT`, `STORE_UNAVAILABLE`) and the rest of the portfolio still scans.
+
+The scan never writes, never calls a provider and never reads a secret: configs are loaded with an
+empty environment (an ambient `LV24_SEO_DATA_DIR` cannot redirect every site), a relative data dir is
+anchored to its own config, and SQLite is opened with `immutable=1` for a quiescent file or
+`mode=ro` for a live WAL. A database with a pending rollback journal or an uncheckpointed WAL
+without its `-shm` is reported as unavailable rather than opened read-write. `meta` carries `root`,
+`limit`, `count`, `total`, `truncated`, `data_age_days: 0`, `read_only: true`, `max_depth` and
+`limitations`.
+
 ## Backup
 
 ```bash
 lv24-seo backup create --out /absolute/existing/dir [--force] [--json]
+lv24-seo backup restore --file /absolute/backup.zip --config /absolute/seo.toml [--json]
+lv24-seo backup restore --file /absolute/backup.zip --config /absolute/seo.toml \
+  --allow-write --confirm TOKEN --json
 ```
 
-Writes one portable `lv24-seo-backup-YYYYMMDDTHHMMSSZ.zip` to an existing absolute directory. The
-archive contains:
+`backup create` writes one portable `lv24-seo-backup-YYYYMMDDTHHMMSSZ.zip` to an existing absolute
+directory. The archive contains:
 
 - `manifest.json` — format `lv24-seo-backup` v1, engine and schema versions, creation time, every
   payload file with its size and SHA-256, totals, a bounded summary and limitations;
@@ -287,9 +347,28 @@ source workspace is only read (`mode=ro`, `PRAGMA query_only`); the archive is w
 temporary file and renamed atomically. `--force` replaces an archive with the same timestamped
 name; without it an existing file is `INVALID_INPUT`. Limits: 4 MiB config, 2 GiB database (plus
 WAL). The envelope carries `archive_path`, `archive_size`, `archive_sha256`, the full `manifest`
-and a flat `summary`. **Restore is not implemented** — unpack the archive yourself and re-run
-`lv24-seo init`/`auth set` as needed. A corrupt source is `STORE_CORRUPT` and is left untouched
-(no `.corrupt-*` copy is written by this command).
+and a flat `summary`. A corrupt source is `STORE_CORRUPT` and is left untouched (no `.corrupt-*`
+copy is written by this command).
+
+`backup restore` is **two-phase**. Without `--confirm` it only validates the archive and returns a
+plan (`status: planned`): the archive hash and manifest hash, the target config/data directory, the
+current and archived database hashes, the config action (`create`, `replace` or `write_alongside`)
+and a short-lived `confirm_token` with `expires_at`/`ttl_seconds` (300 seconds). Nothing outside a
+temporary directory is written in this phase. Applying needs both `--allow-write` and the token:
+`--allow-write` alone only plans and warns, and a token without `--allow-write` is
+`WRITE_DISABLED`. The token is bound to the archive bytes and the target state, so a changed
+archive, a changed workspace, an expired token or a replay is `CONFIRM_REQUIRED`. The database is
+always restored to `<config dir>/data/seo.sqlite3`; an archived config whose `data_dir` points
+elsewhere is `INVALID_INPUT`. Before replacing anything, the current database is copied to
+`<db>.pre-restore-<utc>` (and the current config to `seo.toml.pre-restore-<utc>` when it is
+replaced). Every member hash is re-verified, the restored database passes `PRAGMA quick_check`, and
+the files are replaced atomically. A config that does not validate is written alongside as
+`seo.toml.restored-<utc>` so the existing config stays usable.
+
+Restore replaces files; it never merges rows or settings. Provider tokens are not in the archive,
+so re-authenticate with `lv24-seo auth set`. Stop other CLI/desktop processes first — a database
+held open cannot be replaced on Windows. The token prevents accidental or stale applies; it is not
+access control, because anyone who can run the CLI can restore.
 
 ## Scheduling
 
@@ -326,7 +405,9 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
 - Dates are ISO-8601 (`2026-11-10`); durations are `7d`, `28d`, `90d` where a flag accepts them.
 - Write operations (sitemap submit, recrawl queue, IndexNow submit) **are** exposed with gating:
   a dry run first, then `--allow-write` plus the HMAC `confirm_token` from the plan (ADR-0003).
-  IndexNow actually submits; GSC sitemap submit and Yandex recrawl refuse with `WRITE_DISABLED`
+  `backup restore` uses the same two-phase shape for a local destructive write: the plan's token is
+  bound to the archive and target state, expires in 5 minutes and is not replayable. IndexNow
+  actually submits; GSC sitemap submit and Yandex recrawl refuse with `WRITE_DISABLED`
   when the provider path is not wired, instead of pretending. With an initialised workspace the
   apply uses the SQLite idempotency ledger, so replaying the same token returns
   `status: skipped` / `reason: duplicate` and the provider is called once. The ledger lives in the

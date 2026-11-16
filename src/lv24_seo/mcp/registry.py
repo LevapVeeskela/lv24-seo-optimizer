@@ -70,6 +70,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         name="yandex_indexing_state",
         title="Yandex indexing state",
         summary="Indexing history, in-search page counts and diagnostics for a host.",
+        writes_local_state=True,
         providers=("yandex_webmaster",),
         returns="{history:[...], problems:[...], data_age_days}",
         limitations=("per-URL sitemap errors are not exposed",),
