@@ -26,6 +26,7 @@ import hashlib
 import inspect
 import json
 import logging
+import math
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -122,6 +123,38 @@ _DIGEST_EVIDENCE_LIMIT = 500
 # Five templates is the builder's report bound; the row cap keeps one read bounded.
 _WEEKLY_CWV_LIMIT = 5
 _CWV_ROW_LIMIT = 2_000
+# CWV collection: one command must not fan out without bound. The CLI caps URLs at 50;
+# devices multiply that, so 50 URLs on all three devices is the worst case (150 CrUX calls,
+# which the shared 2.5 rps bucket paces below the 150 QPM quota).
+_CWV_URL_LIMIT_MAX = 50
+_CWV_ACCURACY = "crux_field_28d"
+_CWV_SOURCES: tuple[str, ...] = ("crux", "psi", "both")
+_CWV_DEVICE_ALIASES: dict[str, str] = {
+    "phone": "phone",
+    "mobile": "phone",
+    "smartphone": "phone",
+    "desktop": "desktop",
+    "tablet": "tablet",
+    "tablets": "tablet",
+    "all": "all",
+}
+# CrUX metric names (and already-short labels) -> the stored canonical label. FID is
+# deliberately absent: it is deprecated and not part of the current CWV set.
+_CWV_METRICS: dict[str, str] = {
+    "largest_contentful_paint": "LCP",
+    "lcp": "LCP",
+    "interaction_to_next_paint": "INP",
+    "inp": "INP",
+    "cumulative_layout_shift": "CLS",
+    "cls": "CLS",
+    "first_contentful_paint": "FCP",
+    "fcp": "FCP",
+    "experimental_time_to_first_byte": "TTFB",
+    "ttfb": "TTFB",
+}
+# PSI has no tablet strategy. Mapping tablet to mobile/desktop would fabricate a device,
+# so the pair is skipped and reported as a limitation instead.
+_CWV_PSI_STRATEGIES: dict[str, str] = {"phone": "mobile", "desktop": "desktop"}
 # Provider event history can be long; one command must not write an unbounded number of rows.
 # The digest reads at most _DIGEST_EVIDENCE_LIMIT events, so this is already generous.
 _INDEXING_EVENTS_LIMIT = 500
@@ -933,6 +966,201 @@ class SeoService:
             )
         return counts
 
+    def cwv_collect(
+        self,
+        *,
+        urls: Sequence[str],
+        device: str = "phone",
+        source: str = "crux",
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Collect URL+device Core Web Vitals and persist CrUX field rows.
+
+        CrUX is the field source of record: its p75 rows are written to
+        ``metric_daily`` as ``source=crux``, ``scope=<device>`` and ``key=<url>``,
+        which is exactly what the weekly CWV section reads. PSI is lab data and is
+        never persisted: the builder treats every stored p75 as field data, so
+        writing a Lighthouse score there would pollute the field series.
+        """
+        warnings: list[str] = []
+        return self._respond(
+            "cwv_collect",
+            warnings,
+            lambda: self._cwv_collect(urls, device, source, limit, warnings),
+        )
+
+    def _cwv_collect(
+        self,
+        urls: Sequence[str],
+        device: str,
+        source: str,
+        limit: int,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        source_name = _cwv_source(source)
+        devices = _cwv_devices(device)
+        span = _positive_int(limit, name="limit", maximum=_CWV_URL_LIMIT_MAX)
+        targets = _cwv_urls(urls)
+        selected = targets[:span]
+        skipped = targets[span:]
+        total = len(targets)
+        processed = len(selected)
+        pairs_total = total * len(devices)
+        pairs_processed = processed * len(devices)
+        observed_on = local_today(self._config.report.timezone)
+        property_id = _report_property_id(self._config)
+        limitations: list[str] = []
+        data_ages: list[int] = []
+
+        if skipped:
+            limitations.append("cwv_url_cap")
+        if source_name in {"psi", "both"}:
+            # Lab rows are reported, never stored: a stored p75 would be read as field data.
+            limitations.append("cwv_lab_ignored")
+            if "tablet" in devices:
+                limitations.append("psi_tablet_unsupported")
+
+        crux_client: object | None = None
+        if source_name in {"crux", "both"}:
+            # Resolve the key first: a missing CrUX key is the documented AUTH_REQUIRED
+            # contract even when the local store is also absent.
+            crux_client = self._client_for(SOURCE_CRUX, warnings)
+            if self._store is None:
+                raise SeoError(
+                    code=CONFIG_INVALID,
+                    message="store is not configured; CWV field rows cannot be persisted",
+                    next_action="run `lv24-seo init` so the data directory exists, then retry",
+                )
+
+        field_rows: list[dict[str, Any]] = []
+        lab_rows: list[dict[str, Any]] = []
+        unsupported: set[str] = set()
+        crux_empty: list[str] = []
+        crux_calls = 0
+        psi_calls = 0
+
+        if source_name in {"crux", "both"}:
+            assert crux_client is not None
+            for url in selected:
+                for form_factor in devices:
+                    result = _call(crux_client, "url", url, form_factor=form_factor)
+                    crux_calls += 1
+                    data_ages.append(_result_data_age(result))
+                    limitations.extend(_result_limitations(result))
+                    warnings.extend(_result_warnings(result))
+                    rows = _result_rows(result)
+                    if not rows:
+                        crux_empty.append(f"{url} ({form_factor})")
+                    for row in rows:
+                        metric = _cwv_metric(row.get("metric"))
+                        if metric is None:
+                            name = row.get("metric")
+                            if isinstance(name, str) and name.strip():
+                                unsupported.add(name.strip())
+                            continue
+                        p75 = _float_or_none(row.get("p75"))
+                        if p75 is None or not math.isfinite(p75) or p75 < 0:
+                            continue
+                        field_rows.append(
+                            {
+                                "url": url,
+                                "device": form_factor,
+                                "metric": metric,
+                                "p75": p75,
+                                "unit": "score" if metric == "CLS" else "ms",
+                                "source": SOURCE_CRUX,
+                            }
+                        )
+
+        if source_name in {"psi", "both"}:
+            psi = self._maybe_client(SOURCE_PSI)
+            strategies = [
+                (form_factor, _CWV_PSI_STRATEGIES[form_factor])
+                for form_factor in devices
+                if form_factor in _CWV_PSI_STRATEGIES
+            ]
+            if not strategies:
+                warnings.append("psi: tablet is not supported; no lab run was made")
+            for url in selected:
+                for form_factor, strategy in strategies:
+                    result = _call(psi, "run", url, strategy=strategy)
+                    psi_calls += 1
+                    data_ages.append(_result_data_age(result))
+                    limitations.extend(_result_limitations(result))
+                    warnings.extend(_result_warnings(result))
+                    for row in _result_rows(result):
+                        lab_rows.append(
+                            {
+                                **row,
+                                "url": url,
+                                "device": form_factor,
+                                "kind": "lab",
+                                "source": SOURCE_PSI,
+                            }
+                        )
+
+        if unsupported:
+            limitations.append("cwv_metric_unsupported: " + ", ".join(sorted(unsupported)))
+        if source_name in {"crux", "both"} and not field_rows:
+            limitations.append("cwv_no_field_rows")
+
+        if field_rows and self._store is not None:
+            with self._store.atomic():
+                for row in field_rows:
+                    self._store.upsert_metric_daily(
+                        property_id,
+                        SOURCE_CRUX,
+                        observed_on,
+                        scope=row["device"],
+                        key=row["url"],
+                        metric=row["metric"],
+                        value=row["p75"],
+                        accuracy=_CWV_ACCURACY,
+                    )
+
+        sources: dict[str, Any] = {}
+        if source_name in {"crux", "both"}:
+            sources[SOURCE_CRUX] = {
+                "calls": crux_calls,
+                "rows": len(field_rows),
+                "no_field_data": crux_empty,
+                "persisted": len(field_rows),
+            }
+        if source_name in {"psi", "both"}:
+            sources[SOURCE_PSI] = {
+                "calls": psi_calls,
+                "rows": len(lab_rows),
+                "persisted": 0,
+            }
+
+        data = {
+            "date": observed_on.isoformat(),
+            "property_id": property_id,
+            "rows": field_rows,
+            "lab": lab_rows,
+            "skipped_urls": skipped,
+            "written": {"crux": len(field_rows), "psi": 0},
+            "sources": sources,
+        }
+        meta = {
+            "source": source_name,
+            "devices": devices,
+            "date": observed_on.isoformat(),
+            "urls_total": len(targets),
+            "urls_selected": len(selected),
+            "total": total,
+            "processed": processed,
+            "pairs_total": pairs_total,
+            "pairs_processed": pairs_processed,
+            "calls": crux_calls + psi_calls,
+            "truncated": bool(skipped),
+            "data_age_days": max(data_ages, default=0),
+            "written": len(field_rows),
+            "store": self._store is not None,
+            "limitations": _unique(limitations),
+        }
+        return ok(data, meta=meta, warnings=_unique(warnings))
+
     def crawl_and_store(
         self,
         *,
@@ -1592,7 +1820,11 @@ class SeoService:
         cwv_rows = self._stored_cwv_rows(
             property_id,
             start=previous_start,
-            end=current_end,
+            # A CWV observation is a snapshot fetched on its own date, not a daily
+            # traffic count. Read through today so the row written by `cwv collect`
+            # is visible in the same run even though the report window itself is
+            # provider-lagged.
+            end=end,
             limitations=limitations,
         )
 
@@ -1760,8 +1992,10 @@ class SeoService:
         URL as ``key``; only rows carrying both are returned, because an origin aggregate or
         an unknown scope cannot be assigned to a template without guessing. The newest
         observation wins per ``(url, device, metric)``: feeding every day would turn the
-        template p75 into a worst-of-the-window value instead of the current one. No row
-        means no section, never an empty or invented baseline.
+        template p75 into a worst-of-the-window value instead of the current one. ``end`` is
+        the caller's today, not the lagged report window: a field snapshot fetched today is
+        the current value even when the traffic windows end two days earlier. No row means
+        no section, never an empty or invented baseline.
         """
         store = self._store
         if store is None:
@@ -3031,6 +3265,61 @@ def _dimensions(dimensions: object) -> tuple[str, ...]:
             next_action="use at least one of query, page, country, device or date",
         )
     return tuple(names)
+
+
+def _cwv_source(value: str) -> str:
+    name = value.strip().casefold()
+    if name not in _CWV_SOURCES:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"unsupported cwv source: {value!r}",
+            next_action="pass --source crux, psi or both",
+        )
+    return name
+
+
+def _cwv_devices(value: str) -> list[str]:
+    canonical = _CWV_DEVICE_ALIASES.get(value.strip().casefold())
+    if canonical is None:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"unsupported cwv device: {value!r}",
+            next_action="pass --device phone, desktop, tablet or all",
+        )
+    if canonical == "all":
+        return list(CWV_DEVICES)
+    return [canonical]
+
+
+def _cwv_urls(values: Sequence[str]) -> list[str]:
+    """Validate, strip and de-duplicate CWV target URLs without echoing query strings."""
+    cleaned: list[str] = []
+    for raw in values:
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        parts = urlsplit(candidate)
+        if parts.scheme not in _HTTP_SCHEMES or not parts.hostname:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="cwv url must be an absolute http(s) URL",
+                next_action="pass a URL such as https://example.com/page",
+            )
+        if candidate not in cleaned:
+            cleaned.append(candidate)
+    if not cleaned:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="at least one cwv url is required",
+            next_action="pass --url https://example.com/page (repeat the flag for more pages)",
+        )
+    return cleaned
+
+
+def _cwv_metric(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return _CWV_METRICS.get(value.strip().casefold())
 
 
 def _positive_int(value: object, *, name: str, maximum: int | None = None) -> int:

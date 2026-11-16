@@ -1,8 +1,8 @@
 # CLI reference
 
-The CLI has 21 top-level commands: 14 groups (`auth`, `config`, `gsc`, `yandex`, `sitemap`,
-`indexnow`, `report`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`) and 7
-commands (`version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`).
+The CLI has 22 top-level commands: 15 groups (`auth`, `config`, `gsc`, `yandex`, `sitemap`,
+`indexnow`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`) and
+7 commands (`version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`).
 
 Every read/report command supports `--json` (machine output) and a stable exit code; commands that
 use the workspace also accept `--config PATH`.
@@ -194,6 +194,46 @@ the equally long window immediately before it.
 - A provider failure is isolated: other services still return their data and the envelope stays
   `ok: true` with `coverage.failed` incremented.
 
+## Core Web Vitals
+
+```bash
+lv24-seo cwv collect --url https://example.com/ --url https://example.com/pricing \
+  --device all --source crux --limit 10 [--config seo.toml] [--json]
+```
+
+`cwv collect` is the writer that makes the weekly `cwv` section populate in real runs. It queries
+CrUX **per URL and device** (`--device phone|desktop|tablet|all`; `mobile` is accepted as an alias
+for `phone`) and stores each p75 as one `metric_daily` row:
+
+| Column | Value |
+|---|---|
+| `source` | `crux` (field data of record) |
+| `scope` | canonical device: `phone`, `desktop` or `tablet` |
+| `key` | the absolute page URL passed with `--url` |
+| `metric` | `LCP`, `INP`, `CLS`, `FCP` or `TTFB` |
+| `value` | CrUX p75 (ms; CLS is a 0..1 score) |
+| `date` | fetch date in `report.timezone` |
+| `accuracy` | `crux_field_28d` |
+
+CrUX reports a 28-day rolling window, so `meta.data_age_days` is at least 2. A low-traffic URL is
+`404` upstream; it becomes `low_traffic` in `limitations[]` and writes no row — never a zero. Metrics
+outside the five canonical names (for example deprecated FID) are skipped and named in
+`cwv_metric_unsupported`. `--limit` caps the number of URLs (1..50); `meta.total` counts requested
+URLs, `meta.processed` counts the URLs inside the cap, `meta.pairs_total`/`meta.pairs_processed`
+count the URL×device pairs, `meta.calls` counts provider requests actually made, and a capped run
+sets `meta.truncated: true` with `cwv_url_cap`. Duplicate URLs are queried once.
+
+PSI is **lab** data. `--source psi` runs Lighthouse for diagnostics, but its rows are returned under
+`data.lab` and are never written to `metric_daily`: the CWV builder treats every stored p75 as field
+data, so persisting a lab score would pollute the field series. Every run that includes PSI reports
+`cwv_lab_ignored`. PSI supports only mobile and desktop; `tablet` is skipped (not silently mapped) and
+reported as `psi_tablet_unsupported`. PSI works without a key; CrUX requires one, and a missing CrUX
+key returns the standard `AUTH_REQUIRED` envelope with
+`next: lv24-seo auth login --provider crux` before any network call.
+
+`report weekly` and `seo_weekly_report` read the stored rows end-to-end. The CWV read includes today,
+not only the provider-lagged traffic window, so a collection is visible in the same weekly run.
+
 ## Reports
 
 ```bash
@@ -235,7 +275,8 @@ two compared windows, because an event outside them cannot explain this period's
 is capped at 500 rows per report and the limitation says so when the cap is hit. Without comparable
 GSC windows the section is absent.
 
-When the store holds CrUX/PSI **field** rows for the compared windows, the weekly report also adds a
+When the store holds CrUX **field** rows written by `cwv collect` (read through today, so a fresh
+snapshot is visible even when the traffic windows are provider-lagged), the weekly report also adds a
 **Core Web Vitals by template** section (`cwv`). It is opt-in for the caller: the service passes
 stored rows only, and a report built without them keeps the historical section list. Rows are
 grouped by normalized URL template (`/blog/{id}`) and device (`phone`, `desktop`, `tablet`), and the
