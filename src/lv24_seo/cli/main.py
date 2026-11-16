@@ -34,6 +34,9 @@ from lv24_seo.automation.scheduler import ScheduleSpec
 from lv24_seo.automation.scheduler import install as install_schedule
 from lv24_seo.cli import emit, run_envelope, tool_version
 from lv24_seo.cli.auth import auth_app
+from lv24_seo.cli.backup_cmd import backup_app
+from lv24_seo.cli.logs_cmd import logs_app
+from lv24_seo.cli.tasks_cmd import tasks_app
 from lv24_seo.core.config import (
     SeoConfig,
     data_dir_path,
@@ -84,6 +87,9 @@ app.add_typer(indexnow_app, name="indexnow", help="IndexNow submission (write, g
 app.add_typer(report_app, name="report", help="Build reports.")
 app.add_typer(schedule_app, name="schedule", help="Host scheduler jobs.")
 app.add_typer(export_app, name="export", help="Export machine contracts.")
+app.add_typer(logs_app, name="logs", help="Analyze local nginx JSON access logs (read-only).")
+app.add_typer(tasks_app, name="tasks", help="Track findings and their fix lifecycle.")
+app.add_typer(backup_app, name="backup", help="Create a portable local backup.")
 
 
 @app.callback()
@@ -1371,6 +1377,9 @@ def _report_from_payload(data: Mapping[str, Any]) -> Report:
             if isinstance(row, Mapping):
                 rows.append(dict(row))
         notes = [str(note) for note in raw.get("notes") or []]
+        total = raw.get("total")
+        truncated = raw.get("truncated")
+        data_age = raw.get("data_age")
         sections.append(
             ReportSection(
                 key=str(raw.get("key") or ""),
@@ -1378,6 +1387,9 @@ def _report_from_payload(data: Mapping[str, Any]) -> Report:
                 summary=str(raw.get("summary") or ""),
                 rows=rows,
                 notes=notes,
+                total=total if isinstance(total, int) and not isinstance(total, bool) else None,
+                truncated=truncated if isinstance(truncated, bool) else None,
+                data_age=data_age if isinstance(data_age, str) and data_age.strip() else None,
             )
         )
 

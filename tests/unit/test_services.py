@@ -686,6 +686,107 @@ def test_weekly_report_calls_builder_and_saves_snapshot(
     assert stored == response["data"]
 
 
+def test_weekly_report_passes_stored_digest_evidence(
+    store: Store,
+    builder_capture: dict[str, Any],
+) -> None:
+    store.upsert_issue(
+        "noindex-on-200",
+        "high",
+        PROPERTY,
+        "https://example.com/a",
+        seen_at=utc_now() - timedelta(days=4),
+    )
+    store.upsert_page(PROPERTY, "https://example.com/a", status=200, index_state="noindex")
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    evidence = builder_capture["digest_evidence"]
+    assert evidence["issue_changes"][0]["rule_id"] == "noindex-on-200"
+    assert evidence["issue_changes"][0]["state"] == "open"
+    assert evidence["issue_changes"][0]["first_seen"]
+    assert evidence["pages"][0]["index_state"] == "noindex"
+    # The store has no indexing-event table yet: the input is omitted, not faked.
+    assert "indexing_events" not in evidence
+
+
+def test_weekly_report_omits_digest_evidence_without_stored_rows(
+    store: Store,
+    builder_capture: dict[str, Any],
+) -> None:
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    assert "digest_evidence" not in builder_capture
+
+
+def test_weekly_report_omits_digest_evidence_without_a_comparison(
+    store: Store,
+    builder_capture: dict[str, Any],
+) -> None:
+    store.upsert_issue(
+        "noindex-on-200",
+        "high",
+        PROPERTY,
+        "https://example.com/a",
+        seen_at=utc_now() - timedelta(days=4),
+    )
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, []])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    assert "digest_evidence" not in builder_capture
+
+
+def test_weekly_report_renders_the_digest_section_with_the_real_builder(
+    store: Store,
+) -> None:
+    store.upsert_issue(
+        "noindex-on-200",
+        "high",
+        PROPERTY,
+        "https://example.com/a",
+        seen_at=utc_now() - timedelta(days=4),
+    )
+    store.upsert_page(PROPERTY, "https://example.com/a", status=200, index_state="noindex")
+    service = SeoService(
+        _config(),
+        store=store,
+        secrets=_secrets(gsc="gsc"),
+        clients={"gsc": FakeGscClient([GSC_CURRENT, GSC_PREVIOUS])},
+    )
+
+    response = service.weekly_report()
+
+    assert response["ok"] is True
+    sections = {section["key"]: section for section in response["data"]["sections"]}
+    assert "digest" in sections
+    digest = sections["digest"]
+    assert digest["rows"]
+    assert any(row["cause"] == "new_crawl_issue" for row in digest["rows"])
+    assert digest["total"] >= len(digest["rows"])
+
+
 def test_weekly_report_skips_engines_with_missing_tokens(
     store: Store,
     builder_capture: dict[str, Any],
