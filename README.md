@@ -55,14 +55,14 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.5.2).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
+**Beta (v0.5.3).** Working today: six provider adapters (GSC, Yandex Webmaster, Yandex
 Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule crawler, SQLite history, analysis (deltas, opportunities,
 indexing triage, multi-engine fusion, nginx log stats), per-provider `stats`, report builders +
 HTML/text/Markdown renderers,
 SMTP/Telegram delivery with idempotency, the 17-command CLI, the MCP server (11 tools, 3 resources,
 3 prompts) and scheduler generators. Canonical source ids, GSC-only headline deltas, partial
 provider isolation and window/daily storage separation are enforced with regression tests.
-`0.5.2` is a bugfix release; see [`docs/releases/0.5.2.md`](docs/releases/0.5.2.md).
+`0.5.3` is the P0 hardening release; see [`docs/releases/0.5.3.md`](docs/releases/0.5.3.md).
 
 Still honest gaps before `v1.0`: GSC service-account auth (OAuth token only today),
 sitemap submit / Yandex recrawl return an explicit `WRITE_DISABLED` (IndexNow really submits),
@@ -217,7 +217,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
-* [Release notes 0.5.2](docs/releases/0.5.2.md) — what changed in the current engine release
+* [Release notes 0.5.3](docs/releases/0.5.3.md) — what changed in the current engine release
 * [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop) — Tauri shell, 0.2.2 assets and update matrix
 * [Desktop plan](docs/plans/2026-11-14-seo-desktop.md) — shell scope and milestones
 * [Security](SECURITY.md) — token handling, read-only defaults, write gating
