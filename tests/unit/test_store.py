@@ -25,6 +25,7 @@ EXPECTED_TABLES = {
     "runs",
     "sends",
     "snapshots",
+    "tasks",
 }
 
 

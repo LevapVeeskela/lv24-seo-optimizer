@@ -17,7 +17,8 @@ append-only: never edit an applied migration, add a new version instead.
 Rules
 -----
 * **WAL** is enabled for every file-backed database: readers never block the writer, which
-  matters when a scheduled report reads while a provider sync writes.
+  matters when a scheduled report reads while a provider sync writes. A concurrent first open
+  can race on the mode switch; :func:`_enable_wal` retries and verifies instead of failing.
 * **``foreign_keys = ON``** is set even though the current schema declares no foreign keys; the
   pragma is per connection and a future migration may add them.
 * **``row_factory = sqlite3.Row``** lets repositories address columns by name and keeps SQL
@@ -31,6 +32,7 @@ Rules
 from __future__ import annotations
 
 import sqlite3
+import time
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -43,9 +45,11 @@ __all__ = ["MEMORY_PATH", "SCHEMA_VERSION", "connect", "initialize", "migrate", 
 MEMORY_PATH = ":memory:"
 SCHEMA_FILENAME = "schema.sql"
 _BUSY_TIMEOUT_SECONDS = 30.0
+_WAL_ATTEMPTS = 5
+_WAL_RETRY_SECONDS = 0.05
 
 #: Current schema version. Bump when appending to ``_MIGRATIONS``.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     # v1 backfills databases created before ``schema_migrations`` /
@@ -80,6 +84,29 @@ _MIGRATIONS: tuple[tuple[int, str, str], ...] = (
         WHERE source = 'gsc';
         """,
     ),
+    (
+        3,
+        "tasks finding lifecycle table",
+        """
+        CREATE TABLE IF NOT EXISTS tasks (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind         TEXT NOT NULL,
+            property_id  TEXT NOT NULL,
+            url          TEXT NOT NULL,
+            rule_id      TEXT NOT NULL,
+            state        TEXT NOT NULL DEFAULT 'open'
+                         CHECK (state IN ('open', 'in_progress', 'verified', 'dismissed')),
+            payload_json TEXT,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL,
+            UNIQUE (kind, property_id, url, rule_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasks_property_state
+            ON tasks (property_id, state, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_tasks_kind_state
+            ON tasks (kind, state, updated_at);
+        """,
+    ),
 )
 
 
@@ -107,6 +134,33 @@ def _database_target(path: Path | str) -> str:
     return str(candidate)
 
 
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    """Enable WAL, tolerating a concurrent opener that is switching it at the same time.
+
+    Changing the journal mode needs a brief exclusive lock, and SQLite on Windows can answer
+    ``SQLITE_BUSY`` immediately instead of running the busy handler. WAL is a persistent
+    database property, so a failed switch is harmless when another process already enabled it.
+    The switch gets a short busy timeout and a few retries: only another opener's schema
+    bootstrap can legitimately hold the lock this long, and a real long-running writer must
+    still fail fast instead of stalling the CLI.
+    """
+    conn.execute("PRAGMA busy_timeout = 1000")
+    try:
+        for attempt in range(_WAL_ATTEMPTS):
+            try:
+                conn.execute("PRAGMA journal_mode = WAL")
+                return
+            except sqlite3.OperationalError:
+                row = conn.execute("PRAGMA journal_mode").fetchone()
+                if row is not None and str(row[0]).lower() == "wal":
+                    return
+                if attempt + 1 == _WAL_ATTEMPTS:
+                    raise
+                time.sleep(_WAL_RETRY_SECONDS * (attempt + 1))
+    finally:
+        conn.execute(f"PRAGMA busy_timeout = {int(_BUSY_TIMEOUT_SECONDS * 1000)}")
+
+
 def connect(path: Path | str) -> sqlite3.Connection:
     """Open ``path`` with the project's PRAGMAs and row factory.
 
@@ -122,7 +176,7 @@ def connect(path: Path | str) -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         if target != MEMORY_PATH:
-            conn.execute("PRAGMA journal_mode = WAL")
+            _enable_wal(conn)
     except sqlite3.Error as exc:
         if conn is not None:
             conn.close()

@@ -174,3 +174,27 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS idx_runs_kind_property
     ON runs (kind, property_id, started_at);
+
+-- Finding/task lifecycle (F2/F7): a finding becomes a task that is triaged, fixed and
+-- verified. `(kind, property_id, url, rule_id)` is the natural key, so a re-run of a crawl
+-- or a decay scan never duplicates a task. `state` is a closed set: the repository validates
+-- transitions, and the CHECK keeps raw SQL from inventing a state the CLI cannot explain.
+CREATE TABLE IF NOT EXISTS tasks (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT NOT NULL,
+    property_id  TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    rule_id      TEXT NOT NULL,
+    state        TEXT NOT NULL DEFAULT 'open'
+                 CHECK (state IN ('open', 'in_progress', 'verified', 'dismissed')),
+    payload_json TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    UNIQUE (kind, property_id, url, rule_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_property_state
+    ON tasks (property_id, state, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_kind_state
+    ON tasks (kind, state, updated_at);
