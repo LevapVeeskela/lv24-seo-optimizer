@@ -537,9 +537,18 @@ class YandexWebmasterClient:
             rate_limit_key="yandex_webmaster",
             raise_for_status=False,
         )
+        status = response.status_code
+        if status >= 500:
+            # A gateway timeout/5xx may carry an empty body; parsing it as JSON would
+            # misreport a transient provider failure as a malformed payload.
+            raise SeoError(
+                code=UPSTREAM_UNAVAILABLE,
+                message=f"recrawl/queue upstream HTTP {status}",
+                retryable=True,
+                detail={"status_code": status},
+            )
         try:
             body = _response_json(response, path="recrawl/queue")
-            status = response.status_code
             if status in (200, 202):
                 task_id = _text(body.get("task_id"))
                 if task_id is None:

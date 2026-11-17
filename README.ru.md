@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.12.1).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.12.2).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -131,10 +131,10 @@ URL submit и Yandex recrawl подключены,
 
 ## Статус
 
-Бета (v0.12.1). `0.12.1` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-17): квото-зависимая
+Бета (v0.12.2). `0.12.2` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-17): квото-зависимая
 автоматизация индексации — `indexing status/run/history`, лимиты Bing/Yandex/IndexNow/GSC и
-честные счётчики проиндексированного, плюс патч клиентского жизненного цикла (Bing/Yandex больше
-не падают в `internal_error`), плюс полная глубина чтения по платформам (GSC URL
+честные счётчики проиндексированного, плюс патчи клиентского жизненного цикла и Yandex 5xx, плюс
+полная глубина чтения по платформам (GSC URL
 Inspection/sitemap/фильтры, Yandex events/sitemaps/история/очередь recrawl, Bing
 page/traffic/crawl/URL/joins, органическая Метрика, CrUX-история и PSI-аудиты). Десктоп `0.9.0` — текущий
 релиз десктопа, он несёт движок `0.11.0` и требует `>= 0.11.0`. Открытые честные ограничения: GSC
@@ -146,7 +146,8 @@ sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing si
 access token, и JSON-ключ service account (файл читается один раз за процесс, access token
 обновляется автоматически). `0.9.0` — предыдущий релиз: Bing sitemap submit и one-click
 IndexNow; `0.8.0` — до него: writer CWV по URL и устройству, безопасный
-`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.12.1 — в
+`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.12.2 — в
+[`docs/releases/0.12.2.md`](docs/releases/0.12.2.md); новое в 0.12.1 — в
 [`docs/releases/0.12.1.md`](docs/releases/0.12.1.md); новое в 0.12.0 — в
 [`docs/releases/0.12.0.md`](docs/releases/0.12.0.md); новое в 0.11.0 — в
 [`docs/releases/0.11.0.md`](docs/releases/0.11.0.md); новое в 0.10.0 — в

@@ -8,7 +8,13 @@ from datetime import UTC, date, datetime
 import httpx
 import pytest
 
-from lv24_seo.core.errors import AUTH_INVALID, AUTH_REQUIRED, QUOTA_EXCEEDED, SeoError
+from lv24_seo.core.errors import (
+    AUTH_INVALID,
+    AUTH_REQUIRED,
+    QUOTA_EXCEEDED,
+    UPSTREAM_UNAVAILABLE,
+    SeoError,
+)
 from lv24_seo.core.http import HttpClient
 from lv24_seo.providers.base import (
     CLIENT_SIDE_DATE_FILTER,
@@ -946,3 +952,20 @@ def test_recrawl_enqueue_handles_202_409_and_429() -> None:
     assert excinfo.value.code == QUOTA_EXCEEDED
     assert excinfo.value.detail["daily_quota"] == 150
     assert excinfo.value.detail["exceeded_until"] == "2026-11-18T00:00:00"
+
+
+def test_recrawl_enqueue_maps_5xx_without_parsing_json() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == USER_PATH:
+            return httpx.Response(200, json={"user_id": USER_ID})
+        return httpx.Response(504)
+
+    client = _client(handler)
+
+    with pytest.raises(SeoError) as excinfo:
+        client.recrawl_enqueue(HOST, "https://example.com/a")
+
+    assert excinfo.value.code == UPSTREAM_UNAVAILABLE
+    assert excinfo.value.detail["status_code"] == 504
+    assert "504" in excinfo.value.message
+    assert "invalid JSON" not in excinfo.value.message

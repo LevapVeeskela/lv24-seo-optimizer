@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.12.2] - 2026-11-17
+
+Release notes: [`docs/releases/0.12.2.md`](docs/releases/0.12.2.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-17). Patch release.
+
+### Fixed
+
+* Yandex `recrawl/queue` 5xx responses (including a 504 with an empty body) are reported as
+  `UPSTREAM_UNAVAILABLE` with the HTTP status, not as "invalid JSON". `202`/`409`/`429` behavior is
+  unchanged. No API, CLI, schema or config changes.
+
 ## [0.12.1] - 2026-11-17
 
 Release notes: [`docs/releases/0.12.1.md`](docs/releases/0.12.1.md). Status: **released** (PyPI,
