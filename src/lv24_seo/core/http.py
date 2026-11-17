@@ -105,6 +105,7 @@ class HttpClient:
         *,
         retry_post: bool = False,
         rate_limit_key: str | None = None,
+        raise_for_status: bool = True,
         **kwargs: Any,
     ) -> httpx.Response:
         """Perform a request, retrying transient failures for idempotent methods.
@@ -115,6 +116,10 @@ class HttpClient:
         must keep ``retry_post=False`` so one call can never become two side
         effects. ``rate_limit_key`` acquires one token from the attached
         limiter (see :mod:`lv24_seo.core.ratelimit`) before every attempt.
+
+        ``raise_for_status=False`` returns an error response instead of mapping it, so a
+        provider adapter can parse a structured error body (Bing ``ErrorCode``) itself. The
+        caller then owns closing the response and must never echo its body into an error.
         """
         verb = method.upper()
         idempotent = verb in _IDEMPOTENT_METHODS or (verb == "POST" and retry_post)
@@ -151,13 +156,15 @@ class HttpClient:
                     attempt += 1
                     continue
 
-                error = _status_error(
-                    response.status_code,
-                    method=verb,
-                    target=_describe_url(response.request.url),
-                )
-                response.close()
-                raise error
+                if raise_for_status:
+                    error = _status_error(
+                        response.status_code,
+                        method=verb,
+                        target=_describe_url(response.request.url),
+                    )
+                    response.close()
+                    raise error
+                return response
 
             return response
 

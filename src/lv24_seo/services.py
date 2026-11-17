@@ -103,11 +103,12 @@ _ENGINE_LABELS: dict[str, str] = {
     "crux": "Chrome UX Report",
     "psi": "PageSpeed Insights",
 }
+_BING_KEY_NEXT_ACTION = "run `lv24-seo auth login --provider bing` or set LV24_SEO_BING_API_KEY"
 _ENGINE_NEXT_ACTIONS: dict[str, str] = {
     "gsc": "lv24-seo auth login --provider gsc",
     "yandex_webmaster": "lv24-seo auth login --provider yandex",
     "yandex_metrika": "lv24-seo auth login --provider yandex",
-    "bing": "lv24-seo auth login --provider bing",
+    "bing": _BING_KEY_NEXT_ACTION,
     "crux": "lv24-seo auth login --provider crux",
     "psi": "set LV24_SEO_PSI_API_KEY or run without a key (PSI works keyless)",
 }
@@ -186,7 +187,6 @@ _INDEXING_EVENT_DETAIL_KEYS: tuple[str, ...] = (
 
 _HTTP_SCHEMES = frozenset({"http", "https"})
 _SITEMAP_PROVIDERS = frozenset({"gsc", "bing"})
-_BING_KEY_NEXT_ACTION = "run `lv24-seo auth login --provider bing` or set LV24_SEO_BING_API_KEY"
 # PSI works keyless; a key only raises the quota, so it never blocks client construction.
 _KEYLESS_CLIENTS = frozenset({"psi"})
 _HEADLINE_METRICS: tuple[str, ...] = ("clicks", "impressions", "ctr", "position")
@@ -1160,6 +1160,165 @@ class SeoService:
         if override is not None:
             return cast(BingClient, override)
         return BingClient(api_key=self._require_secret("bing"), site_url=site_url)
+
+    # -- bing reads and URL submission -------------------------------------------------------
+
+    def bing_quota(self, *, site: str = "") -> dict[str, Any]:
+        """Read the Bing URL submission quota for the configured site (read-only)."""
+        warnings: list[str] = []
+        return self._respond("bing_quota", warnings, lambda: self._bing_quota(site, warnings))
+
+    def _bing_quota(self, site: str, warnings: list[str]) -> dict[str, Any]:
+        target = self._bing_site(site)
+        client = self._bing_submit_client(target)
+        try:
+            result = client.submission_quota()
+        finally:
+            self._close_bing(client)
+        warnings.extend(result.warnings)
+        rows = _result_rows(result)
+        return ok(
+            {"site_url": target, "quota": rows[0] if rows else {}},
+            meta=_result_meta(result, source="bing", rows=rows),
+            warnings=_unique(warnings),
+        )
+
+    def bing_sitemaps(self, *, site: str = "", details: str = "") -> dict[str, Any]:
+        """List sitemap feeds Bing knows, or the children of one sitemap index (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "bing_sitemaps",
+            warnings,
+            lambda: self._bing_sitemaps(site, details, warnings),
+        )
+
+    def _bing_sitemaps(self, site: str, details: str, warnings: list[str]) -> dict[str, Any]:
+        target = self._bing_site(site)
+        client = self._bing_submit_client(target)
+        try:
+            result = client.feed_details(details) if details.strip() else client.feeds()
+        finally:
+            self._close_bing(client)
+        warnings.extend(result.warnings)
+        rows = _result_rows(result)
+        return ok(
+            {"site_url": target, "rows": rows},
+            meta=_result_meta(result, source="bing", rows=rows),
+            warnings=_unique(warnings),
+        )
+
+    def bing_issues(self, *, site: str = "") -> dict[str, Any]:
+        """Read Bing crawl issues for the configured site (read-only)."""
+        warnings: list[str] = []
+        return self._respond("bing_issues", warnings, lambda: self._bing_issues(site, warnings))
+
+    def _bing_issues(self, site: str, warnings: list[str]) -> dict[str, Any]:
+        target = self._bing_site(site)
+        client = self._bing_submit_client(target)
+        try:
+            result = client.crawl_issues()
+        finally:
+            self._close_bing(client)
+        warnings.extend(result.warnings)
+        rows = _result_rows(result)
+        return ok(
+            {"site_url": target, "rows": rows},
+            meta=_result_meta(result, source="bing", rows=rows),
+            warnings=_unique(warnings),
+        )
+
+    def bing_submit_urls(
+        self,
+        *,
+        urls: Sequence[str],
+        batch_size: int = 500,
+        site: str = "",
+    ) -> dict[str, Any]:
+        """Submit URLs through ``SubmitUrlbatch`` in explicit 500-URL batches.
+
+        The caller (CLI or desktop) owns the two-phase write gate. This method performs the
+        provider write and then reads the quota again, so the envelope can say how much room
+        is left; a quota read failure is a warning, never a failed submission.
+        """
+        warnings: list[str] = []
+        return self._respond(
+            "bing_submit_urls",
+            warnings,
+            lambda: self._bing_submit_urls(urls, batch_size, site, warnings),
+        )
+
+    def _bing_submit_urls(
+        self,
+        urls: Sequence[str],
+        batch_size: int,
+        site: str,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        target = self._bing_site(site)
+        size = _positive_int(batch_size, name="batch_size", maximum=500)
+        client = self._bing_submit_client(target)
+        try:
+            result = client.submit_url_batches(urls, batch_size=size)
+            rows = _result_rows(result)
+            row = rows[0] if rows else {}
+            submitted = _int_of(row.get("accepted", row.get("submitted")))
+            batches = _int_of(row.get("batches"))
+            duplicates = _int_of(row.get("duplicates_removed"))
+            quota_after: dict[str, Any] | None = None
+            try:
+                quota_result = _optional_call(client, "submission_quota")
+            except SeoError as exc:
+                warnings.append(f"bing: quota after submit could not be read ({exc.code})")
+                quota_result = None
+            if quota_result is None:
+                warnings.append("bing: quota after submit is not available from this client")
+            else:
+                quota_rows = _result_rows(quota_result)
+                quota_after = quota_rows[0] if quota_rows else None
+                warnings.extend(_result_warnings(quota_result))
+        finally:
+            self._close_bing(client)
+        warnings.extend(result.warnings)
+        limitations = _result_limitations(result)
+        return ok(
+            {
+                "site_url": target,
+                "status": "accepted",
+                "accepted": submitted,
+                "submitted": submitted,
+                "batches": batches,
+                "batch_size": size,
+                "duplicates_removed": duplicates,
+                "quota_after": quota_after,
+            },
+            meta={
+                "source": "bing",
+                "total": submitted,
+                "truncated": _result_truncated(result),
+                "limitations": limitations,
+                "data_age_days": 0,
+            },
+            warnings=_unique(warnings),
+        )
+
+    def _bing_site(self, site: str = "") -> str:
+        """Resolve the Bing site URL from the argument or ``providers.bing.site``."""
+        bing = self._config.providers.bing
+        configured = bing.site.strip() if bing is not None else ""
+        value = site.strip() or configured
+        if not value:
+            raise SeoError(
+                code=CONFIG_INVALID,
+                message="Bing Webmaster site is not configured",
+                next_action=(
+                    "set providers.bing.site in seo.toml or pass --site https://example.com"
+                ),
+            )
+        return _absolute_http_url(value, name="providers.bing.site")
+
+    def _close_bing(self, client: BingClient) -> None:
+        if "bing" not in self._overrides:
+            client.close()
 
     def cwv_collect(
         self,

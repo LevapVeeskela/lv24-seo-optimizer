@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.9.0).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.10.0 RC).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -48,7 +48,7 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 | Источники | GSC, Вебмастер, Метрика, Bing/IndexNow, CrUX, PSI, собственный краул, логи nginx |
 | Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), атрибутированные изменения (причина/уверенность/доказательства), CWV по шаблонам и устройствам (наполняется `cwv collect`: CrUX URL+устройство, PSI — только lab), триаж индексации, striking distance, деградация контента, техрегрессии |
 | MCP | 12 инструментов, 3 ресурса, 3 промпта; без записи к провайдеру по умолчанию — таблица ниже |
-| CLI | 22 команды верхнего уровня (15 групп + 7 команд): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp` |
+| CLI | 23 команды верхнего уровня (16 групп + 7 команд): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `bing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp` |
 | Скиллы | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
 | Автоматизация | cron / systemd timer / Планировщик Windows: `schedule install` по умолчанию только печатает план, запись — с `--allow-write`; `schedule status` только читает; `schedule uninstall` удаляет ровно созданную задачу и идемпотентен; плюс рецепт GitHub Actions |
 
@@ -91,7 +91,8 @@ Windows) общий только при одном и том же workspace/data
 `seo_weekly_report` и `yandex_indexing_state` сохраняют локальные снимки или события индексации,
 поэтому у них `readOnlyHint: false` (они не destructive). Два write-инструмента требуют
 `allow_write=true`, помечены `destructiveHint: true` и используют тот же двухфазный поток
-`plan_hash` / `confirm_token` и `LV24_SEO_WRITE_SECRET`, что и CLI; Bing sitemap submit подключён,
+`plan_hash` / `confirm_token` и `LV24_SEO_WRITE_SECRET`, что и CLI; Bing sitemap submit и Bing
+URL submit подключены,
 а GSC submit, Bing delete и Yandex recrawl отвечают `WRITE_DISABLED`, ничего не отправляя.
 
 | Инструмент | Тип | `readOnlyHint` | `destructiveHint` | Что делает |
@@ -125,16 +126,19 @@ Windows) общий только при одном и том же workspace/data
 
 ## Статус
 
-Бета (v0.9.0). Текущий релиз — `0.9.0` (PyPI, npm и MCP Registry, 2026-11-17): Bing sitemap
-submit и one-click IndexNow. Десктоп `0.7.0` — текущий релиз десктопа, он несёт движок `0.9.0` и
-требует `>= 0.9.0`. Открытые честные ограничения: GSC sitemap submit, Bing sitemap delete и
-`recrawl` отвечают `WRITE_DISABLED` (Bing sitemap submit и IndexNow реально отправляют),
+Бета (v0.10.0 RC). `0.10.0` — кандидат в релиз: Bing URL submit, остаток квоты, статусы
+sitemap-фидов и crawl issues с битмаской. Последний опубликованный релиз — `0.9.0` (PyPI, npm и
+MCP Registry, 2026-11-17): Bing sitemap submit и one-click IndexNow. Десктоп `0.7.0` — текущий
+релиз десктопа, он несёт движок `0.9.0` и требует `>= 0.9.0`. Открытые честные ограничения: GSC
+sitemap submit, Bing sitemap delete и `recrawl` отвечают `WRITE_DISABLED` (Bing sitemap/URL submit
+и IndexNow реально отправляют),
 `crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`), анализ логов
 определяет ботов только по User-Agent, `portfolio list` и `backup restore` доступны только в CLI,
 а CWV-секция строится лишь по сохранённым field-данным CrUX/PSI. GSC принимает и обычный OAuth
 access token, и JSON-ключ service account (файл читается один раз за процесс, access token
 обновляется автоматически). `0.8.0` — предыдущий релиз: writer CWV по URL и устройству, безопасный
-`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.9.0 — в
+`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.10.0 — в
+[`docs/releases/0.10.0.md`](docs/releases/0.10.0.md); новое в 0.9.0 — в
 [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md); новое в 0.8.0 — в
 [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md); новое в 0.7.0 — в
 [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).

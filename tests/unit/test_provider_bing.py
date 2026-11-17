@@ -79,7 +79,7 @@ def test_query_stats_maps_bing_fields() -> None:
     assert seen[0].url.params["apikey"] == API_KEY
 
 
-def test_crawl_issues_maps_rows_and_keeps_unknown_keys_in_raw() -> None:
+def test_crawl_issues_decodes_the_issue_bitmask() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -87,10 +87,10 @@ def test_crawl_issues_maps_rows_and_keeps_unknown_keys_in_raw() -> None:
                 "d": [
                     {
                         "Url": "https://example.com/missing",
-                        "IssueType": "Http404",
-                        "Severity": "Error",
-                        "DateDetected": "2026-11-09T10:00:00",
                         "HttpCode": 404,
+                        "Issues": 4 | 16 | 256,
+                        "InLinks": 3,
+                        "Extra": "kept",
                     }
                 ]
             },
@@ -99,13 +99,15 @@ def test_crawl_issues_maps_rows_and_keeps_unknown_keys_in_raw() -> None:
     result = _bing(handler).crawl_issues()
 
     assert result.source == "bing"
+    assert result.data_age_days == 0
     assert result.rows == [
         {
             "url": "https://example.com/missing",
-            "issue_type": "Http404",
-            "severity": "Error",
-            "detected": "2026-11-09T10:00:00",
-            "raw": {"HttpCode": 404},
+            "http_code": 404,
+            "issues": ["4xx", "robots", "timeout"],
+            "issues_bits": 276,
+            "in_links": 3,
+            "raw": {"Extra": "kept"},
         }
     ]
 
@@ -125,7 +127,16 @@ def test_submit_urls_posts_batch_body() -> None:
     assert seen[0].url.path.endswith("/SubmitUrlbatch")
     assert json.loads(seen[0].content) == {"siteUrl": SITE, "urlList": urls}
     assert result.source == "bing"
-    assert result.rows == [{"submitted": 2, "site_url": SITE}]
+    assert result.rows == [
+        {
+            "accepted": 2,
+            "submitted": 2,
+            "duplicates_removed": 0,
+            "status": "accepted",
+            "site_url": SITE,
+        }
+    ]
+    assert result.limitations == ("submit_idempotency_undocumented",)
 
 
 def test_submit_feed_posts_the_current_json_endpoint() -> None:
@@ -214,6 +225,245 @@ def test_submit_urls_rejects_empty_list() -> None:
 
     assert caught.value.code == INVALID_INPUT
     assert "at least one URL" in caught.value.message
+
+
+def test_submission_quota_reports_remaining_values_and_raw_row() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "d": {
+                    "__type": "UrlSubmissionQuota:#Microsoft.Bing.Webmaster.Api",
+                    "DailyQuota": 100,
+                    "MonthlyQuota": 1400,
+                }
+            },
+        )
+
+    result = _bing(handler).submission_quota()
+
+    assert result.rows == [
+        {
+            "daily_remaining": 100,
+            "monthly_remaining": 1400,
+            "raw": {
+                "__type": "UrlSubmissionQuota:#Microsoft.Bing.Webmaster.Api",
+                "DailyQuota": 100,
+                "MonthlyQuota": 1400,
+            },
+        }
+    ]
+    assert result.total == 1
+    assert result.limitations == (
+        "quota_monthly_can_bind_first",
+        "quota_monthly_reset_undocumented",
+    )
+
+
+def test_feeds_parses_documented_fields_and_states_the_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetched_at = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(bing_client_module, "now_utc", lambda: fetched_at)
+    crawled = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
+    submitted = datetime(2026, 11, 12, 9, 0, tzinfo=UTC)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "d": [
+                    {
+                        "Compressed": False,
+                        "FileSize": 1024,
+                        "LastCrawled": _wcf_date(crawled),
+                        "Status": "Success",
+                        "Submitted": _wcf_date(submitted),
+                        "Type": "Sitemap",
+                        "Url": "https://example.com/sitemap.xml",
+                        "UrlCount": 1023,
+                        "Extra": "kept",
+                    }
+                ]
+            },
+        )
+
+    result = _bing(handler).feeds()
+
+    assert result.rows == [
+        {
+            "url": "https://example.com/sitemap.xml",
+            "type": "Sitemap",
+            "status": "Success",
+            "submitted": _wcf_date(submitted),
+            "last_crawled": _wcf_date(crawled),
+            "url_count": 1023,
+            "file_size": 1024,
+            "compressed": False,
+            "raw": {"Extra": "kept"},
+        }
+    ]
+    assert result.data_age_days == 2
+    assert result.limitations == (
+        "no_per_url_sitemap_errors",
+        "sitemap_status_is_not_crawl_status",
+    )
+
+
+def test_feeds_accepts_a_bare_list() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[{"Url": "https://example.com/sitemap.xml", "Status": "Success"}],
+        )
+
+    result = _bing(handler).feeds()
+
+    assert result.total == 1
+    assert result.rows[0]["url"] == "https://example.com/sitemap.xml"
+    assert result.rows[0]["status"] == "Success"
+
+
+def test_feeds_parses_a_wcf_date_with_a_display_offset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetched_at = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(bing_client_module, "now_utc", lambda: fetched_at)
+    crawled = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
+    wcf_with_offset = _wcf_date(crawled).replace(")/", "-0700)/")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "d": [{"Url": "https://example.com/sitemap.xml", "LastCrawled": wcf_with_offset}]
+            },
+        )
+
+    result = _bing(handler).feeds()
+
+    assert result.data_age_days == 2
+
+
+def test_feed_details_queries_the_child_feeds() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={"d": [{"Url": "https://example.com/child.xml", "Status": "Success"}]},
+        )
+
+    result = _bing(handler).feed_details("https://example.com/sitemap.xml")
+
+    assert len(seen) == 1
+    assert seen[0].method == "GET"
+    assert seen[0].url.path.endswith("/GetFeedDetails")
+    assert seen[0].url.params["feedUrl"] == "https://example.com/sitemap.xml"
+    assert result.rows[0]["url"] == "https://example.com/child.xml"
+
+
+def test_submit_url_batches_splits_at_500_and_dedupes() -> None:
+    posts: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            assert request.url.path.endswith("/GetUrlSubmissionQuota")
+            return httpx.Response(
+                200,
+                json={"d": {"DailyQuota": 100_000, "MonthlyQuota": 100_000}},
+            )
+        posts.append(json.loads(request.content))
+        return httpx.Response(200, json={"d": None})
+
+    urls = [f"https://example.com/page/{index}" for index in range(501)]
+    urls.insert(0, urls[0])
+
+    result = _bing(handler).submit_url_batches(urls)
+
+    assert [len(body["urlList"]) for body in posts] == [500, 1]  # type: ignore[arg-type]
+    assert result.rows == [
+        {
+            "accepted": 501,
+            "submitted": 501,
+            "batches": 2,
+            "batch_size": 500,
+            "duplicates_removed": 1,
+            "status": "accepted",
+            "site_url": SITE,
+        }
+    ]
+    assert result.limitations == ("submit_idempotency_undocumented",)
+
+
+@pytest.mark.parametrize(
+    ("daily", "monthly", "field"),
+    [(2, 1400, "daily_remaining"), (100, 2, "monthly_remaining")],
+)
+def test_submit_url_batches_prechecks_both_quota_windows(
+    daily: int, monthly: int, field: str
+) -> None:
+    posts: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"d": {"DailyQuota": daily, "MonthlyQuota": monthly}})
+        posts.append(request)
+        return httpx.Response(200, json={"d": None})
+
+    with pytest.raises(SeoError) as caught:
+        _bing(handler).submit_url_batches(
+            [f"https://example.com/page/{index}" for index in range(3)]
+        )
+
+    assert caught.value.code == "QUOTA_EXCEEDED"
+    assert caught.value.detail[field] == (daily if field == "daily_remaining" else monthly)
+    assert caught.value.detail["requested"] == 3
+    assert posts == []
+
+
+def test_submit_url_batches_refuses_to_submit_without_quota() -> None:
+    posts: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"d": {}})
+        posts.append(request)
+        return httpx.Response(200, json={"d": None})
+
+    with pytest.raises(SeoError) as caught:
+        _bing(handler).submit_url_batches(["https://example.com/a"])
+
+    assert caught.value.code == "UPSTREAM_UNAVAILABLE"
+    assert posts == []
+
+
+@pytest.mark.parametrize(
+    ("error_code", "expected"),
+    [
+        (3, "AUTH_INVALID"),
+        (14, "PROPERTY_NOT_FOUND"),
+        (7, "INVALID_INPUT"),
+        (4, "QUOTA_EXCEEDED"),
+        (5, "QUOTA_EXCEEDED"),
+    ],
+)
+def test_bing_error_code_wins_over_the_http_status(error_code: int, expected: str) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"ErrorCode": error_code, "Message": "provider detail that must not leak"},
+        )
+
+    with pytest.raises(SeoError) as caught:
+        _bing(handler).query_stats()
+
+    assert caught.value.code == expected
+    assert caught.value.detail["error_code"] == error_code
+    payload = json.dumps(caught.value.to_dict())
+    assert API_KEY not in payload
+    assert "provider detail that must not leak" not in payload
 
 
 def test_api_key_never_leaks_into_error_messages() -> None:
@@ -366,23 +616,15 @@ def test_query_stats_without_dates_is_zero_not_invented(
     assert _bing(handler).query_stats().data_age_days == 0
 
 
-def test_crawl_issues_data_age_comes_from_the_newest_detection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fetched_at = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
-    monkeypatch.setattr(bing_client_module, "now_utc", lambda: fetched_at)
-
+def test_crawl_issues_flags_unknown_bits_instead_of_guessing() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            json={
-                "d": [
-                    {"Url": "https://example.com/a", "DateDetected": "2026-10-01T10:00:00"},
-                    {"Url": "https://example.com/b", "DateDetected": "2026-11-13T10:00:00"},
-                ]
-            },
+            json={"d": [{"Url": "https://example.com/a", "Issues": 512, "HttpCode": 200}]},
         )
 
     result = _bing(handler).crawl_issues()
 
-    assert result.data_age_days == 2
+    assert result.rows[0]["issues"] == []
+    assert result.rows[0]["issues_bits"] == 512
+    assert result.limitations == ("unknown_crawl_issue_bits",)
