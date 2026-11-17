@@ -293,7 +293,7 @@ promotion leaves `pending`, which is treated as in-flight until an operator rele
 
 | Message | Cause | Fix |
 |---|---|---|
-| `write operations are disabled by default` | `--allow-write` was not passed | Review the dry run, then opt in per call |
+| `write operations are disabled by default` | `--allow-write` was not passed | Pass `--allow-write` plus `LV24_SEO_WRITE_SECRET` to plan; apply with `--allow-write --confirm TOKEN` |
 | `write secret is empty: set LV24_SEO_WRITE_SECRET` | `--allow-write` without the environment secret | Set a long random value in the same shell or service |
 | `gsc sitemap submit is not wired yet` | GSC sitemap adapter absent | Submit in Search Console until it lands |
 | `yandex recrawl is not wired yet` | Recrawl adapter absent | Queue in Yandex Webmaster until it lands |

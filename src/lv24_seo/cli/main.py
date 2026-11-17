@@ -633,7 +633,11 @@ def sitemap_submit(
         bool, typer.Option("--json", help="Machine-readable envelope output.")
     ] = False,
 ) -> None:
-    """Submit a sitemap to Google Search Console or Bing (dry run without --allow-write)."""
+    """Submit a sitemap to Google Search Console or Bing.
+
+    Pass ``--allow-write`` (and have ``LV24_SEO_WRITE_SECRET`` set) to plan; apply with
+    ``--allow-write --confirm TOKEN``.
+    """
 
     def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
         config = load_config(config_path)
@@ -697,7 +701,12 @@ def yandex_recrawl(
         bool, typer.Option("--json", help="Machine-readable envelope output.")
     ] = False,
 ) -> None:
-    """Queue URLs for Yandex recrawl (dry run without --allow-write)."""
+    """Queue URLs for Yandex recrawl.
+
+    Pass ``--allow-write`` (and have ``LV24_SEO_WRITE_SECRET`` set) to plan; apply with
+    ``--allow-write --confirm TOKEN``. The adapter is not wired yet and returns
+    ``WRITE_DISABLED`` on apply.
+    """
 
     def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
         config = load_config(config_path)
@@ -777,9 +786,12 @@ def indexnow_submit_command(
         bool, typer.Option("--json", help="Machine-readable envelope output.")
     ] = False,
 ) -> None:
-    """Submit URLs to IndexNow (dry run without --allow-write).
+    """Submit URLs to IndexNow.
 
-    --from-sitemap reads the URL list from the project sitemap during the plan and
+    Pass ``--allow-write`` (and have ``LV24_SEO_WRITE_SECRET`` set) to plan; apply with
+    ``--allow-write --confirm TOKEN``.
+
+    ``--from-sitemap`` reads the URL list from the project sitemap during the plan and
     re-fetches it on apply; a changed sitemap invalidates the plan token.
     """
     context: dict[str, Any] = {}
@@ -929,7 +941,7 @@ def _write_command(
     config_path: Path | None = None,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run one gated write: plan/validate, dry run without ``--confirm``, apply with it."""
+    """Run one gated write: plan with ``--allow-write``, apply with ``--confirm``."""
 
     def action() -> dict[str, Any]:
         plan, execute = prepare()

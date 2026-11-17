@@ -476,10 +476,11 @@ lv24-seo indexnow submit --host example.com --key KEY --url https://example.com/
 lv24-seo indexnow submit --from-sitemap [--sitemap-url https://example.com/sitemap.xml] [--url ...] [--allow-write] [--confirm TOKEN] [--json]
 ```
 
-`sitemap submit --provider bing` is a real gated write. The site comes from
-`providers.bing.site` or `--property`, and the sitemap from `--url` or
+`sitemap submit --provider bing` is a real gated write. Pass `--allow-write` and set
+`LV24_SEO_WRITE_SECRET` to get a plan; apply with `--allow-write --confirm TOKEN`. The site comes
+from `providers.bing.site` or `--property`, and the sitemap from `--url` or
 `<project.base_url>/sitemap.xml`. The `bing_api_key` secret is required; a missing key is
-`AUTH_REQUIRED` and the dry run also checks it. The apply calls the current JSON `SubmitFeed`
+`AUTH_REQUIRED` and the plan also checks it. The apply calls the current JSON `SubmitFeed`
 endpoint (SOAP/POX are retired) and returns `{provider, status, site_url, sitemap_url}`.
 GSC keeps `--property`/`--url` required and still returns `WRITE_DISABLED` on apply; Bing
 `action=delete` is also `WRITE_DISABLED`.
