@@ -33,7 +33,7 @@ from typing import Any, Literal, Protocol, cast
 
 from lv24_seo.core.errors import CONFIG_INVALID, INVALID_INPUT, WRITE_DISABLED, SeoError
 
-__all__ = ["SECRET_NAMES", "SecretSource", "SecretStatus", "SecretStore"]
+__all__ = ["OAUTH_SECRET_NAMES", "SECRET_NAMES", "SecretSource", "SecretStatus", "SecretStore"]
 
 SecretSource = Literal["env", "keyring", "file", "missing"]
 
@@ -51,6 +51,22 @@ SECRET_NAMES: tuple[str, ...] = (
     "smtp_password",
     "telegram_bot_token",
 )
+
+#: Companion secrets of the OAuth connectors: refresh tokens, expiry stamps and client
+#: secrets. They are stored like any other secret but kept out of :data:`SECRET_NAMES`,
+#: whose tuple is a stable public contract for existing consumers.
+OAUTH_SECRET_NAMES: tuple[str, ...] = (
+    "gsc_refresh_token",
+    "gsc_token_expires_at",
+    "gsc_oauth_client_secret",
+    "yandex_refresh_token",
+    "yandex_token_expires_at",
+    "yandex_metrika_refresh_token",
+    "yandex_metrika_token_expires_at",
+    "yandex_oauth_client_secret",
+)
+
+_ALL_SECRET_NAMES: tuple[str, ...] = SECRET_NAMES + OAUTH_SECRET_NAMES
 
 _SECRETS_FILENAME = "secrets.json"
 _TRUTHY = frozenset({"1", "true", "yes"})
@@ -317,11 +333,11 @@ class SecretStore:
 
     @staticmethod
     def _require_name(name: str) -> None:
-        if name not in SECRET_NAMES:
+        if name not in _ALL_SECRET_NAMES:
             raise SeoError(
                 code=INVALID_INPUT,
                 message=f"unknown secret name: {name!r}",
-                next_action=f"use one of: {', '.join(SECRET_NAMES)}",
+                next_action=f"use one of: {', '.join(_ALL_SECRET_NAMES)}",
             )
 
 
