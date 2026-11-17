@@ -48,6 +48,7 @@ __all__ = [
     "CruxConfig",
     "EmailConfig",
     "GscConfig",
+    "IndexingConfig",
     "ProjectConfig",
     "ProvidersConfig",
     "PsiConfig",
@@ -224,6 +225,44 @@ class StorageConfig(_StrictModel):
     raw_retention_days: int = Field(default=90, ge=0)
 
 
+IndexingProvider = Literal["bing", "yandex", "gsc", "indexnow"]
+
+
+def _default_indexing_providers() -> list[IndexingProvider]:
+    return ["bing", "yandex", "gsc", "indexnow"]
+
+
+class IndexingConfig(_StrictModel):
+    """Quota-aware submission and index-check automation (``[indexing]``).
+
+    Disabled by default: provider writes are an explicit opt-in. ``providers`` selects which
+    engines participate; a provider that is not configured is reported, never guessed.
+    ``max_submit_per_run`` bounds one run globally, ``max_inspect_per_run`` bounds the
+    read-only URL checks (GSC URL Inspection and Bing ``GetUrlInfo``), and the two daily
+    limits are local caps because those providers expose no remaining-count endpoint.
+    ``stale_days`` marks stored state older than the threshold in ``indexing status``;
+    ``check_interval_days`` is the re-check cadence used by the planner.
+    """
+
+    enabled: bool = False
+    providers: list[IndexingProvider] = Field(default_factory=_default_indexing_providers)
+    max_submit_per_run: int = Field(default=500, ge=0, le=10_000)
+    max_inspect_per_run: int = Field(default=20, ge=0, le=1_000)
+    stale_days: int = Field(default=7, ge=0, le=3_660)
+    check_interval_days: int = Field(default=7, ge=0, le=3_660)
+    gsc_inspect_daily_limit: int = Field(default=2_000, ge=0, le=50_000)
+    indexnow_daily_limit: int = Field(default=1_000, ge=0, le=10_000)
+
+    @field_validator("providers")
+    @classmethod
+    def _unique_providers(cls, value: list[IndexingProvider]) -> list[IndexingProvider]:
+        unique: list[IndexingProvider] = []
+        for item in value:
+            if item not in unique:
+                unique.append(item)
+        return unique
+
+
 class SeoConfig(_StrictModel):
     """Validated, fully-defaulted configuration for one SEO workspace."""
 
@@ -232,6 +271,7 @@ class SeoConfig(_StrictModel):
     report: ReportConfig = Field(default_factory=ReportConfig)
     crawl: CrawlConfig = Field(default_factory=CrawlConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    indexing: IndexingConfig = Field(default_factory=IndexingConfig)
 
 
 # Environment variables that map to one string leaf. Keep in sync with docs/config.md.

@@ -1,9 +1,9 @@
 # CLI reference
 
-The CLI has 24 top-level commands: 17 groups (`auth`, `config`, `gsc`, `yandex`, `metrika`,
-`sitemap`, `indexnow`, `bing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`,
-`portfolio`, `mcp`) and 7 commands (`version`, `doctor`, `init`, `properties`, `stats`, `crawl`,
-`install`).
+The CLI has 25 top-level commands: 18 groups (`auth`, `config`, `gsc`, `yandex`, `metrika`,
+`sitemap`, `indexnow`, `bing`, `indexing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`,
+`backup`, `portfolio`, `mcp`) and 7 commands (`version`, `doctor`, `init`, `properties`, `stats`,
+`crawl`, `install`).
 
 Every read/report command supports `--json` (machine output) and a stable exit code; commands that
 use the workspace also accept `--config PATH`.
@@ -737,22 +737,77 @@ Provider statuses are actionable: `200` accepted, `202` accepted-pending (warnin
 missing/mismatched (`AUTH_INVALID` with the exact key-file URL), `422` key/host mismatch
 (`INVALID_INPUT`) and `429` spam/quota (`QUOTA_EXCEEDED`, retryable).
 
+## Indexing automation
+
+```bash
+lv24-seo indexing status [--provider all|bing|yandex|gsc|indexnow] [--limit 50] [--live] [--config seo.toml] [--json]
+lv24-seo indexing run    [--provider all|bing|yandex|gsc|indexnow] [--from-sitemap] [--sitemap-url URL] [--url URL ...] [--max-submit N] [--max-inspect N] [--force] [--allow-write] [--config seo.toml] [--json]
+lv24-seo indexing history [--limit 20] [--config seo.toml] [--json]
+```
+
+`status` is read-only. `--live` reads Bing `GetUrlSubmissionQuota` and Yandex
+`recrawl/quota`; without it the last recorded quota is shown with `quota_not_live`. GSC and
+IndexNow use local UTC-day counters because neither provider exposes a remaining-count endpoint.
+Each provider entry carries `urls`, `submitted`, `inspected`, `indexed`, `not_indexed`, `crawled`,
+`queued`, `pending`, `stale`, `quota` and `limitations`.
+
+The GSC entry additionally reports `indexed_total` from `gsc sitemaps` `contents[].indexed`
+(summed across sitemaps) with `indexed_total_source: gsc_sitemaps_contents`. That field is
+deprecated by Google, so it always carries `gsc_indexed_count_deprecated` and is kept separate
+from the per-URL `indexed` count. It is read from GSC whenever the GSC client is available;
+`--live` additionally reads Bing and Yandex quotas. Bing, Yandex and IndexNow expose no
+per-URL index count: their `indexed_total` stays `null` and the entry carries
+`no_per_url_index_count`. Bing also reports `site_scan_no_api` (Site Scan has no public API) and
+`bing_no_per_url_index_status`; Yandex reports `yandex_no_per_url_index_status`; IndexNow reports
+`indexnow_no_status_api`. None of these is an indexed total, and a zero is never rendered as
+"all indexed".
+
+`quota` always has `remaining` and `reset` where known. GSC/IndexNow reset at the next UTC
+midnight (`reset` is an ISO timestamp), Yandex resets at the provider's daily boundary
+(`reset: provider_midnight`), and Bing's monthly reset is undocumented (`reset: null` plus
+`bing_quota_reset_undocumented`).
+
+`run` builds a same-host queue from `<project.base_url>/sitemap.xml` (bounded to 10,000 URLs and
+six sitemap documents) and/or repeatable `--url`, reads `lastmod` when present, and plans in
+priority order: never submitted, then `lastmod` newer than `last_submitted_at`, then a check older
+than `check_interval_days`, then the rest. Checks are read-only and run in both modes: GSC URL
+Inspection (`PASS`/`Submitted and indexed` -> `indexed`, `NEUTRAL`/`FAIL` -> `not_indexed`) and
+Bing `GetUrlInfo` (`crawled` when a crawl date exists, otherwise `unknown`). Without
+`--allow-write` nothing is submitted; the output is a plan. With it, the engine re-reads quotas,
+re-validates the plan hash, mints and consumes an internal confirm token, and records one
+`indexing_runs` row per provider.
+
+Caps are enforced before the provider call: `max_submit_per_run` (default 500), Bing's remaining
+daily/monthly quota, Yandex's `quota_remainder`, `max_inspect_per_run` (default 20), GSC's local
+`gsc_inspect_daily_limit` (2000) and IndexNow's local `indexnow_daily_limit` (1000). Bing batches
+never exceed 500 URLs, Yandex queues one URL per request, and IndexNow never exceeds 10,000 URLs
+per POST. An exhausted quota is reported as `quota_exhausted`, `submitted: 0` and
+`not_attempted`; the command never claims that zero means everything is indexed.
+
+A URL whose `last_submitted_at` is newer than its `lastmod` is skipped unless `--force` is set.
+`--allow-write` requires `[indexing] enabled = true` and `LV24_SEO_WRITE_SECRET`; without either
+the command fails with `WRITE_DISABLED`. `status` reports `write_secret_present` (a boolean only,
+never the value) and adds `write_secret_missing` when an apply would be refused.
+
 ## Scheduling
 
 ```bash
-lv24-seo schedule print --cron "0 6 * * 1" [--target cron|systemd|windows] [--json]
-lv24-seo schedule install --kind weekly|daily [--cron "0 6 * * 1"] [--target auto|cron|systemd|windows] [--allow-write] [--json]
-lv24-seo schedule status --kind weekly|daily [--cron "0 6 * * 1"] [--target auto|cron|systemd|windows] [--json]
-lv24-seo schedule uninstall --kind weekly|daily [--target auto|cron|systemd|windows] [--allow-write] [--json]
+lv24-seo schedule print --kind weekly|daily|indexing [--cron "0 6 * * 1"] [--target cron|systemd|windows] [--json]
+lv24-seo schedule install --kind weekly|daily|indexing [--cron "0 6 * * 1"] [--target auto|cron|systemd|windows] [--allow-write] [--json]
+lv24-seo schedule status --kind weekly|daily|indexing [--cron "0 6 * * 1"] [--target auto|cron|systemd|windows] [--json]
+lv24-seo schedule uninstall --kind weekly|daily|indexing [--target auto|cron|systemd|windows] [--allow-write] [--json]
 ```
 
 `print` renders the artefact without touching the host. `install` is **plan-only by default**: it
 prints the cron block / systemd user units / Task Scheduler XML and the command it would run, with
 `dry_run: true` and `installed: false`. Nothing is written until `--allow-write`; `--print` stays as
-an alias for the default and wins over `--allow-write`. Generated jobs call
-`report weekly --send --json`, so a scheduled run delivers the report. The job embeds the **absolute**
-`--config` path and uses the config file's parent as its working directory, so a scheduler that
-starts in another directory still reads the same config and data directory.
+an alias for the default and wins over `--allow-write`. Report jobs call
+`report weekly --send --json`; the `indexing` job calls
+`indexing run --allow-write --config <absolute path> --json` and is named `lv24-seo-indexing`
+(daily at 04:00). It still requires `[indexing] enabled = true` and
+`LV24_SEO_WRITE_SECRET` in the scheduler environment; see [scheduling](scheduling.md). The job embeds
+the **absolute** `--config` path and uses the config file's parent as its working directory, so a
+scheduler that starts in another directory still reads the same config and data directory.
 
 `status` is read-only. It reports `state: installed|outdated|partial|missing|unknown`, the expected
 `paths`, and per-artefact `exists`/`matches` flags. `outdated` means the host copy differs from the

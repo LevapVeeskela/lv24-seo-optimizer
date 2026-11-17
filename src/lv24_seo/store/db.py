@@ -49,7 +49,7 @@ _WAL_ATTEMPTS = 5
 _WAL_RETRY_SECONDS = 0.05
 
 #: Current schema version. Bump when appending to ``_MIGRATIONS``.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     # v1 backfills databases created before ``schema_migrations`` /
@@ -126,6 +126,63 @@ _MIGRATIONS: tuple[tuple[int, str, str], ...] = (
             ON indexing_events (property_id, event_date);
         CREATE INDEX IF NOT EXISTS idx_indexing_events_property_url
             ON indexing_events (property_id, url, event_date);
+        """,
+    ),
+    (
+        5,
+        "quota-aware indexing state, run history and local quota usage",
+        """
+        CREATE TABLE IF NOT EXISTS indexing_state (
+            provider          TEXT NOT NULL,
+            property_id       TEXT NOT NULL,
+            url               TEXT NOT NULL,
+            first_seen        TEXT NOT NULL,
+            last_submitted_at TEXT,
+            last_checked_at   TEXT,
+            submit_status     TEXT NOT NULL DEFAULT 'not_submitted'
+                              CHECK (submit_status IN
+                                     ('not_submitted', 'accepted', 'already_queued',
+                                      'skipped', 'error')),
+            index_status      TEXT NOT NULL DEFAULT 'unknown'
+                              CHECK (index_status IN ('indexed', 'not_indexed', 'crawled',
+                                                      'unknown')),
+            coverage_state    TEXT,
+            http_status       INTEGER,
+            last_crawled_at   TEXT,
+            next_check_at     TEXT,
+            detail_json       TEXT,
+            UNIQUE (provider, property_id, url)
+        );
+        CREATE INDEX IF NOT EXISTS idx_indexing_state_provider_check
+            ON indexing_state (provider, property_id, next_check_at);
+        CREATE INDEX IF NOT EXISTS idx_indexing_state_provider_status
+            ON indexing_state (provider, property_id, index_status);
+        CREATE TABLE IF NOT EXISTS indexing_runs (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at        TEXT NOT NULL,
+            finished_at       TEXT,
+            provider          TEXT NOT NULL,
+            planned           INTEGER NOT NULL DEFAULT 0,
+            submitted         INTEGER NOT NULL DEFAULT 0,
+            checked           INTEGER NOT NULL DEFAULT 0,
+            skipped           INTEGER NOT NULL DEFAULT 0,
+            quota_before_json TEXT,
+            quota_after_json  TEXT,
+            status            TEXT NOT NULL,
+            detail_json       TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_indexing_runs_provider_started
+            ON indexing_runs (provider, started_at);
+        CREATE INDEX IF NOT EXISTS idx_indexing_runs_started
+            ON indexing_runs (started_at);
+        CREATE TABLE IF NOT EXISTS quota_usage (
+            provider    TEXT NOT NULL,
+            property_id TEXT NOT NULL,
+            day         TEXT NOT NULL,
+            kind        TEXT NOT NULL,
+            used        INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (provider, property_id, day, kind)
+        );
         """,
     ),
 )

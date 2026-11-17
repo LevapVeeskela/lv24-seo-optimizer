@@ -27,6 +27,7 @@ import inspect
 import json
 import logging
 import math
+import os
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -52,6 +53,7 @@ from lv24_seo.core.errors import (
 )
 from lv24_seo.core.secrets import SecretStore
 from lv24_seo.core.timeutil import compare_period, days_between, local_today, utc_now
+from lv24_seo.core.write_gate import WRITE_SECRET_ENV
 from lv24_seo.crawl.fetcher import Fetcher, RobotsPolicy, is_allowed
 from lv24_seo.crawl.graph import GraphStats, build_graph, normalize_url
 from lv24_seo.crawl.html import parse_html
@@ -59,6 +61,13 @@ from lv24_seo.crawl.models import FetchResult, Issue, PageData, RuleContext
 from lv24_seo.crawl.rules import run_all
 from lv24_seo.crawl.sitemap import MAX_BYTES as SITEMAP_MAX_BYTES
 from lv24_seo.crawl.sitemap import OFF_ORIGIN_LOC, SitemapReader
+from lv24_seo.indexing import (
+    PROVIDER_AUTH_REQUIRED,
+    PROVIDER_NOT_CONFIGURED,
+    IndexingEngine,
+    IndexingTarget,
+    build_queue,
+)
 from lv24_seo.providers.base import (
     ONE_URL_PER_CALL,
     RECRAWL_QUOTA_EXCEEDED,
@@ -2615,6 +2624,257 @@ class SeoService:
         if "bing" not in self._overrides:
             client.close()
 
+    # -- indexing automation ------------------------------------------------------------------
+
+    def indexing_status(
+        self,
+        *,
+        provider: str = "all",
+        limit: int = 50,
+        live: bool = False,
+    ) -> dict[str, Any]:
+        """Read indexing queue state and (with ``--live``) provider quotas (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "indexing_status",
+            warnings,
+            lambda: self._indexing_status(provider, limit, live, warnings),
+        )
+
+    def _indexing_status(
+        self,
+        provider: str,
+        limit: int,
+        live: bool,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        size = _positive_int(limit, name="limit", maximum=1_000)
+        engine = self._indexing_engine(warnings=warnings)
+        result = engine.status(provider=provider, limit=size, live=live)
+        data = {
+            "providers": result["providers"],
+            "write_secret_present": result["write_secret_present"],
+            "limitations": result["limitations"],
+        }
+        meta = {
+            "total": result["total"],
+            "truncated": result["truncated"],
+            "data_age_days": result["data_age_days"],
+            "limitations": result["limitations"],
+            "write_secret_present": result["write_secret_present"],
+            "live": live,
+        }
+        return ok(data, meta=meta, warnings=_unique(warnings))
+
+    def indexing_run(
+        self,
+        *,
+        provider: str = "all",
+        from_sitemap: bool = False,
+        sitemap_url: str = "",
+        urls: Sequence[str] | None = None,
+        max_submit: int | None = None,
+        max_inspect: int | None = None,
+        force: bool = False,
+        allow_write: bool = False,
+    ) -> dict[str, Any]:
+        """Plan one indexing run; apply provider writes only with ``allow_write``.
+
+        The queue is read from the project sitemap by default and can be merged with explicit
+        URLs. Checks (GSC URL Inspection and Bing ``GetUrlInfo``) are read-only and run in both
+        modes. A submission re-reads quotas, verifies the plan hash and consumes an internal
+        confirm token, so a scheduled run is still quota- and idempotency-aware.
+        """
+        warnings: list[str] = []
+        return self._respond(
+            "indexing_run",
+            warnings,
+            lambda: self._indexing_run(
+                provider,
+                from_sitemap,
+                sitemap_url,
+                urls,
+                max_submit,
+                max_inspect,
+                force,
+                allow_write,
+                warnings,
+            ),
+        )
+
+    def _indexing_run(
+        self,
+        provider: str,
+        from_sitemap: bool,
+        sitemap_url: str,
+        urls: Sequence[str] | None,
+        max_submit: int | None,
+        max_inspect: int | None,
+        force: bool,
+        allow_write: bool,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        if allow_write and not self._config.indexing.enabled:
+            raise SeoError(
+                code=WRITE_DISABLED,
+                message="indexing writes are disabled: [indexing].enabled is false",
+                next_action=(
+                    "set [indexing] enabled=true in seo.toml after reviewing the plan; "
+                    "the scheduled job is the explicit automation opt-in"
+                ),
+                retryable=False,
+            )
+        submit_cap = (
+            None
+            if max_submit is None
+            else _positive_int(max_submit, name="max_submit", maximum=10_000)
+        )
+        inspect_cap = (
+            None if max_inspect is None else _non_negative_int(max_inspect, name="max_inspect")
+        )
+        queue = build_queue(
+            self._config,
+            from_sitemap=from_sitemap,
+            sitemap_url=sitemap_url,
+            urls=urls,
+        )
+        engine = self._indexing_engine(
+            allow_write=allow_write,
+            force=force,
+            max_submit=submit_cap,
+            max_inspect=inspect_cap,
+            warnings=warnings,
+        )
+        result = engine.run(queue, provider=provider)
+        data = {
+            "providers": result["providers"],
+            "queue": result["queue"],
+            "limitations": result["limitations"],
+        }
+        meta = {
+            "dry_run": result["dry_run"],
+            "allow_write": allow_write,
+            "force": force,
+            "total": queue.total,
+            "truncated": queue.truncated,
+            "data_age_days": 0,
+            "limitations": result["limitations"],
+        }
+        return ok(data, meta=meta, warnings=_unique(warnings))
+
+    def indexing_history(self, *, limit: int = 20) -> dict[str, Any]:
+        """Read recorded indexing runs, newest first (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "indexing_history",
+            warnings,
+            lambda: self._indexing_history(limit, warnings),
+        )
+
+    def _indexing_history(self, limit: int, warnings: list[str]) -> dict[str, Any]:
+        size = _positive_int(limit, name="limit", maximum=1_000)
+        store = self._store
+        if store is None:
+            warnings.append("store: not configured; indexing history is empty")
+            runs: list[dict[str, Any]] = []
+            total = 0
+        else:
+            total = store.count_indexing_runs()
+            runs = store.list_indexing_runs(limit=size)
+        truncated = total > size
+        visible = runs[:size]
+        return ok(
+            {"runs": visible},
+            meta={
+                "total": total,
+                "truncated": truncated,
+                "data_age_days": 0,
+                "limitations": ["history_limit"] if truncated else [],
+            },
+            warnings=_unique(warnings),
+        )
+
+    def _indexing_engine(
+        self,
+        *,
+        allow_write: bool = False,
+        force: bool = False,
+        max_submit: int | None = None,
+        max_inspect: int | None = None,
+        warnings: list[str],
+    ) -> IndexingEngine:
+        def client_for(name: str) -> object:
+            return self._client_for(name, warnings)
+
+        def close_client(name: str, client: object) -> None:
+            if name in self._overrides:
+                return
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+
+        return IndexingEngine(
+            config=self._config,
+            store=self._store,
+            targets=self._indexing_targets(),
+            client_for=client_for,
+            close_client=close_client,
+            allow_write=allow_write,
+            force=force,
+            max_submit=max_submit,
+            max_inspect=max_inspect,
+            write_secret=os.environ.get(WRITE_SECRET_ENV, ""),
+        )
+
+    def _indexing_targets(self) -> list[IndexingTarget]:
+        bing = self._config.providers.bing
+        site = bing.site.strip() if bing is not None else ""
+        site_host = _site_host(site)
+        bing_ready = bool(site) and self._bing_key_present()
+        indexnow_key = bing.indexnow_key.strip() if bing is not None else ""
+        indexnow_ready = bool(site_host) and bool(indexnow_key)
+
+        webmaster = self._config.providers.yandex_webmaster
+        host_id = webmaster.host_id.strip() if webmaster is not None else ""
+        yandex_ready = bool(host_id) and self._credential_present(
+            "yandex_webmaster", "yandex_webmaster_token"
+        )
+
+        gsc = self._config.providers.gsc
+        property_id = gsc.property.strip() if gsc is not None else ""
+        gsc_ready = bool(property_id) and self._credential_present("gsc", "gsc_token")
+
+        return [
+            IndexingTarget(
+                provider="bing",
+                property_id=site,
+                client_name="bing",
+                ready=bing_ready,
+                reason=PROVIDER_NOT_CONFIGURED if not site else PROVIDER_AUTH_REQUIRED,
+            ),
+            IndexingTarget(
+                provider="yandex",
+                property_id=host_id,
+                client_name="yandex_webmaster",
+                ready=yandex_ready,
+                reason=PROVIDER_NOT_CONFIGURED if not host_id else PROVIDER_AUTH_REQUIRED,
+            ),
+            IndexingTarget(
+                provider="gsc",
+                property_id=property_id,
+                client_name="gsc",
+                ready=gsc_ready,
+                reason=PROVIDER_NOT_CONFIGURED if not property_id else PROVIDER_AUTH_REQUIRED,
+            ),
+            IndexingTarget(
+                provider="indexnow",
+                property_id=site_host,
+                client_name="",
+                ready=indexnow_ready,
+                reason=("indexnow_key_missing" if not indexnow_key else PROVIDER_NOT_CONFIGURED),
+            ),
+        ]
+
     def cwv_collect(
         self,
         *,
@@ -5009,6 +5269,16 @@ def _gsc_property(result: object, config: SeoConfig) -> str:
         return value.strip()
     gsc = config.providers.gsc
     return gsc.property.strip() if gsc is not None else ""
+
+
+def _site_host(site: str) -> str:
+    """Bare hostname from ``providers.bing.site`` (URL or bare hostname)."""
+    value = site.strip()
+    if not value:
+        return ""
+    if "://" in value:
+        return (urlsplit(value).hostname or "").lower()
+    return value.rstrip("/").lower()
 
 
 def _gsc_configured_property(config: SeoConfig) -> str:

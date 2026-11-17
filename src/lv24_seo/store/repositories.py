@@ -35,9 +35,29 @@ from lv24_seo.core.timeutil import utc_now
 from lv24_seo.store.db import connect, initialize
 from lv24_seo.store.errors import translate_sqlite_error
 
-__all__ = ["TASK_STATES", "TASK_TRANSITIONS", "Store", "canonical_json", "content_hash"]
+__all__ = [
+    "INDEXING_INDEX_STATUSES",
+    "INDEXING_SUBMIT_STATUSES",
+    "TASK_STATES",
+    "TASK_TRANSITIONS",
+    "Store",
+    "canonical_json",
+    "content_hash",
+]
 
 JsonObject = dict[str, Any]
+
+#: Closed submit-status set for ``indexing_state`` (schema v5).
+INDEXING_SUBMIT_STATUSES: Final[tuple[str, ...]] = (
+    "not_submitted",
+    "accepted",
+    "already_queued",
+    "skipped",
+    "error",
+)
+
+#: Closed index-status set. ``crawled`` means a provider confirmed a crawl, not an index.
+INDEXING_INDEX_STATUSES: Final[tuple[str, ...]] = ("indexed", "not_indexed", "crawled", "unknown")
 
 #: Closed task-state set (F2/F7). ``verified`` means a human/agent checked the fix; a later
 #: observation of the same finding reopens it, which is how a regression is proven.
@@ -124,6 +144,21 @@ def _indexing_event_row(row: sqlite3.Row) -> JsonObject:
     return item
 
 
+def _indexing_state_row(row: sqlite3.Row) -> JsonObject:
+    item = _row_to_dict(row)
+    raw_detail = cast(str | None, item.pop("detail_json"))
+    item["detail"] = {} if raw_detail is None else _decode_json(raw_detail)
+    return item
+
+
+def _indexing_run_row(row: sqlite3.Row) -> JsonObject:
+    item = _row_to_dict(row)
+    for column in ("quota_before_json", "quota_after_json", "detail_json"):
+        raw = cast(str | None, item.pop(column))
+        item[column.removesuffix("_json")] = {} if raw is None else _decode_json(raw)
+    return item
+
+
 def _task_identity(
     kind: str, property_id: str, url: str, rule_id: str
 ) -> tuple[str, str, str, str]:
@@ -150,6 +185,31 @@ def _indexing_event_identity(
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{name} must be a non-empty string")
     return (provider, property_id, url, event, _day(event_date, name="event_date"))
+
+
+def _indexing_state_identity(provider: str, property_id: str, url: str) -> tuple[str, str, str]:
+    for name, value in (("provider", provider), ("property_id", property_id), ("url", url)):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+    return (provider, property_id, url)
+
+
+def _require_indexing_status(value: str | None, allowed: tuple[str, ...], *, name: str) -> None:
+    if value is None:
+        return
+    if value not in allowed:
+        raise ValueError(f"{name} must be one of {', '.join(allowed)}")
+
+
+def _require_non_empty(name: str, value: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+
+
+def _optional_timestamp(value: datetime | str | None, *, name: str) -> str | None:
+    if value is None:
+        return None
+    return _timestamp(value, name=name)
 
 
 class Store:
@@ -1188,6 +1248,425 @@ class Store:
             (kind, property_id, period, channel, content_hash),
         ).fetchone()
         return row is not None
+
+    # -- indexing automation (v5) ---------------------------------------------------------------
+
+    def ensure_indexing_state(
+        self,
+        provider: str,
+        property_id: str,
+        url: str,
+        *,
+        first_seen: datetime | str | None = None,
+        next_check_at: datetime | str | None = None,
+        detail: JsonObject | None = None,
+    ) -> None:
+        """Insert one queue URL when it is new; never move ``first_seen`` or overwrite state.
+
+        A run seeds the whole queue so ``indexing status`` can count URLs that were never
+        submitted. Existing rows are left untouched: the engine owns their status updates.
+        """
+        identity = _indexing_state_identity(provider, property_id, url)
+        with self._write_tx():
+            self.conn.execute(
+                """
+                INSERT INTO indexing_state (
+                    provider, property_id, url, first_seen, next_check_at, detail_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (provider, property_id, url) DO NOTHING
+                """,
+                (
+                    *identity,
+                    _timestamp(first_seen, name="first_seen"),
+                    _optional_timestamp(next_check_at, name="next_check_at"),
+                    None if detail is None else canonical_json(detail),
+                ),
+            )
+
+    def upsert_indexing_state(
+        self,
+        provider: str,
+        property_id: str,
+        url: str,
+        *,
+        first_seen: datetime | str | None = None,
+        last_submitted_at: datetime | str | None = None,
+        last_checked_at: datetime | str | None = None,
+        submit_status: str | None = None,
+        index_status: str | None = None,
+        coverage_state: str | None = None,
+        http_status: int | None = None,
+        last_crawled_at: datetime | str | None = None,
+        next_check_at: datetime | str | None = None,
+        detail: JsonObject | None = None,
+    ) -> None:
+        """Insert or update one URL's queue position.
+
+        ``None`` means "leave the stored value alone" for every optional field. That is what
+        lets a check update ``index_status`` without erasing a submission timestamp, and a
+        submission update ``submit_status`` without erasing the previous coverage verdict.
+        ``first_seen`` never moves once the row exists.
+        """
+        identity = _indexing_state_identity(provider, property_id, url)
+        _require_indexing_status(submit_status, INDEXING_SUBMIT_STATUSES, name="submit_status")
+        _require_indexing_status(index_status, INDEXING_INDEX_STATUSES, name="index_status")
+        params = {
+            "provider": identity[0],
+            "property_id": identity[1],
+            "url": identity[2],
+            "first_seen": _timestamp(first_seen, name="first_seen"),
+            "last_submitted_at": _optional_timestamp(last_submitted_at, name="last_submitted_at"),
+            "last_checked_at": _optional_timestamp(last_checked_at, name="last_checked_at"),
+            "submit_status": submit_status,
+            "index_status": index_status,
+            "coverage_state": coverage_state,
+            "http_status": http_status,
+            "last_crawled_at": _optional_timestamp(last_crawled_at, name="last_crawled_at"),
+            "next_check_at": _optional_timestamp(next_check_at, name="next_check_at"),
+            "detail_json": None if detail is None else canonical_json(detail),
+        }
+        with self._write_tx():
+            self.conn.execute(
+                """
+                INSERT INTO indexing_state (
+                    provider, property_id, url, first_seen, last_submitted_at,
+                    last_checked_at, submit_status, index_status, coverage_state,
+                    http_status, last_crawled_at, next_check_at, detail_json
+                )
+                VALUES (
+                    :provider, :property_id, :url, :first_seen, :last_submitted_at,
+                    :last_checked_at,
+                    COALESCE(:submit_status, 'not_submitted'),
+                    COALESCE(:index_status, 'unknown'),
+                    :coverage_state, :http_status, :last_crawled_at, :next_check_at,
+                    :detail_json
+                )
+                ON CONFLICT (provider, property_id, url) DO UPDATE SET
+                    last_submitted_at = COALESCE(
+                        :last_submitted_at, indexing_state.last_submitted_at
+                    ),
+                    last_checked_at = COALESCE(
+                        :last_checked_at, indexing_state.last_checked_at
+                    ),
+                    submit_status = COALESCE(:submit_status, indexing_state.submit_status),
+                    index_status = COALESCE(:index_status, indexing_state.index_status),
+                    coverage_state = COALESCE(
+                        :coverage_state, indexing_state.coverage_state
+                    ),
+                    http_status = COALESCE(:http_status, indexing_state.http_status),
+                    last_crawled_at = COALESCE(
+                        :last_crawled_at, indexing_state.last_crawled_at
+                    ),
+                    next_check_at = COALESCE(
+                        :next_check_at, indexing_state.next_check_at
+                    ),
+                    detail_json = COALESCE(:detail_json, indexing_state.detail_json)
+                """,
+                params,
+            )
+
+    def get_indexing_state(self, provider: str, property_id: str, url: str) -> JsonObject | None:
+        """One stored URL state, or ``None`` when the URL has never entered a queue."""
+        identity = _indexing_state_identity(provider, property_id, url)
+        row = self.conn.execute(
+            """
+            SELECT provider, property_id, url, first_seen, last_submitted_at, last_checked_at,
+                   submit_status, index_status, coverage_state, http_status, last_crawled_at,
+                   next_check_at, detail_json
+            FROM indexing_state
+            WHERE provider = ? AND property_id = ? AND url = ?
+            """,
+            identity,
+        ).fetchone()
+        return None if row is None else _indexing_state_row(row)
+
+    def list_indexing_state(
+        self,
+        *,
+        provider: str | None = None,
+        property_id: str | None = None,
+        index_status: str | None = None,
+        limit: int = 1_000,
+        offset: int = 0,
+    ) -> list[JsonObject]:
+        """Stored URL states, ordered by provider/property/URL and always bounded."""
+        _require_indexing_status(index_status, INDEXING_INDEX_STATUSES, name="index_status")
+        rows = self.conn.execute(
+            """
+            SELECT provider, property_id, url, first_seen, last_submitted_at, last_checked_at,
+                   submit_status, index_status, coverage_state, http_status, last_crawled_at,
+                   next_check_at, detail_json
+            FROM indexing_state
+            WHERE (:provider IS NULL OR provider = :provider)
+              AND (:property_id IS NULL OR property_id = :property_id)
+              AND (:index_status IS NULL OR index_status = :index_status)
+            ORDER BY provider, property_id, url
+            LIMIT :limit OFFSET :offset
+            """,
+            {
+                "provider": provider,
+                "property_id": property_id,
+                "index_status": index_status,
+                "limit": max(0, int(limit)),
+                "offset": max(0, int(offset)),
+            },
+        ).fetchall()
+        return [_indexing_state_row(row) for row in rows]
+
+    def count_indexing_state(
+        self,
+        *,
+        provider: str | None = None,
+        property_id: str | None = None,
+        index_status: str | None = None,
+    ) -> int:
+        """Count stored URL states without loading the rows."""
+        _require_indexing_status(index_status, INDEXING_INDEX_STATUSES, name="index_status")
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM indexing_state
+            WHERE (:provider IS NULL OR provider = :provider)
+              AND (:property_id IS NULL OR property_id = :property_id)
+              AND (:index_status IS NULL OR index_status = :index_status)
+            """,
+            {
+                "provider": provider,
+                "property_id": property_id,
+                "index_status": index_status,
+            },
+        ).fetchone()
+        return 0 if row is None else int(row["total"])
+
+    def indexing_state_counts(
+        self,
+        provider: str,
+        property_id: str,
+        *,
+        stale_before: datetime | str | None = None,
+    ) -> JsonObject:
+        """Counts used by ``indexing status`` without loading every URL row.
+
+        ``stale`` counts rows never checked or last checked before ``stale_before``.
+        ``pending`` is every URL not known to be indexed or crawled; it is deliberately not
+        reported as "not indexed", because an unchecked URL has no verdict.
+        """
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN last_submitted_at IS NOT NULL THEN 1 ELSE 0 END) AS submitted,
+                   SUM(CASE WHEN last_checked_at IS NOT NULL THEN 1 ELSE 0 END) AS inspected,
+                   SUM(CASE WHEN index_status = 'indexed' THEN 1 ELSE 0 END) AS indexed,
+                   SUM(CASE WHEN index_status = 'not_indexed' THEN 1 ELSE 0 END) AS not_indexed,
+                   SUM(CASE WHEN index_status = 'crawled' THEN 1 ELSE 0 END) AS crawled,
+                   SUM(CASE WHEN index_status = 'unknown' THEN 1 ELSE 0 END) AS unknown,
+                   SUM(CASE WHEN last_submitted_at IS NOT NULL
+                             AND index_status = 'unknown'
+                        THEN 1 ELSE 0 END) AS queued,
+                   SUM(CASE WHEN :stale_before IS NULL
+                             OR last_checked_at IS NULL
+                             OR last_checked_at < :stale_before
+                        THEN 1 ELSE 0 END) AS stale
+            FROM indexing_state
+            WHERE provider = :provider AND property_id = :property_id
+            """,
+            {
+                "provider": provider,
+                "property_id": property_id,
+                "stale_before": _optional_timestamp(stale_before, name="stale_before"),
+            },
+        ).fetchone()
+        if row is None:
+            return {
+                "urls": 0,
+                "submitted": 0,
+                "inspected": 0,
+                "indexed": 0,
+                "not_indexed": 0,
+                "crawled": 0,
+                "unknown": 0,
+                "queued": 0,
+                "stale": 0,
+                "pending": 0,
+            }
+        total = int(row["total"] or 0)
+        submitted = int(row["submitted"] or 0)
+        indexed = int(row["indexed"] or 0)
+        crawled = int(row["crawled"] or 0)
+        return {
+            "urls": total,
+            "submitted": submitted,
+            "inspected": int(row["inspected"] or 0),
+            "indexed": indexed,
+            "not_indexed": int(row["not_indexed"] or 0),
+            "crawled": crawled,
+            "unknown": int(row["unknown"] or 0),
+            "queued": int(row["queued"] or 0),
+            "stale": int(row["stale"] or 0),
+            "pending": max(0, total - indexed - crawled),
+        }
+
+    def insert_indexing_run(
+        self,
+        provider: str,
+        *,
+        started_at: datetime | str | None = None,
+        planned: int = 0,
+        submitted: int = 0,
+        checked: int = 0,
+        skipped: int = 0,
+        quota_before: JsonObject | None = None,
+        quota_after: JsonObject | None = None,
+        status: str = "running",
+        detail: JsonObject | None = None,
+    ) -> int:
+        """Append one run row and return its id; ``finish_indexing_run`` closes it."""
+        _require_non_empty("provider", provider)
+        with self._write_tx():
+            cursor = self.conn.execute(
+                """
+                INSERT INTO indexing_runs (
+                    started_at, provider, planned, submitted, checked, skipped,
+                    quota_before_json, quota_after_json, status, detail_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _timestamp(started_at, name="started_at"),
+                    provider,
+                    int(planned),
+                    int(submitted),
+                    int(checked),
+                    int(skipped),
+                    None if quota_before is None else canonical_json(quota_before),
+                    None if quota_after is None else canonical_json(quota_after),
+                    status,
+                    None if detail is None else canonical_json(detail),
+                ),
+            )
+        run_id = cursor.lastrowid
+        if run_id is None:
+            raise RuntimeError("SQLite did not return an id for the indexing run")
+        return int(run_id)
+
+    def finish_indexing_run(
+        self,
+        run_id: int,
+        *,
+        status: str,
+        finished_at: datetime | str | None = None,
+        planned: int | None = None,
+        submitted: int | None = None,
+        checked: int | None = None,
+        skipped: int | None = None,
+        quota_before: JsonObject | None = None,
+        quota_after: JsonObject | None = None,
+        detail: JsonObject | None = None,
+    ) -> None:
+        """Close a run row; a missing id raises ``KeyError`` instead of hiding the typo."""
+        _require_non_empty("status", status)
+        with self._write_tx():
+            cursor = self.conn.execute(
+                """
+                UPDATE indexing_runs
+                SET finished_at = ?,
+                    status = ?,
+                    planned = COALESCE(?, planned),
+                    submitted = COALESCE(?, submitted),
+                    checked = COALESCE(?, checked),
+                    skipped = COALESCE(?, skipped),
+                    quota_before_json = COALESCE(?, quota_before_json),
+                    quota_after_json = COALESCE(?, quota_after_json),
+                    detail_json = COALESCE(?, detail_json)
+                WHERE id = ?
+                """,
+                (
+                    _timestamp(finished_at, name="finished_at"),
+                    status,
+                    planned,
+                    submitted,
+                    checked,
+                    skipped,
+                    None if quota_before is None else canonical_json(quota_before),
+                    None if quota_after is None else canonical_json(quota_after),
+                    None if detail is None else canonical_json(detail),
+                    int(run_id),
+                ),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(f"indexing run {run_id} not found")
+
+    def list_indexing_runs(
+        self, *, provider: str | None = None, limit: int = 20
+    ) -> list[JsonObject]:
+        """Run history, newest first; ``quota_*`` and ``detail`` are decoded objects."""
+        rows = self.conn.execute(
+            """
+            SELECT id, started_at, finished_at, provider, planned, submitted, checked, skipped,
+                   quota_before_json, quota_after_json, status, detail_json
+            FROM indexing_runs
+            WHERE (:provider IS NULL OR provider = :provider)
+            ORDER BY started_at DESC, id DESC
+            LIMIT :limit
+            """,
+            {"provider": provider, "limit": max(0, int(limit))},
+        ).fetchall()
+        return [_indexing_run_row(row) for row in rows]
+
+    def count_indexing_runs(self, *, provider: str | None = None) -> int:
+        """Count recorded runs without loading them."""
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM indexing_runs
+            WHERE (:provider IS NULL OR provider = :provider)
+            """,
+            {"provider": provider},
+        ).fetchone()
+        return 0 if row is None else int(row["total"])
+
+    def get_quota_usage(self, provider: str, property_id: str, day: date | str, kind: str) -> int:
+        """Local calls already counted for one provider/property/UTC-day/kind."""
+        row = self.conn.execute(
+            """
+            SELECT used FROM quota_usage
+            WHERE provider = ? AND property_id = ? AND day = ? AND kind = ?
+            """,
+            (provider, property_id, _day(day, name="day"), kind),
+        ).fetchone()
+        return 0 if row is None else int(row["used"])
+
+    def increment_quota_usage(
+        self,
+        provider: str,
+        property_id: str,
+        day: date | str,
+        kind: str,
+        amount: int = 1,
+    ) -> int:
+        """Add ``amount`` to the local counter and return the new total."""
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            raise ValueError("amount must be a non-negative integer")
+        day_value = _day(day, name="day")
+        with self._write_tx():
+            self.conn.execute(
+                """
+                INSERT INTO quota_usage (provider, property_id, day, kind, used)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (provider, property_id, day, kind) DO UPDATE SET
+                    used = quota_usage.used + excluded.used
+                """,
+                (provider, property_id, day_value, kind, amount),
+            )
+        row = self.conn.execute(
+            """
+            SELECT used FROM quota_usage
+            WHERE provider = ? AND property_id = ? AND day = ? AND kind = ?
+            """,
+            (provider, property_id, day_value, kind),
+        ).fetchone()
+        return 0 if row is None else int(row["used"])
 
     # -- run journal --------------------------------------------------------------------------
 

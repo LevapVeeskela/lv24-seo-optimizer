@@ -74,6 +74,16 @@ user_agent = "lv24-seo/0.1 (+https://example.com/bot)"
 [storage]
 data_dir = "./data"      # relative to this file; absolute values and LV24_SEO_DATA_DIR are used as-is
 raw_retention_days = 90   # reserved: no raw archives are written yet, pruning is a logged no-op
+
+[indexing]
+enabled = false          # explicit opt-in for provider submissions
+providers = ["bing", "yandex", "gsc", "indexnow"]
+max_submit_per_run = 500
+max_inspect_per_run = 20
+stale_days = 7
+check_interval_days = 7
+gsc_inspect_daily_limit = 2000
+indexnow_daily_limit = 1000
 ```
 
 `providers.bing.indexnow_key` and `providers.bing.indexnow_key_location` are **public**
@@ -86,6 +96,29 @@ store it with `lv24-seo auth set --provider bing` or set `LV24_SEO_BING_API_KEY`
 command. `goals` lists numeric goal ids used by `lv24-seo metrika goals`; an empty list is valid and
 produces a warning instead of a provider call. At most five goal ids are queried per request
 (Metrika's 20-metric cap), and a longer list is reported as truncated.
+
+## `[indexing]`
+
+Quota-aware submission and index-check automation is disabled by default. `enabled = true` is
+required before `lv24-seo indexing run --allow-write` will apply anything; without it the run is a
+read-only plan. `providers` selects the engines that participate; a provider that is not configured
+is reported as `not_configured`, never guessed.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | explicit opt-in for provider submissions |
+| `providers` | `["bing", "yandex", "gsc", "indexnow"]` | engines included in `--provider all` |
+| `max_submit_per_run` | `500` | global submission cap for one run |
+| `max_inspect_per_run` | `20` | GSC URL Inspection / Bing `GetUrlInfo` checks per run |
+| `stale_days` | `7` | `indexing status` marks state older than this as `stale` |
+| `check_interval_days` | `7` | re-check cadence; also sets `next_check_at` |
+| `gsc_inspect_daily_limit` | `2000` | local UTC-day cap (GSC exposes no remaining count) |
+| `indexnow_daily_limit` | `1000` | local UTC-day cap for IndexNow submissions |
+
+The engine still enforces provider caps at run time: Bing's remaining daily/monthly quota,
+Yandex's `quota_remainder`, 500 URLs per Bing batch and one URL per Yandex request. A scheduled
+`lv24-seo indexing run --allow-write` also needs `LV24_SEO_WRITE_SECRET` in the host scheduler's
+environment; see [scheduling](scheduling.md).
 
 > Telemetry is not configurable: the tool sends nothing anywhere. There is no `[privacy]` section and
 > One `seo.toml` describes one project; a multi-site block is not implemented.

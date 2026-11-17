@@ -24,8 +24,49 @@ service is `partial`, not "installed"; when `crontab`/`schtasks` cannot be inspe
 `unknown` and `matches` is `null`. `uninstall --allow-write` removes exactly the generated managed
 cron block, the two user units or the named task, reports `removed_items` / `removed_paths`, and is
 idempotent (`removed: false` on a second run). It never uses wildcards and never touches unrelated cron lines
-or tasks. `schedule print --cron … --target …` remains available for rendering one artefact without
-building the report job spec.
+or tasks. `schedule print --kind weekly|daily|indexing --target …` remains available for rendering
+one artefact without building the report job spec.
+
+## Indexing automation job
+
+Installing the indexing job is the explicit automation opt-in. It renders a job named
+`lv24-seo-indexing` at `0 4 * * *` (daily, in the configured timezone):
+
+```bash
+lv24-seo schedule install --kind indexing --config ./seo.toml              # plan only
+lv24-seo schedule install --kind indexing --config ./seo.toml --allow-write
+lv24-seo schedule status  --kind indexing --config ./seo.toml
+lv24-seo schedule uninstall --kind indexing --config ./seo.toml --allow-write
+lv24-seo schedule print --kind indexing --target systemd --config ./seo.toml
+```
+
+The generated command is `lv24-seo indexing run --allow-write --config <absolute path> --json`.
+`--allow-write` is embedded because installing the job is the opt-in; the engine still re-reads
+provider quotas, verifies the plan hash, skips URLs whose `last_submitted_at` is newer than their
+`lastmod`, and records one `indexing_runs` row per provider. `[indexing] enabled = true` is still
+required, so a job installed before the config is enabled only plans.
+
+**The write secret is not in the command line.** `LV24_SEO_WRITE_SECRET` must be present in the
+environment the scheduler starts the job in. Keep it out of `seo.toml`, shell history and the
+generated crontab/unit/XML:
+
+* **systemd user unit**: use a drop-in that survives reinstall:
+  `%h/.config/systemd/user/lv24-seo-indexing.service.d/secret.conf` containing
+  `[Service]` and `EnvironmentFile=%h/.config/lv24-seo/write.env`, with a `0600` env file
+  containing `LV24_SEO_WRITE_SECRET=<value>`; then run `systemctl --user daemon-reload`.
+  Adding `Environment="LV24_SEO_WRITE_SECRET=<value>"` directly to the generated unit also
+  works, but a hand-edited unit is reported as `outdated` and replaced on reinstall, so the
+  drop-in is safer. The XML/cron/unit files never contain the value.
+* **Windows Task Scheduler**: set the variable once in the user environment
+  (`setx LV24_SEO_WRITE_SECRET "<value>"`) and start a new session so the task inherits it. The XML
+  carries no secret.
+* **cron**: export the variable in the crontab environment (for example
+  `LV24_SEO_WRITE_SECRET=<value>` above the managed block) or source a `0600` env file from a wrapper
+  script; do not put the value on the `lv24-seo` command line.
+
+`indexing status` reports `write_secret_present: false` and `write_secret_missing` when the
+variable is absent, so a missing secret is visible before the next scheduled apply fails with
+`WRITE_DISABLED`.
 
 Timezone honesty: the configured zone is applied where the backend supports it
 and reported as a warning where it does not.
@@ -52,6 +93,7 @@ and the envelope warns you to review `crontab -l`.
 |---|---|---|
 | `report weekly --send` (performance + opportunities) | Monday 06:00 | GSC data has 2–3 days of lag, Monday is stable |
 | `crawl --start URL` | weekly, after the report | keep crawl close to the reporting window |
+| `indexing run --allow-write` | daily 04:00 | check due URLs and submit within fresh quotas; needs `[indexing] enabled=true` and the write secret in the scheduler environment |
 | `auth status` check | weekly | presence + source of every provider token |
 | CrUX field data (in the weekly report) | weekly | 28-day rolling window, daily polling adds nothing |
 

@@ -22,13 +22,19 @@ into the unpinned (`latest`) lookup.
 
 Beta. `@lv24/seo 0.11.0` launches `lv24-seo 0.11.0` (published 2026-11-17; the current engine) and
 ships 12 MCP tools (10 read-class: 7 pure read-only plus the 3 local-state
-writers annotated `readOnlyHint: false`), 3 resources, 3 prompts, 3 skills, the 24-command CLI,
+writers annotated `readOnlyHint: false`), 3 resources, 3 prompts, 3 skills, the 25-command CLI,
 scheduler generators and a product-grade weekly email. Recent additions:
 
 * **Full-platform read depth** — GSC URL Inspection, sitemap list/get and filtered search analytics;
   Yandex events/sitemaps/history/samples and a gated recrawl queue; organic Metrika pages, goals,
   queries, devices, countries, engagement and bytime; CrUX weekly history and PSI Lighthouse audits.
   No new MCP tool; `seo_indexing_triage` accepts an optional `url`.
+
+* **Quota-aware indexing automation** — `indexing status|run|history` keeps a local per-provider
+  URL queue, checks GSC URL Inspection and Bing `GetUrlInfo`, and plans/applies Bing, Yandex and
+  IndexNow submissions within fresh quotas. `--allow-write` requires `[indexing] enabled=true` and
+  `LV24_SEO_WRITE_SECRET`; `schedule install --kind indexing` adds a daily job. GSC's sitemap
+  `indexed` aggregate is deprecated; Bing/Yandex/IndexNow report `no_per_url_index_count`.
 
 * **Bing URL submission, quota, sitemap feeds, crawl issues and read diagnostics** — `bing submit`
   calls `SubmitUrlbatch` in 500-URL batches with a remaining-quota pre-check and `accepted`
