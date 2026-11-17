@@ -55,6 +55,7 @@ from lv24_seo.core.errors import (
     CONFIRM_REQUIRED,
     INTERNAL,
     INVALID_INPUT,
+    QUOTA_EXCEEDED,
     UPSTREAM_UNAVAILABLE,
     WRITE_DISABLED,
     SeoError,
@@ -96,6 +97,11 @@ sitemap_app = typer.Typer(
 indexnow_app = typer.Typer(
     add_completion=False, no_args_is_help=True, help="IndexNow submission (write, gated)."
 )
+bing_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Bing URL submission, quota and sitemap status.",
+)
 report_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Build reports.")
 cwv_app = typer.Typer(
     add_completion=False,
@@ -113,6 +119,7 @@ app.add_typer(gsc_app, name="gsc", help="Google Search Console.")
 app.add_typer(yandex_app, name="yandex", help="Yandex Webmaster.")
 app.add_typer(sitemap_app, name="sitemap", help="Sitemap submission (write, gated).")
 app.add_typer(indexnow_app, name="indexnow", help="IndexNow submission (write, gated).")
+app.add_typer(bing_app, name="bing", help="Bing URL submission, quota and sitemap status.")
 app.add_typer(report_app, name="report", help="Build reports.")
 app.add_typer(cwv_app, name="cwv", help="Collect URL+device Core Web Vitals.")
 app.add_typer(schedule_app, name="schedule", help="Host scheduler jobs.")
@@ -145,6 +152,7 @@ _STRICT_HELP = "Exit 5 when the response is truncated (CI gate); meta.strict is 
 # command cannot fan out into an unbounded crawl of a sitemap tree.
 _INDEXNOW_URL_LIMIT = 10_000
 _INDEXNOW_SITEMAP_DOCS = 6
+_BING_SUBMIT_BATCH = 500
 
 _SCHEDULE_CRONS: dict[str, str] = {
     "weekly": "0 6 * * 1",
@@ -865,7 +873,8 @@ def indexnow_submit_command(
         total = len(discovered)
         targets = discovered[:_INDEXNOW_URL_LIMIT]
         truncated = sitemap_truncated or len(discovered) > len(targets)
-        limitations = _indexnow_limitations(
+        limitations = _sitemap_write_limitations(
+            action="indexnow",
             sitemap_target=sitemap_target,
             sitemap_errors=sitemap_errors,
             sitemap_truncated=sitemap_truncated,
@@ -906,7 +915,8 @@ def indexnow_submit_command(
                 final_urls = refreshed[:_INDEXNOW_URL_LIMIT]
                 context["truncated"] = sitemap_truncated or len(refreshed) > len(final_urls)
                 context["total"] = len(refreshed)
-                context["limitations"] = _indexnow_limitations(
+                context["limitations"] = _sitemap_write_limitations(
+                    action="indexnow",
                     sitemap_target=sitemap_target,
                     sitemap_errors=current.errors,
                     sitemap_truncated=current.truncated,
@@ -931,6 +941,286 @@ def indexnow_submit_command(
         context=context,
     )
     emit(payload, as_json=as_json, lines=_write_lines(payload))
+
+
+# -- Bing reads and URL submission -----------------------------------------------------------
+
+
+@bing_app.command("submit")
+def bing_submit_command(
+    url: Annotated[
+        list[str] | None,
+        typer.Option("--url", help="URL to submit; repeat the flag. Merged with --from-sitemap."),
+    ] = None,
+    from_sitemap: Annotated[
+        bool,
+        typer.Option("--from-sitemap", help="Read the URL list from the project sitemap."),
+    ] = False,
+    sitemap_url: Annotated[
+        str,
+        typer.Option(
+            "--sitemap-url",
+            help=(
+                "Absolute sitemap URL (default: <project.base_url>/sitemap.xml); "
+                "implies --from-sitemap."
+            ),
+        ),
+    ] = "",
+    site: Annotated[
+        str,
+        typer.Option(
+            "--site",
+            help="Bing site URL, for example https://example.com (default: providers.bing.site).",
+        ),
+    ] = "",
+    allow_write: Annotated[
+        bool,
+        typer.Option("--allow-write", help="Opt in to the write; without it the command refuses."),
+    ] = False,
+    confirm: Annotated[
+        str | None,
+        typer.Option("--confirm", help="confirm_token returned by the dry run."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Config file; its data directory holds the write ledger."),
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Submit URLs to Bing Webmaster Tools.
+
+    Pass ``--allow-write`` (and have ``LV24_SEO_WRITE_SECRET`` set) to plan; apply with
+    ``--allow-write --confirm TOKEN``. The plan reports the URL count, the 500-URL batch count
+    and the remaining quota. ``--from-sitemap`` reads a urlset or a bounded sitemapindex and
+    re-fetches it on apply; a changed URL set invalidates the plan token.
+    """
+    context: dict[str, Any] = {}
+
+    def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
+        config = load_config(config_path)
+        bing = config.providers.bing
+        configured_site = bing.site.strip() if bing is not None else ""
+        site_value = _bing_site_value(site, configured_site)
+        host_value = _host_from_site(site_value)
+        explicit_urls = _url_list(url or [], name="--url")
+        explicit_on_host, explicit_off_host = _filter_host_urls(explicit_urls, host_value)
+        use_sitemap = from_sitemap or bool(sitemap_url.strip())
+        if not use_sitemap and not explicit_on_host:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="at least one URL is required",
+                next_action="pass --url https://example.com/page or --from-sitemap",
+            )
+
+        sitemap_target = ""
+        sitemap_urls: list[str] = []
+        sitemap_errors: list[str] = []
+        sitemap_truncated = False
+        off_host = explicit_off_host
+        if use_sitemap:
+            sitemap_target = _indexnow_sitemap_url(sitemap_url, config)
+            inventory = _read_sitemap_inventory(sitemap_target, host_value)
+            sitemap_errors = inventory.errors
+            sitemap_truncated = inventory.truncated
+            sitemap_urls, sitemap_off_host = _filter_host_urls(inventory.urls, host_value)
+            off_host += sitemap_off_host
+            if not sitemap_urls and not explicit_on_host:
+                if sitemap_errors:
+                    raise SeoError(
+                        code=UPSTREAM_UNAVAILABLE,
+                        message=(
+                            "could not read the sitemap: " + ", ".join(sorted(set(sitemap_errors)))
+                        ),
+                        next_action=(
+                            "check the sitemap URL, or pass explicit --url values instead"
+                        ),
+                        retryable=True,
+                    )
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message=f"the sitemap has no URLs for {host_value}",
+                    next_action="check the sitemap or pass explicit --url values",
+                )
+
+        discovered = _dedupe([*explicit_on_host, *sitemap_urls])
+        total = len(discovered)
+        targets = discovered[:_INDEXNOW_URL_LIMIT]
+        truncated = sitemap_truncated or len(discovered) > len(targets)
+        limitations = _sitemap_write_limitations(
+            action="bing",
+            sitemap_target=sitemap_target,
+            sitemap_errors=sitemap_errors,
+            sitemap_truncated=sitemap_truncated,
+            off_host=off_host,
+            host=host_value,
+            dropped=total - len(targets),
+        )
+        service = SeoService(config)
+        quota_envelope = _service_write_result(service.bing_quota(site=site_value))
+        quota_row = _bing_quota_row(quota_envelope)
+        quota_meta = quota_envelope.get("meta")
+        if isinstance(quota_meta, Mapping):
+            limitations.extend(str(item) for item in quota_meta.get("limitations") or [])
+        quota_limits = [
+            int(value)
+            for value in (quota_row.get("daily_remaining"), quota_row.get("monthly_remaining"))
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        if quota_limits:
+            allowed = min(quota_limits)
+            if allowed <= 0:
+                raise SeoError(
+                    code=QUOTA_EXCEEDED,
+                    message="Bing reports no remaining URL submission quota",
+                    next_action=(
+                        "wait for the daily or monthly window to reset, or submit fewer URLs"
+                    ),
+                    retryable=False,
+                )
+            if len(targets) > allowed:
+                targets = targets[:allowed]
+                truncated = True
+                limitations.append(
+                    f"bing_quota_cap: {allowed} of {total} URL(s) fit the remaining quota"
+                )
+        context.update(
+            {
+                "truncated": truncated,
+                "total": total,
+                "limitations": _dedupe(limitations),
+                "quota": quota_row,
+            }
+        )
+        batches = _bing_batch_count(len(targets))
+        plan = WritePlan(
+            action="bing_submit",
+            target=site_value,
+            summary=(
+                f"submit {len(targets)} URL(s) to Bing for {site_value} in {batches} batch(es)"
+            ),
+            payload={
+                "site": site_value,
+                "urls": targets,
+                "batch_size": _BING_SUBMIT_BATCH,
+                "batches": batches,
+                **({"sitemap_url": sitemap_target} if sitemap_target else {}),
+            },
+        )
+
+        def execute(_plan: WritePlan) -> Any:
+            final_urls = targets
+            if sitemap_target:
+                current = _read_sitemap_inventory(sitemap_target, host_value)
+                current_urls, _ = _filter_host_urls(current.urls, host_value)
+                if current_urls != sitemap_urls:
+                    raise SeoError(
+                        code=CONFIRM_REQUIRED,
+                        message="the sitemap changed since the dry run; the plan token is stale",
+                        next_action=(
+                            "rerun the dry run to review the new URL set, then apply the "
+                            "fresh confirm_token"
+                        ),
+                        retryable=False,
+                    )
+                refreshed = _dedupe([*explicit_on_host, *current_urls])
+                final_urls = refreshed[:_INDEXNOW_URL_LIMIT]
+                context["truncated"] = sitemap_truncated or len(refreshed) > len(final_urls)
+                context["total"] = len(refreshed)
+                context["limitations"] = _sitemap_write_limitations(
+                    action="bing",
+                    sitemap_target=sitemap_target,
+                    sitemap_errors=current.errors,
+                    sitemap_truncated=current.truncated,
+                    off_host=off_host,
+                    host=host_value,
+                    dropped=len(refreshed) - len(final_urls),
+                )
+            return service.bing_submit_urls(
+                urls=final_urls,
+                site=site_value,
+                batch_size=_BING_SUBMIT_BATCH,
+            )
+
+        return plan, execute
+
+    payload = _write_command(
+        prepare,
+        allow_write=allow_write,
+        confirm=confirm,
+        config_path=config_path,
+        context=context,
+    )
+    emit(payload, as_json=as_json, lines=_write_lines(payload))
+
+
+@bing_app.command("sitemaps")
+def bing_sitemaps_command(
+    details: Annotated[
+        str,
+        typer.Option(
+            "--details",
+            help="Feed URL whose sitemap-index children should be listed (read-only).",
+        ),
+    ] = "",
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """List Bing sitemap feeds or one sitemap index's children (read-only).
+
+    Bing reports feed status only: per-URL errors and per-URL crawl/index status are not
+    exposed by ``GetFeeds`` or ``GetFeedDetails``.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_sitemaps(details=details),
+        strict=strict,
+    )
+    emit(payload, as_json=as_json, lines=_bing_sitemaps_lines(payload))
+
+
+@bing_app.command("issues")
+def bing_issues_command(
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """List Bing crawl issues with decoded issue-bit labels (read-only)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_issues(),
+        strict=strict,
+    )
+    emit(payload, as_json=as_json, lines=_bing_issues_lines(payload))
+
+
+@bing_app.command("quota")
+def bing_quota_command(
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Show the remaining Bing URL submission quota (read-only)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_quota(),
+        strict=strict,
+    )
+    emit(payload, as_json=as_json, lines=_bing_quota_lines(payload))
 
 
 def _write_command(
@@ -1012,8 +1302,21 @@ def _with_write_context(
     if not context or not payload.get("ok"):
         return payload
     meta = dict(payload.get("meta") or {})
-    for key in ("truncated", "total", "limitations"):
-        if key in context:
+    for key in ("truncated", "total", "limitations", "quota"):
+        if key not in context:
+            continue
+        if key == "limitations":
+            # The service may add its own limitations (for example the undocumented Bing
+            # submit idempotency); keep them together with the plan-time coverage notes.
+            existing = meta.get("limitations")
+            merged = (
+                [str(item) for item in existing]
+                if isinstance(existing, Sequence) and not isinstance(existing, (str, bytes))
+                else []
+            )
+            merged.extend(str(item) for item in context[key])
+            meta[key] = _dedupe(merged)
+        else:
             meta[key] = context[key]
     payload["meta"] = meta
     return payload
@@ -1056,11 +1359,13 @@ def _service_write_result(result: Mapping[str, Any]) -> dict[str, Any]:
         error = result.get("error")
         details = error if isinstance(error, Mapping) else {}
         next_action = details.get("next_action")
+        detail = details.get("detail")
         raise SeoError(
             code=str(details.get("code") or INTERNAL),
             message=str(details.get("message") or "the provider write failed"),
             next_action=next_action if isinstance(next_action, str) else None,
             retryable=bool(details.get("retryable")),
+            detail=dict(detail) if isinstance(detail, Mapping) else {},
         )
     return dict(result)
 
@@ -1254,8 +1559,82 @@ def _filter_host_urls(urls: Sequence[str], host: str) -> tuple[list[str], int]:
     return kept, off_host
 
 
-def _indexnow_limitations(
+def _bing_site_value(explicit: str, configured: str) -> str:
+    """Resolve ``--site`` or ``providers.bing.site`` and require an absolute URL."""
+    value = explicit.strip() or configured.strip()
+    if not value:
+        raise SeoError(
+            code=CONFIG_INVALID,
+            message="Bing Webmaster site is not configured",
+            next_action="set providers.bing.site in seo.toml or pass --site https://example.com",
+        )
+    return _absolute_url(value, name="--site" if explicit.strip() else "providers.bing.site")
+
+
+def _bing_batch_count(count: int) -> int:
+    return (count + _BING_SUBMIT_BATCH - 1) // _BING_SUBMIT_BATCH
+
+
+def _bing_quota_row(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    data = envelope.get("data")
+    if isinstance(data, Mapping):
+        quota = data.get("quota")
+        if isinstance(quota, Mapping):
+            return dict(quota)
+    return {}
+
+
+def _bing_sitemaps_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    lines = [f"site: {data.get('site_url') or '-'}"]
+    lines.extend(
+        _rows_table(
+            data.get("rows"),
+            ("url", "type", "status", "last_crawled", "url_count", "file_size"),
+        )
+    )
+    lines.append(
+        "note: Bing reports feed status only; per-URL errors and crawl/index status are not exposed"
+    )
+    return lines
+
+
+def _bing_issues_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    lines = [f"site: {data.get('site_url') or '-'}"]
+    lines.extend(_rows_table(data.get("rows"), ("url", "http_code", "issues", "in_links")))
+    lines.append("note: Bing reports an issue bitmask, not a type, severity or detection date")
+    return lines
+
+
+def _bing_quota_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    quota = data.get("quota")
+    visible: Mapping[str, Any] = quota if isinstance(quota, Mapping) else {}
+    lines = [
+        f"site: {data.get('site_url') or '-'}",
+        f"daily remaining: {_cell(visible.get('daily_remaining')) or '-'}",
+        f"monthly remaining: {_cell(visible.get('monthly_remaining')) or '-'}",
+        "note: monthly remaining can bind before daily; the monthly reset is undocumented",
+    ]
+    return lines
+
+
+def _sitemap_write_limitations(
     *,
+    action: str,
     sitemap_target: str,
     sitemap_errors: Sequence[str],
     sitemap_truncated: bool,
@@ -1273,10 +1652,10 @@ def _indexnow_limitations(
     if sitemap_target and sitemap_errors:
         notes.append("sitemap: " + ", ".join(sorted(set(sitemap_errors))))
     if off_host:
-        notes.append(f"indexnow: {off_host} sitemap URL(s) outside {host} were skipped")
+        notes.append(f"{action}: {off_host} URL(s) outside {host} were skipped")
     if dropped:
         notes.append(
-            f"indexnow: capped at {_INDEXNOW_URL_LIMIT} URLs; {dropped} were not submitted"
+            f"{action}: capped at {_INDEXNOW_URL_LIMIT} URLs; {dropped} were not submitted"
         )
     return notes
 
@@ -1295,6 +1674,28 @@ def _write_lines(payload: Mapping[str, Any]) -> list[str]:
         f"plan: {visible_plan.get('summary') or '-'}",
         f"status: {data.get('status') or '-'}",
     ]
+    meta = payload.get("meta") or {}
+    if isinstance(meta, Mapping):
+        quota = meta.get("quota")
+        if isinstance(quota, Mapping):
+            lines.append(
+                "quota: "
+                f"daily {_cell(quota.get('daily_remaining')) or '-'} / "
+                f"monthly {_cell(quota.get('monthly_remaining')) or '-'} remaining"
+            )
+    result = data.get("result")
+    if isinstance(result, Mapping):
+        if result.get("accepted") is not None:
+            lines.append(f"accepted: {_cell(result.get('accepted'))}")
+        if result.get("batches") is not None:
+            lines.append(f"batches: {_cell(result.get('batches'))}")
+        quota_after = result.get("quota_after")
+        if isinstance(quota_after, Mapping):
+            lines.append(
+                "quota after: "
+                f"daily {_cell(quota_after.get('daily_remaining')) or '-'} / "
+                f"monthly {_cell(quota_after.get('monthly_remaining')) or '-'} remaining"
+            )
     token = data.get("confirm_token")
     if token:
         lines.extend(

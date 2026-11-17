@@ -20,11 +20,15 @@ into the unpinned (`latest`) lookup.
 
 ## Status
 
-Beta. `@lv24/seo 0.9.0` launches `lv24-seo 0.9.0` (the current published engine) and ships
-12 MCP tools (10 read-class: 7 pure read-only plus the 3 local-state writers annotated
-`readOnlyHint: false`), 3 resources, 3 prompts, 3 skills, the 22-command CLI, scheduler
-generators and a product-grade weekly email. Recent additions:
+Beta. `@lv24/seo 0.10.0` launches `lv24-seo 0.10.0` (release candidate; `0.9.0` is the current
+published engine) and ships 12 MCP tools (10 read-class: 7 pure read-only plus the 3 local-state
+writers annotated `readOnlyHint: false`), 3 resources, 3 prompts, 3 skills, the 23-command CLI,
+scheduler generators and a product-grade weekly email. Recent additions:
 
+* **Bing URL submission, quota, sitemap feeds and crawl issues** — `bing submit` calls
+  `SubmitUrlbatch` in 500-URL batches with a remaining-quota pre-check and `accepted` results;
+  `bing quota`, `bing sitemaps [--details]` and `bing issues` are read-only. Bing reports
+  remaining quota, not totals, and crawl issues are an integer bitmask. No new MCP tool.
 * **Bing sitemap submit and one-click IndexNow** — `sitemap submit --provider bing` calls the
   current JSON `SubmitFeed` endpoint through the two-phase write gate. `indexnow submit
   --from-sitemap` reads a bounded urlset/sitemapindex (root plus five children, 10k URLs), merges

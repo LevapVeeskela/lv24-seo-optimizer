@@ -55,24 +55,26 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.9.0).** Working today: six
+**Beta (v0.10.0 release candidate).** Working today: six
 provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule
 crawler, SQLite history, analysis (deltas, opportunities, indexing triage, multi-engine fusion,
 nginx log analysis with UA-only bot triage, CWV by template), per-provider `stats`, report builders
 + HTML/text/Markdown renderers with an attributed change digest and a Core Web Vitals section, the
 finding/task lifecycle, portable backup bundles with non-destructive and two-phase restore, a
-read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, Bing sitemap
-submission, one-click IndexNow from the project sitemap, the 22-command CLI, the MCP server
+read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, Bing sitemap and URL
+submission, one-click IndexNow from the project sitemap, the 23-command CLI, the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
-enforced with regression tests. `0.9.0` is the current release: Bing sitemap submit and
-one-click IndexNow, published on PyPI, npm and the MCP Registry (2026-11-17); desktop `0.7.0`
-bundles engine `0.9.0`. See [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md),
+enforced with regression tests. `0.10.0` is the current release candidate: Bing URL submission,
+remaining-quota, sitemap-feed and crawl-issue views; `0.9.0` is still the latest published build
+(PyPI, npm and the MCP Registry, 2026-11-17), and desktop `0.7.0` bundles engine `0.9.0`. See
+[`docs/releases/0.10.0.md`](docs/releases/0.10.0.md),
+[`docs/releases/0.9.0.md`](docs/releases/0.9.0.md),
 [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md) and
 [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
 
 Still honest gaps before `v1.0`: GSC sitemap submit, Bing sitemap delete and Yandex recrawl return
-an explicit `WRITE_DISABLED` (Bing sitemap submit and IndexNow really submit), and
+an explicit `WRITE_DISABLED` (Bing sitemap/URL submit and IndexNow really submit), and
 `raw_retention_days` is reserved (no raw archives are written yet). GSC supports both a plain OAuth
 access token and a service-account JSON key. See
 [`docs/plans/2026-11-10-implementation-plan.md`](docs/plans/2026-11-10-implementation-plan.md) for
@@ -189,7 +191,7 @@ audit → plan → fix → verify.
 |---|---|
 | **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions, and a Core Web Vitals section fed by `cwv collect` (CrUX URL+device p75, PSI lab) |
 | **MCP tools** | 12 tools across GSC, Yandex, crawl, reports, logs and gated writes — see the table below |
-| **CLI** | 22 top-level commands (15 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`; read commands accept `--strict` to exit `5` on truncated data |
+| **CLI** | 23 top-level commands (16 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `bing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`; read commands accept `--strict` to exit `5` on truncated data |
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
 | **Automation** | cron / systemd timer / Windows Task Scheduler generators with plan-first `schedule install` (`--allow-write` to apply), read-only `schedule status`, exact and idempotent `schedule uninstall`, plus a GitHub Actions recipe |
 
@@ -229,7 +231,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 | Google Search Console | yes (OAuth access token or service-account JSON key) | queries, pages, countries, devices; URL Inspection adapter | sitemap submit disabled |
 | Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics | recrawl disabled |
 | Yandex Metrika | yes | sessions and users; filtered reports through adapter; separate `metrika` auth provider (`yandex_metrika_token`) | — |
-| Bing Webmaster + IndexNow | yes | queries, crawl issues, sitemap submit, one-click IndexNow from the sitemap | sitemap submit + IndexNow submit |
+| Bing Webmaster + IndexNow | yes | queries, crawl issues (decoded bitmask), remaining URL quota, sitemap feeds, sitemap submit, URL submit, one-click IndexNow from the sitemap | sitemap submit + URL submit + IndexNow submit |
 | Chrome UX Report | yes (API key) | origin-level field CWV | — |
 | PageSpeed Insights | yes | lab audits per URL | — |
 | Your site | — | crawl, robots, sitemap, JSON-LD, hreflang, links | — |
@@ -245,6 +247,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
+* [Release notes 0.10.0](docs/releases/0.10.0.md) — Bing URL submission, remaining quota, sitemap feeds, crawl-issue bitmask
 * [Release notes 0.9.0](docs/releases/0.9.0.md) — Bing sitemap submit, one-click IndexNow
 * [Release notes 0.8.0](docs/releases/0.8.0.md) — CWV writer, Yandex indicators, safe restore, schedule lifecycle
 * [Release notes 0.7.0](docs/releases/0.7.0.md) — coverage release: portfolio, restore, indexing events, CWV

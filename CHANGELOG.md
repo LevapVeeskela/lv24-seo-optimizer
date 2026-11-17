@@ -3,6 +3,40 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.10.0] - 2026-11-17
+
+Release notes: [`docs/releases/0.10.0.md`](docs/releases/0.10.0.md). Status: **release
+candidate**; `0.9.0` is still the latest published build. Minor release: Bing URL submission is a
+real gated write, and Bing quota, sitemap-feed and crawl-issue views are read-only commands. The
+CLI now has **23 top-level commands** (16 groups + 7 commands), the MCP surface stays at
+**12 tools**, and the SQLite schema stays at version 4. Bing URL submission is CLI/desktop-only.
+
+### Added
+
+- `bing submit [--url ABS ...] [--from-sitemap] [--sitemap-url ABS] [--site URL] [--allow-write]
+  [--confirm TOKEN] [--config ABS] [--json]`: plans with the URL count, 500-URL batch count and
+  current remaining quota; applies through `SubmitUrlbatch` in 500-URL batches with client-side
+  deduplication and daily/monthly quota pre-checks. A success is `{"d": null}` with no per-URL
+  status, so the result says `accepted`, never "indexed". A changed sitemap invalidates the
+  confirm token. Missing site is `CONFIG_INVALID`; missing key is `AUTH_REQUIRED`.
+- `bing quota`, `bing sitemaps [--details FEED_URL]` and `bing issues`: read-only Bing views.
+  Quota exposes `daily_remaining`/`monthly_remaining` (verified: Bing reports remaining, not
+  totals) and states that the monthly window can bind first and its reset is undocumented.
+  Sitemaps map `Url`, `Type`, `Status`, `Submitted`, `LastCrawled`, `UrlCount`, `FileSize` and
+  `Compressed`, and state that per-URL errors/crawl status are not exposed. Crawl issues decode
+  the `Issues` bitmask (`301`, `302`, `4xx`, `5xx`, `robots`, `malware`, `important_robots`,
+  `dns`, `timeout`) and keep `issues_bits` plus unknown fields in `raw`.
+- Bing `ErrorCode` mapping for HTTP 400 bodies: `3 -> AUTH_INVALID`, `14 -> PROPERTY_NOT_FOUND`,
+  `7 -> INVALID_INPUT`, `4/5 -> QUOTA_EXCEEDED`; 401/403/404/429/5xx remain fallbacks. The
+  provider message and API key never reach an error.
+- The shared HTTP client accepts `raise_for_status=False` for adapters that need to parse a
+  structured provider error body; the default is unchanged.
+
+### Changed
+
+- The CLI now has 23 top-level commands: 16 groups (adds `bing`) and 7 commands.
+- `seo_sitemap_submit` and the MCP surface are unchanged; Bing URL submission is CLI/desktop-only.
+
 ## [0.9.0] - 2026-11-17
 
 Release notes: [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md). Status: **released**

@@ -557,16 +557,16 @@ def test_cwv_collect_emits_the_standard_envelope(
     assert payload["data"]["written"] == {"crux": 0, "psi": 0}
 
 
-def test_root_command_tree_exposes_twenty_two_top_level_entries() -> None:
+def test_root_command_tree_exposes_twenty_three_top_level_entries() -> None:
     groups = {info.name for info in cli_main.app.registered_groups}
     commands = {getattr(info.callback, "__name__", "") for info in cli_main.app.registered_commands}
 
-    assert {"logs", "tasks", "backup", "portfolio", "cwv"} <= groups
-    assert len(groups) == 15
+    assert {"logs", "tasks", "backup", "portfolio", "cwv", "bing"} <= groups
+    assert len(groups) == 16
     assert commands == {"version", "doctor", "init", "properties", "stats", "crawl", "install"}
-    assert len(groups) + len(commands) == 22
+    assert len(groups) + len(commands) == 23
     help_text = _stdout(_invoke("--help"))
-    for name in ("logs", "tasks", "backup", "portfolio", "cwv"):
+    for name in ("logs", "tasks", "backup", "portfolio", "cwv", "bing"):
         assert name in help_text
 
 

@@ -157,8 +157,9 @@ id or Bing site URL; Bing defaults to `providers.bing.site`), `sitemap_url` (abs
 defaults to `<project.base_url>/sitemap.xml`), `action` (`submit|delete`), `allow_write`,
 `plan_hash`, `confirm_token`. Bing submit calls the same `SeoService.submit_sitemap` path as the
 CLI and returns `{provider, status, site_url, sitemap_url}`; a missing Bing key is
-`AUTH_REQUIRED` during the dry run. GSC submit and Bing delete stay `WRITE_DISABLED`. IndexNow is
-CLI/desktop-only and has no MCP tool.
+`AUTH_REQUIRED` during the dry run. GSC submit and Bing delete stay `WRITE_DISABLED`. IndexNow
+and Bing URL submission are CLI/desktop-only and have no MCP tool: the 12-tool surface is
+unchanged.
 
 ## Annotations
 
@@ -194,9 +195,11 @@ Exactly three resources — there is no `seo://property/{id}/baseline`.
 | `content_opportunities` | opportunities → prioritised backlog |
 
 Total: 12 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
-`lv24_seo/mcp/registry.py` - never edit it by hand. The 0.9.0 release adds no MCP tool: it adds
-optional `provider`/`property`/`sitemap_url` inputs to `seo_sitemap_submit` and wires Bing submit
-through the shared service path. IndexNow remains CLI/desktop-only.
+`lv24_seo/mcp/registry.py` - never edit it by hand. The 0.10.0 release adds no MCP tool: the
+surface stays at 12. Bing URL submission, quota, sitemap-feed and crawl-issue views are
+CLI/desktop-only; `seo_sitemap_submit` still submits a sitemap, not a URL batch. The 0.9.0 release
+added optional `provider`/`property`/`sitemap_url` inputs to `seo_sitemap_submit` and wired Bing
+submit through the shared service path.
 
 ## Error contract
 

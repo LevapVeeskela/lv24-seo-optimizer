@@ -118,12 +118,48 @@ notification settings, Yandex Business card/reviews.
 
 | | |
 |---|---|
-| Bing API | `https://ssl.bing.com/webmaster/api.svc/json/` — `GetQueryStats`, `GetRankAndTrafficStats`, `GetCrawlIssues`, `SubmitUrlbatch`, `SubmitFeed` |
+| Bing API | `https://ssl.bing.com/webmaster/api.svc/json/` — `GetQueryStats`, `GetRankAndTrafficStats`, `GetCrawlIssues`, `GetUrlSubmissionQuota`, `GetFeeds`, `GetFeedDetails`, `SubmitUrlbatch`, `SubmitFeed` |
 | Auth | one API key per user (Bing Webmaster → Settings → API access) |
-| Free quota | free; ~10k URL submits/day/domain, 500 per batch |
-| Freshness | `data_age_days` is the age of the newest dated row in that feed: `Date` for `GetQueryStats`, `DateDetected` for `GetCrawlIssues`. An empty or undated feed reports `0`, which is not proof of freshness. |
+| Free quota | free; remaining daily/monthly submission quota is reported by `GetUrlSubmissionQuota`, 500 URLs per `SubmitUrlbatch` |
+| Freshness | `data_age_days` is the age of the newest dated row in that feed: `Date` for `GetQueryStats`, `LastCrawled` (falling back to `Submitted`) for `GetFeeds`. `GetCrawlIssues` has no date and reports `0`, which is not proof of freshness. |
 | IndexNow | `https://api.indexnow.org/indexnow` (also `yandex.com/indexnow`), key file `https://host/<key>.txt` (8–128 hex) |
-| Limits | 10k URLs per POST; engines apply their own daily caps; **Google does not participate** |
+| Limits | 10k URLs per IndexNow POST; engines apply their own daily caps; **Google does not participate** |
+
+**URL submission.** `SubmitUrlbatch` accepts at most **500 URLs** per call:
+`POST .../SubmitUrlbatch?apikey=KEY` with `{"siteUrl": "...", "urlList": [...]}` and returns
+`200 {"d": null}` with **no per-URL status**. The engine reports `accepted`, never "indexed",
+deduplicates the list client-side and pre-checks the remaining quota. Bing documents no
+idempotency: a duplicate URL may consume quota even though the call succeeds, so the result
+carries `submit_idempotency_undocumented`; the write-gate ledger only prevents replaying the same
+confirm token. `bing submit` splits a larger list into 500-URL batches, never truncates it, and
+reports `accepted`, `batches`, `batch_size`, `duplicates_removed` and `quota_after`.
+
+**Quota.** `GET .../GetUrlSubmissionQuota?siteUrl=...` returns
+`{"d": {"__type", "DailyQuota", "MonthlyQuota"}}`. Verified against lv24.by: both values are
+**remaining** submissions, not totals, so the row exposes `daily_remaining` /
+`monthly_remaining` and keeps the provider object in `raw`; no used/total value is computed. The
+monthly window can bind before the daily one (lv24.by: 1400 monthly vs 100 daily) and its reset
+schedule is undocumented (`quota_monthly_can_bind_first`, `quota_monthly_reset_undocumented`).
+
+**Sitemap feeds.** `GetFeeds` returns `{Compressed, FileSize, LastCrawled, Status, Submitted,
+Type, Url, UrlCount}` with no paging. `Status` is a free provider string (`Success` observed),
+not a crawl/index status; Bing exposes no per-URL errors, so `bing sitemaps` reports
+`no_per_url_sitemap_errors` and `sitemap_status_is_not_crawl_status`. `GetFeedDetails` returns
+the same row shape for the children of a sitemap index and is exposed as
+`bing sitemaps --details FEED_URL`. `GetFeedDetails` is documented but was not verified against
+a live response in this wave; `GetFeeds`, quota and crawl issues were.
+
+**Crawl issues.** `GetCrawlIssues` returns `{Url, HttpCode, Issues, InLinks}`; `Issues` is an
+integer bitmask, not a type/severity/date. The engine decodes `1=301`, `2=302`, `4=4xx`,
+`8=5xx`, `16=robots`, `32=malware`, `64=important_robots`, `128=dns`, `256=timeout` into
+`issues` labels, keeps `issues_bits`, and reports unknown bits as `unknown_crawl_issue_bits`
+instead of guessing. The feed has no date, so `data_age_days` is `0`.
+
+**Errors.** Bing sends auth failures as **HTTP 400** with `{"ErrorCode": N, "Message": ...}`.
+The adapter parses `ErrorCode` first: `3 -> AUTH_INVALID`, `14 -> PROPERTY_NOT_FOUND`,
+`7 -> INVALID_INPUT`, `4/5 -> QUOTA_EXCEEDED`; `401/403/404/429/5xx` remain fallbacks. The
+provider `Message` is never echoed and errors keep only `host + path`, status and numeric code,
+so the API key cannot leak.
 
 **Sitemap submit.** `SubmitFeed` is the current JSON endpoint:
 `POST .../SubmitFeed?apikey=KEY` with `{"siteUrl": "...", "feedUrl": "https://host/sitemap.xml"}`

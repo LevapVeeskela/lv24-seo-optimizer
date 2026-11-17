@@ -51,7 +51,7 @@ __all__ = [
 
 WRITE_SECRET_ENV = "LV24_SEO_WRITE_SECRET"  # noqa: S105 - an env var name, not a secret
 DEFAULT_TOKEN_TTL_SECONDS = 300
-GATE_ACTIONS = frozenset({"sitemap_submit", "recrawl", "indexnow"})
+GATE_ACTIONS = frozenset({"sitemap_submit", "recrawl", "indexnow", "bing_submit"})
 
 _TOKEN_DIGEST_LENGTH = 64
 _HEX_DIGITS = frozenset("0123456789abcdef")
@@ -66,7 +66,7 @@ class WritePlan:
     ``payload`` is the exact JSON-safe document an adapter needs to execute the call.
     """
 
-    action: str  # "sitemap_submit" | "recrawl" | "indexnow"
+    action: str  # "sitemap_submit" | "recrawl" | "indexnow" | "bing_submit"
     target: str  # property id / host
     summary: str
     payload: dict[str, Any]

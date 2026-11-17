@@ -6,15 +6,21 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.9.0` (current published build on PyPI, npm and the MCP Registry,
-  2026-11-17): 6 provider adapters (GSC, Yandex Webmaster, Yandex
+- Engine `lv24-seo 0.10.0` release candidate; `0.9.0` is the latest published build on PyPI, npm
+  and the MCP Registry (2026-11-17): 6 provider adapters (GSC, Yandex Webmaster, Yandex
   Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl. Yandex Metrika is a separate `metrika`
   auth provider (`yandex_metrika_token`), not the Webmaster token.
-- CLI: 22 top-level commands (15 groups + 7 commands), every command with `--json`.
+- CLI: 23 top-level commands (16 groups + 7 commands), every command with `--json`.
 - Bing writes: `sitemap submit --provider bing` calls the JSON `SubmitFeed` endpoint through the
-  two-phase write gate; `indexnow submit --from-sitemap` reads a bounded sitemap (root + five
-  children, 10k URLs) and resolves host/key from `[providers.bing]`. GSC sitemap submit and Bing
-  sitemap delete stay `WRITE_DISABLED`.
+  two-phase write gate; `bing submit` calls `SubmitUrlbatch` in 500-URL batches with a quota
+  pre-check, deduplication and `accepted` (not indexed) results; `indexnow submit --from-sitemap`
+  reads a bounded sitemap (root + five children, 10k URLs) and resolves host/key from
+  `[providers.bing]`. GSC sitemap submit and Bing sitemap delete stay `WRITE_DISABLED`.
+- Bing reads: `bing quota` reports remaining daily/monthly submissions (Bing's `DailyQuota` /
+  `MonthlyQuota` are remaining, not totals; the monthly window can bind first and its reset is
+  undocumented); `bing sitemaps [--details FEED_URL]` lists feed fields and states that per-URL
+  errors/crawl status are not exposed; `bing issues` decodes the `Issues` bitmask
+  (`1=301, 2=302, 4=4xx, 8=5xx, 16=robots, 32=malware, 64=important_robots, 128=dns, 256=timeout`).
 - Core Web Vitals writer: `lv24-seo cwv collect --url URL [--url URL ...] --device all --source crux`
   persists CrUX URL+device p75 rows (`metric_daily`: `source=crux`, `scope=<device>`, `key=<url>`)
   for the weekly `cwv` section; PSI lab rows are returned but never persisted.
@@ -24,6 +30,11 @@
 - MCP: 12 tools (10 read-class, including 3 local-state writers with `readOnlyHint: false`; 2 gated
   provider writes — `seo_sitemap_submit` is wired for Bing submit, `seo_recrawl_request` and the
   GSC/delete sitemap paths return `WRITE_DISABLED`), 3 resources, 3 prompts.
+- New in 0.10.0: Bing URL submit (`bing submit`) with quota pre-check, 500-URL batching and
+  accepted-not-indexed results; read-only `bing quota`, `bing sitemaps [--details]` and
+  `bing issues`; HTTP 400 `ErrorCode` mapping (3 auth, 14 property, 7 bad request, 4/5 quota).
+  No new MCP tool; the surface stays at 12 and the schema stays v4. Bing URL submission is
+  CLI/desktop-only.
 - New in 0.9.0: Bing sitemap submit (JSON `SubmitFeed`), one-click IndexNow from the project
   sitemap with config host/key/keyLocation, optional `provider`/`property`/`sitemap_url` on
   `seo_sitemap_submit`, and public `providers.bing.indexnow_key` /
@@ -58,6 +69,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
+- [Release notes 0.10.0](docs/releases/0.10.0.md): Bing URL submission, remaining quota, sitemap feeds and crawl-issue bitmask
 - [Release notes 0.9.0](docs/releases/0.9.0.md): Bing sitemap submit and one-click IndexNow
 - [Release notes 0.8.0](docs/releases/0.8.0.md): CWV writer, Yandex indicators, safe restore, schedule lifecycle
 - [Release notes 0.7.0](docs/releases/0.7.0.md): coverage release (portfolio, restore, indexing events, CWV)
@@ -72,6 +84,10 @@
 ```bash
 lv24-seo sitemap submit --provider bing --allow-write --config ./seo.toml --json  # plan; site/sitemap from config
 lv24-seo sitemap submit --provider bing --allow-write --confirm TOKEN             # JSON SubmitFeed
+lv24-seo bing submit --from-sitemap --allow-write --config ./seo.toml --json      # plan; quota + 500-URL batches
+lv24-seo bing quota --config ./seo.toml --json                                    # remaining daily/monthly quota
+lv24-seo bing sitemaps --config ./seo.toml --json                                 # feed status; no per-URL errors
+lv24-seo bing issues --config ./seo.toml --json                                   # decoded Issues bitmask
 lv24-seo indexnow submit --from-sitemap --allow-write --config ./seo.toml --json  # plan; host/key from [providers.bing]
 lv24-seo indexnow submit --from-sitemap --allow-write --confirm TOKEN             # re-fetches; changed sitemap aborts
 lv24-seo schedule install --kind weekly --config ./seo.toml              # plan only: dry_run=true, installed=false

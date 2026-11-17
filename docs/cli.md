@@ -1,8 +1,8 @@
 # CLI reference
 
-The CLI has 22 top-level commands: 15 groups (`auth`, `config`, `gsc`, `yandex`, `sitemap`,
-`indexnow`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`) and
-7 commands (`version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`).
+The CLI has 23 top-level commands: 16 groups (`auth`, `config`, `gsc`, `yandex`, `sitemap`,
+`indexnow`, `bing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`,
+`mcp`) and 7 commands (`version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`).
 
 Every read/report command supports `--json` (machine output) and a stable exit code; commands that
 use the workspace also accept `--config PATH`.
@@ -18,7 +18,8 @@ Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` 
 stdout; no ANSI colours.
 
 `--strict` is available on the read commands (`stats`, `gsc query`, `yandex queries`,
-`yandex indexing`, `crawl`, `report weekly`, `report diff`). It always sets `meta.strict: true`;
+`yandex indexing`, `bing quota`, `bing sitemaps`, `bing issues`, `crawl`, `report weekly`,
+`report diff`). It always sets `meta.strict: true`;
 when the payload is also truncated, the command exits `5` and `meta.limitations` explains what is
 missing (a generic `truncated: …` note is added when the provider did not name a limitation).
 Complete data still exits `0`, and without `--strict` truncation stays `meta.truncated` with exit
@@ -467,11 +468,15 @@ prevents accidental or stale applies; it is not access control, because anyone w
 can restore. Prefer `--to` when you want to inspect an archive or compare it with the current
 workspace before replacing anything.
 
-## Sitemap submission and IndexNow
+## Sitemap submission, Bing URL submission and IndexNow
 
 ```bash
 lv24-seo sitemap submit --provider gsc --property sc-domain:example.com --url https://example.com/sitemap.xml [--allow-write] [--confirm TOKEN] [--json]
 lv24-seo sitemap submit --provider bing [--property https://example.com] [--url https://example.com/sitemap.xml] [--allow-write] [--confirm TOKEN] [--json]
+lv24-seo bing submit [--url https://example.com/a ...] [--from-sitemap] [--sitemap-url https://example.com/sitemap.xml] [--site https://example.com] [--allow-write] [--confirm TOKEN] [--json]
+lv24-seo bing quota [--config ABS] [--json]
+lv24-seo bing sitemaps [--details https://example.com/sitemap.xml] [--config ABS] [--json]
+lv24-seo bing issues [--config ABS] [--json]
 lv24-seo indexnow submit --host example.com --key KEY --url https://example.com/a [--allow-write] [--confirm TOKEN] [--json]
 lv24-seo indexnow submit --from-sitemap [--sitemap-url https://example.com/sitemap.xml] [--url ...] [--allow-write] [--confirm TOKEN] [--json]
 ```
@@ -484,6 +489,30 @@ from `providers.bing.site` or `--property`, and the sitemap from `--url` or
 endpoint (SOAP/POX are retired) and returns `{provider, status, site_url, sitemap_url}`.
 GSC keeps `--property`/`--url` required and still returns `WRITE_DISABLED` on apply; Bing
 `action=delete` is also `WRITE_DISABLED`.
+
+`bing submit` is the URL-level write. The site comes from `--site` or `providers.bing.site`; a
+missing site is `CONFIG_INVALID` and a missing `bing_api_key` is `AUTH_REQUIRED`. `--url` may be
+repeated and is merged with `--from-sitemap`; a `<urlset>` is read directly and a
+`<sitemapindex>` is bounded to the root plus five children and 10,000 URLs. URLs are
+deduplicated, off-site URLs are skipped, and `meta.truncated`/`meta.total`/`meta.limitations`
+report any cap. The plan reports the URL count, the 500-URL batch count and the current
+remaining quota. Apply re-fetches the sitemap and a changed URL set invalidates the token with
+`CONFIRM_REQUIRED`. `SubmitUrlbatch` returns no per-URL status, so the result reports
+`status: accepted`, `accepted`, `batches`, `batch_size`, `duplicates_removed` and
+`quota_after` — never "indexed". Bing documents no idempotency and a duplicate URL may consume
+quota (`submit_idempotency_undocumented`); the SQLite write ledger still blocks a replayed
+confirm token.
+
+`bing quota` reports `daily_remaining` and `monthly_remaining`. Bing's `DailyQuota` /
+`MonthlyQuota` fields are remaining values, not totals (verified against lv24.by), so no
+used/total value is computed. The monthly window can bind before the daily one and its reset is
+undocumented. `bing sitemaps` lists `GetFeeds` rows (`url`, `type`, `status`, `submitted`,
+`last_crawled`, `url_count`, `file_size`, `compressed`); `Status` is a free provider string, not
+a crawl/index status, and per-URL errors are not exposed. `--details FEED_URL` reads
+`GetFeedDetails` for sitemap-index children. `bing issues` decodes the `Issues` bitmask:
+`1=301`, `2=302`, `4=4xx`, `8=5xx`, `16=robots`, `32=malware`, `64=important_robots`,
+`128=dns`, `256=timeout`; rows expose `issues` labels, `issues_bits`, `url`, `http_code` and
+`in_links`. The feed has no date, so `data_age_days` is `0`.
 
 `indexnow submit` resolves defaults from config: `providers.bing.site` supplies the host,
 `providers.bing.indexnow_key` the key, and `providers.bing.indexnow_key_location` the public
@@ -550,9 +579,9 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
   `backup restore --config` uses the same two-phase shape for a local destructive write: the
   plan's token is bound to the archive and target state, expires in 5 minutes and is not
   replayable. `backup restore --to` is not gated because it only creates a new directory that
-  must not already exist; it never modifies the current workspace. Bing sitemap submit and
-  IndexNow actually submit; GSC sitemap submit, Bing sitemap delete and Yandex recrawl refuse
-  with `WRITE_DISABLED` when the provider path is not wired, instead of pretending. With an
+  must not already exist; it never modifies the current workspace. Bing sitemap submit, Bing URL
+  submit and IndexNow actually submit; GSC sitemap submit, Bing sitemap delete and Yandex recrawl
+  refuse with `WRITE_DISABLED` when the provider path is not wired, instead of pretending. With an
   initialised workspace the
   apply uses the SQLite idempotency ledger, so replaying the same token returns
   `status: skipped` / `reason: duplicate` and the provider is called once. The ledger lives in the
