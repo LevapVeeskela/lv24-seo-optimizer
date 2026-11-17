@@ -52,13 +52,16 @@ SECRET_NAMES: tuple[str, ...] = (
     "telegram_bot_token",
 )
 
-#: Companion secrets of the OAuth connectors: refresh tokens, expiry stamps and client
-#: secrets. They are stored like any other secret but kept out of :data:`SECRET_NAMES`,
-#: whose tuple is a stable public contract for existing consumers.
+#: Companion secrets of the OAuth connectors: access/refresh tokens, expiry stamps, client
+#: secrets and the short-lived PKCE verifier. They are stored like any other secret but kept
+#: out of :data:`SECRET_NAMES`, whose tuple is a stable public contract for existing
+#: consumers.
 OAUTH_SECRET_NAMES: tuple[str, ...] = (
+    "gsc_access_token",
     "gsc_refresh_token",
     "gsc_token_expires_at",
     "gsc_oauth_client_secret",
+    "gsc_oauth_code_verifier",
     "yandex_refresh_token",
     "yandex_token_expires_at",
     "yandex_metrika_refresh_token",

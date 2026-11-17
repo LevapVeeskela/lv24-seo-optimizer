@@ -60,7 +60,7 @@ from lv24_seo.core.errors import (
     SeoError,
 )
 from lv24_seo.core.logging import configure_logging_from_env
-from lv24_seo.core.secrets import SecretStore
+from lv24_seo.core.secrets import OAUTH_SECRET_NAMES, SECRET_NAMES, SecretStore
 from lv24_seo.core.write_gate import WRITE_SECRET_ENV, WriteGate, WritePlan
 from lv24_seo.crawl.fetcher import Fetcher
 from lv24_seo.crawl.sitemap import MAX_BYTES as SITEMAP_MAX_BYTES
@@ -348,12 +348,19 @@ def doctor(
         resolved = resolve_config_path(config_path)
         config = load_config(config_path)
         data_dir = data_dir_path(config)
-        statuses = SecretStore(data_dir=config.storage.data_dir).status()
+        statuses = SecretStore(data_dir=config.storage.data_dir).status(
+            [*SECRET_NAMES, *OAUTH_SECRET_NAMES]
+        )
         present = [status.name for status in statuses if status.present]
         scope_note = _data_dir_scope_note(data_dir, resolved)
         gsc = config.providers.gsc
         gsc_file = gsc.service_account_file.strip() if gsc is not None else ""
         gsc_problem = service_account_file_problem(gsc_file)
+        oauth_grant = (
+            bool(config.auth.gsc.client_id.strip())
+            and "gsc_refresh_token" in present
+            and "gsc_oauth_client_secret" in present
+        )
         if gsc_file:
             gsc_ok = gsc_problem is None
             gsc_detail = (
@@ -361,6 +368,9 @@ def doctor(
                 if gsc_ok
                 else str(gsc_problem)
             )
+        elif oauth_grant:
+            gsc_ok = True
+            gsc_detail = "OAuth refresh token present (gsc_refresh_token)"
         else:
             if "gsc_token" in present:
                 gsc_ok = True

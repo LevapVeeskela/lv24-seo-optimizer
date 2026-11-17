@@ -347,7 +347,20 @@ def _login_lines(payload: dict[str, Any]) -> list[str]:
     data = payload.get("data") or {}
     if not payload.get("ok"):
         return []
-    lines = [f"manual login for {data.get('provider')} ({data.get('flow')})"]
+    flow = str(data.get("flow", ""))
+    if flow == "oauth":
+        lines = [f"OAuth login for {data.get('provider')}"]
+        target = data.get("target")
+        if target:
+            lines.append(f"target: {target}")
+        scopes = data.get("scopes")
+        if isinstance(scopes, list) and scopes:
+            lines.append(f"scopes: {', '.join(str(scope) for scope in scopes)}")
+        expires = data.get("expires_at")
+        if expires:
+            lines.append(f"expires: {expires}")
+        return lines
+    lines = [f"manual login for {data.get('provider')} ({flow})"]
     target = data.get("target")
     if target:
         lines.append(f"target: {target}")

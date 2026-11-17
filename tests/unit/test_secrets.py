@@ -12,7 +12,7 @@ import pytest
 
 from lv24_seo.core import secrets as secrets_module
 from lv24_seo.core.errors import CONFIG_INVALID, INVALID_INPUT, WRITE_DISABLED, SeoError
-from lv24_seo.core.secrets import SECRET_NAMES, SecretStatus, SecretStore
+from lv24_seo.core.secrets import OAUTH_SECRET_NAMES, SECRET_NAMES, SecretStatus, SecretStore
 
 SERVICE = "lv24-seo"
 
@@ -59,6 +59,18 @@ def test_secret_names_contract() -> None:
         "psi_api_key",
         "smtp_password",
         "telegram_bot_token",
+    )
+    assert OAUTH_SECRET_NAMES == (
+        "gsc_access_token",
+        "gsc_refresh_token",
+        "gsc_token_expires_at",
+        "gsc_oauth_client_secret",
+        "gsc_oauth_code_verifier",
+        "yandex_refresh_token",
+        "yandex_token_expires_at",
+        "yandex_metrika_refresh_token",
+        "yandex_metrika_token_expires_at",
+        "yandex_oauth_client_secret",
     )
 
 
