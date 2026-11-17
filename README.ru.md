@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.10.0).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.11.0).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -131,8 +131,10 @@ URL submit и Yandex recrawl подключены,
 
 ## Статус
 
-Бета (v0.10.0). `0.10.0` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-17): Bing URL submit,
-остаток квоты, статусы sitemap-фидов и crawl issues с битмаской. Десктоп `0.8.0` — текущий
+Бета (v0.11.0). `0.11.0` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-17): полная глубина
+чтения по платформам — GSC URL Inspection/sitemap/фильтры, Yandex events/sitemaps/история/очередь
+recrawl, Bing page/traffic/crawl/URL/joins, органическая Метрика (страницы, цели, устройства,
+страны, bytime), CrUX-история и PSI-аудиты. Десктоп `0.8.0` — текущий
 релиз десктопа, он несёт движок `0.10.0` и требует `>= 0.10.0`. Открытые честные ограничения: GSC
 sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing sitemap/URL submit, IndexNow
 и Yandex recrawl реально отправляют),
@@ -142,7 +144,8 @@ sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing si
 access token, и JSON-ключ service account (файл читается один раз за процесс, access token
 обновляется автоматически). `0.9.0` — предыдущий релиз: Bing sitemap submit и one-click
 IndexNow; `0.8.0` — до него: writer CWV по URL и устройству, безопасный
-`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.10.0 — в
+`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.11.0 — в
+[`docs/releases/0.11.0.md`](docs/releases/0.11.0.md); новое в 0.10.0 — в
 [`docs/releases/0.10.0.md`](docs/releases/0.10.0.md); новое в 0.9.0 — в
 [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md); новое в 0.8.0 — в
 [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md); новое в 0.7.0 — в

@@ -7,10 +7,10 @@ The CLI has 24 top-level commands: 17 groups (`auth`, `config`, `gsc`, `yandex`,
 
 Every read/report command supports `--json` (machine output) and a stable exit code; commands that
 use the workspace also accept `--config PATH`.
-Output envelope (`meta.version` is the package version, e.g. `0.10.0`):
+Output envelope (`meta.version` is the package version, e.g. `0.11.0`):
 
 ```json
-{ "ok": true, "data": {}, "meta": { "version": "0.10.0", "duration_ms": 812 }, "warnings": [] }
+{ "ok": true, "data": {}, "meta": { "version": "0.11.0", "duration_ms": 812 }, "warnings": [] }
 ```
 
 Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` strict truncation · `1` unexpected.

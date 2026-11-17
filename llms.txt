@@ -6,7 +6,7 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.10.0` (current; PyPI, npm and the MCP Registry, 2026-11-17): 6 provider
+- Engine `lv24-seo 0.11.0` (current; PyPI, npm and the MCP Registry, 2026-11-17): 6 provider
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
@@ -66,6 +66,12 @@
   provider writes — `seo_sitemap_submit` is wired for Bing submit, `seo_recrawl_request` is wired
   for Yandex recrawl, and the GSC/delete sitemap paths return `WRITE_DISABLED`), 3 resources,
   3 prompts.
+- New in 0.11.0: full-platform read depth. GSC `inspect`, `sitemaps`/`sitemap` and filtered
+  `query` (`--type`, `--filter`, `--filter-list`, `--data-state`, `--aggregation`,
+  `--search-appearance`, `--branded`); Yandex events/sitemaps/history/samples and gated recrawl;
+  Bing pages/traffic/crawl/urlinfo/children/users/sites/joins; organic Metrika pages/goals/
+  queries/devices/countries/engagement/bytime; CrUX weekly history and PSI Lighthouse audits.
+  No new MCP tool; the surface stays at 12 and the schema stays v4.
 - New in 0.10.0: Bing URL submit (`bing submit`) with quota pre-check, 500-URL batching and
   accepted-not-indexed results; read-only `bing quota`, `bing sitemaps [--details]` and
   `bing issues`; HTTP 400 `ErrorCode` mapping (3 auth, 14 property, 7 bad request, 4/5 quota).
@@ -105,6 +111,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
+- [Release notes 0.11.0](docs/releases/0.11.0.md): full-platform read depth (GSC, Yandex, Bing, Metrika, CWV/IndexNow)
 - [Release notes 0.10.0](docs/releases/0.10.0.md): Bing URL submission, remaining quota, sitemap feeds and crawl-issue bitmask
 - [Release notes 0.9.0](docs/releases/0.9.0.md): Bing sitemap submit and one-click IndexNow
 - [Release notes 0.8.0](docs/releases/0.8.0.md): CWV writer, Yandex indicators, safe restore, schedule lifecycle

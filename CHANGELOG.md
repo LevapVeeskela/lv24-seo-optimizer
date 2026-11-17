@@ -3,6 +3,44 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.11.0] - 2026-11-17
+
+Release notes: [`docs/releases/0.11.0.md`](docs/releases/0.11.0.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-17); desktop `0.8.0` bundles engine `0.10.0` and desktop `0.9.0`
+follows. Minor release: full-platform read depth. GSC gains URL Inspection, sitemap reads and
+filtered search analytics; Yandex gains events samples, sitemaps, history and a wired recrawl queue;
+Bing gains page/traffic/crawl/URL/role/join diagnostics; Metrika gains an organic-only collector and
+a `metrika` read group; CrUX gains collection periods and weekly history; PSI gains Lighthouse
+audits; IndexNow gains real error semantics. The CLI now has **24 top-level commands** (17 groups +
+7 commands), the MCP surface stays at **12 tools**, and the SQLite schema stays at version 4.
+
+### Added
+
+* `gsc inspect`, `gsc sitemaps`, `gsc sitemap` and richer `gsc query` selectors (`--type`,
+  `--filter`, `--filter-list`, `--data-state`, `--aggregation`, `--search-appearance`,
+  `--branded`); `seo_indexing_triage` accepts an optional `url`.
+* `yandex samples`, `yandex sitemaps`, `yandex history`, `yandex queue`; `yandex recrawl` applies
+  one gated POST per URL, capped to the remaining quota.
+* `bing pages`, `bing traffic`, `bing crawl`, `bing urlinfo`, `bing children`, `bing users`,
+  `bing sites`, `bing joins`.
+* `metrika pages|goals|queries|devices|countries|engagement|bytime`, organic-filtered.
+* `cwv audits` (bounded Lighthouse audits) and `cwv history` (CrUX weekly p75).
+* IndexNow key validation and `202`/`400`/`403`/`422`/`429` mapping.
+
+### Fixed
+
+* Yandex `search-urls/events/history` dropped the real `indicators` series and always reported
+  `empty_history` (live 2026-10-02: 57 appeared / 0 removed).
+* Metrika `data_age_days` was inflated by the previous comparison window.
+* GSC sitemap mapping dropped `type`, `isSitemapsIndex` and `contents[]`.
+* PSI audits and run metadata were discarded; CrUX used a hardcoded 2-day age.
+
+### Changed
+
+* Metrika SEO numbers are organic-only; all traffic is kept explicit as `all_visits`/`all_users`.
+* `ProviderResult` carries `extra` metadata and sampling fields; `to_meta()` always emits `sampled`.
+* MCP stays at 12 tools; GA4 remains an optional, unimplemented provider.
+
 ## [0.10.0] - 2026-11-17
 
 Release notes: [`docs/releases/0.10.0.md`](docs/releases/0.10.0.md). Status: **released** (PyPI,
