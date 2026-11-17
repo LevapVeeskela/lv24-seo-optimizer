@@ -236,6 +236,35 @@ def test_plan_reports_urls_batches_quota_and_no_submission(
     assert FakeBingClient.instances[0].closed is True
 
 
+def test_plan_caps_urls_to_remaining_quota(
+    workspace: Path, write_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def low_quota(self: FakeBingClient) -> ProviderResult[dict[str, object]]:
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=0,
+            rows=[{"daily_remaining": 1, "monthly_remaining": 1400, "raw": {}}],
+            total=1,
+            limitations=(
+                "quota_monthly_can_bind_first",
+                "quota_monthly_reset_undocumented",
+            ),
+        )
+
+    monkeypatch.setattr(FakeBingClient, "submission_quota", low_quota)
+    result = _invoke(*_args(workspace, "--url", URL_A, "--url", URL_B, "--allow-write"))
+
+    assert result.exit_code == 0, result.output
+    payload = _payload(result)
+    assert payload["data"]["plan"]["payload"]["urls"] == [URL_A]
+    assert payload["data"]["plan"]["summary"].startswith("submit 1 URL(s)")
+    assert payload["meta"]["truncated"] is True
+    assert any("bing_quota_cap" in item for item in payload["meta"]["limitations"])
+    assert _submissions() == []
+
+
 def test_apply_submits_once_and_reports_accepted_and_quota_after(
     workspace: Path, write_env: None
 ) -> None:

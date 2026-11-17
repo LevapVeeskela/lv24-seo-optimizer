@@ -55,6 +55,7 @@ from lv24_seo.core.errors import (
     CONFIRM_REQUIRED,
     INTERNAL,
     INVALID_INPUT,
+    QUOTA_EXCEEDED,
     UPSTREAM_UNAVAILABLE,
     WRITE_DISABLED,
     SeoError,
@@ -1062,6 +1063,28 @@ def bing_submit_command(
         quota_meta = quota_envelope.get("meta")
         if isinstance(quota_meta, Mapping):
             limitations.extend(str(item) for item in quota_meta.get("limitations") or [])
+        quota_limits = [
+            int(value)
+            for value in (quota_row.get("daily_remaining"), quota_row.get("monthly_remaining"))
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        if quota_limits:
+            allowed = min(quota_limits)
+            if allowed <= 0:
+                raise SeoError(
+                    code=QUOTA_EXCEEDED,
+                    message="Bing reports no remaining URL submission quota",
+                    next_action=(
+                        "wait for the daily or monthly window to reset, or submit fewer URLs"
+                    ),
+                    retryable=False,
+                )
+            if len(targets) > allowed:
+                targets = targets[:allowed]
+                truncated = True
+                limitations.append(
+                    f"bing_quota_cap: {allowed} of {total} URL(s) fit the remaining quota"
+                )
         context.update(
             {
                 "truncated": truncated,
