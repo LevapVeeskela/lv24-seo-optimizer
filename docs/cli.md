@@ -18,8 +18,9 @@ Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` 
 stdout; no ANSI colours.
 
 `--strict` is available on the read commands (`stats`, `gsc query`, `yandex queries`,
-`yandex indexing`, `bing quota`, `bing sitemaps`, `bing issues`, `crawl`, `report weekly`,
-`report diff`). It always sets `meta.strict: true`;
+`yandex indexing`, `yandex samples`, `yandex sitemaps`, `yandex history`, `yandex queue`,
+`bing quota`, `bing sitemaps`, `bing issues`, `crawl`, `report weekly`, `report diff`). It always
+sets `meta.strict: true`;
 when the payload is also truncated, the command exits `5` and `meta.limitations` explains what is
 missing (a generic `truncated: …` note is added when the provider did not name a limitation).
 Complete data still exits `0`, and without `--strict` truncation stays `meta.truncated` with exit
@@ -89,7 +90,11 @@ and neither prints the key.
 ```bash
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 [--dimensions query,page] [--limit 100] [--strict]
 lv24-seo yandex queries [--limit 100] [--strict] [--json]
-lv24-seo yandex indexing [--strict] [--json]
+lv24-seo yandex indexing [--date-from YYYY-MM-DD] [--date-to YYYY-MM-DD] [--strict] [--json]
+lv24-seo yandex samples --kind indexing|events [--limit 100] [--offset 0] [--strict] [--json]
+lv24-seo yandex sitemaps [--id SITEMAP_ID] [--parent-id ID] [--limit 100] [--from ID] [--strict] [--json]
+lv24-seo yandex history --kind sqi|in-search|queries|query [--query-id ID] [--date-from D] [--date-to D] [--strict] [--json]
+lv24-seo yandex queue [--id TASK_ID] [--limit 100] [--offset 0] [--date-from D] [--date-to D] [--strict] [--json]
 lv24-seo crawl [--start URL] [--max-urls 500] [--strict] [--json]
 ```
 
@@ -103,8 +108,39 @@ read as a complete answer. `data_age_days` is floored at the documented 3-day la
 `yandex queries` returns the documented query indicators as `shows`, `clicks`, `position` and
 `avg_click_position` when Yandex returns them; an indicator the engine does not map is kept under
 `extra_indicators` instead of dropping the row. `yandex indexing` returns the documented
-`indexing/history` series merged per date (`http_2xx`, `http_3xx`, `http_4xx`, `http_5xx`, `other`)
-and the `summary` counters including `site_problems`; a counter the provider omits stays absent.
+`indexing/history` series merged per date (`http_2xx`, `http_3xx`, `http_4xx`, `http_5xx`, `other`),
+the `search-urls/events/history` series merged per date (`appeared`, `removed`) and the `summary`
+counters including `site_problems`; a counter or series the provider omits stays absent. Both
+history calls forward `--date-from/--date-to` as the provider's `YYYY-MM-DD` window. Live
+2026-11-17 showed `search-urls/events/history` closing the connection when the window is present;
+the client retries once without it, filters the full series locally and reports
+`client_side_date_filter` in `warnings` and `meta.limitations`.
+
+`yandex samples --kind indexing` reads `indexing/samples` (`status`, `http_code`, `url`,
+`access_date`); `--kind events` reads `search-urls/events/samples` (`url`, `title`, `event_date`,
+`last_access`, `event`, `excluded_url_status`, `bad_http_status`, `target_url`). The provider pages
+at 100 rows; the client walks pages up to `--limit` (max 1000) and reports the provider's `count`
+as `meta.total`, with `meta.truncated: true` whenever rows remain. `--offset` starts at a provider
+row. A provider that disconnects the samples endpoint is an upstream error, never an empty result.
+
+`yandex sitemaps` lists `sitemap_id`, `sitemap_url`, `last_access_date`, `errors_count`,
+`urls_count`, `children_count`, `sources` and `sitemap_type`; `--id` reads one sitemap and
+`--parent-id` lists the children of a sitemap index. `--from` is the provider paging cursor (a
+sitemap id). Adding or deleting sitemaps is not implemented; the command is read-only.
+
+`yandex history --kind sqi` returns `{date, value}` points from `sqi-history`; `in-search` returns
+the provider's `{date, value}` pages-in-search history; `queries` returns daily `shows`, `clicks`,
+`position` and `avg_click_position`; `query --query-id ID` returns the same series for one query.
+The `queries` and `query` calls send the four documented `query_indicator` parameters (without
+them Yandex returns an empty `indicators` object). `--date-from/--date-to` bound the window.
+
+`yandex queue` reads `recrawl/queue` (`task_id`, `url`, `added_time`, `state`) with `meta.total`
+from the provider's `count`; `--id` reads one task. `yandex recrawl --url ... --allow-write`
+plans, and `--confirm TOKEN` applies one provider POST per URL (Yandex has no batch endpoint). The
+remaining daily quota is read first and the list is capped to it; `202` rows carry `task_id` and
+`quota_remainder`, `409` rows are `already_queued`, and a `429` leaves earlier task ids in place,
+lists the rest under `not_attempted`, sets `meta.truncated: true` and returns
+`limitations: ["one_url_per_call", "recrawl_quota_exceeded"]`.
 
 `crawl` respects `robots.txt`, follows same-host links breadth-first, runs all rules and stores
 pages/issues in SQLite when a store is configured. A sitemap that fails to load reports only the

@@ -73,8 +73,8 @@ and desktop `0.8.0` bundles engine `0.10.0`. See
 [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md) and
 [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
 
-Still honest gaps before `v1.0`: GSC sitemap submit, Bing sitemap delete and Yandex recrawl return
-an explicit `WRITE_DISABLED` (Bing sitemap/URL submit and IndexNow really submit), and
+Still honest gaps before `v1.0`: GSC sitemap submit and Bing sitemap delete return an explicit
+`WRITE_DISABLED` (Bing sitemap/URL submit, IndexNow and Yandex recrawl really write), and
 `raw_retention_days` is reserved (no raw archives are written yet). GSC supports both a plain OAuth
 access token and a service-account JSON key. See
 [`docs/plans/2026-11-10-implementation-plan.md`](docs/plans/2026-11-10-implementation-plan.md) for
@@ -96,6 +96,11 @@ lv24-seo init --property https://example.com   # writes seo.toml + data/
 lv24-seo auth set --provider gsc --stdin       # token to the OS keychain (needs lv24-seo[secrets])
 lv24-seo auth set --provider metrika --stdin   # Metrika has its own auth provider and token
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
+lv24-seo yandex indexing --date-from 2026-10-01 --date-to 2026-10-31 --json  # history + appeared/removed
+lv24-seo yandex sitemaps --json                 # sitemap ids, URLs, counts, errors (read-only)
+lv24-seo yandex history --kind sqi --json       # SQI / in-search / queries / query series
+lv24-seo yandex queue --json                    # recrawl tasks + provider total (read-only)
+lv24-seo yandex recrawl --url https://example.com/page --allow-write  # plan; confirm to POST
 lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown                 # week-over-week diff of stored snapshots
 lv24-seo stats --days 7 --json                  # read-only per-provider dashboard snapshot
@@ -202,8 +207,8 @@ never change provider or local state, plus `seo_crawl_site`, `seo_weekly_report`
 `yandex_indexing_state`, which persist local snapshots or indexing events and therefore carry
 `readOnlyHint: false` (they are not destructive). The two provider writes require `allow_write=true`,
 are annotated `destructiveHint: true`, and use the same two-phase `plan_hash` / `confirm_token` flow
-and `LV24_SEO_WRITE_SECRET` as the CLI; Bing sitemap submit is wired, while GSC submit, Bing delete
-and Yandex recrawl return `WRITE_DISABLED` and nothing is sent.
+and `LV24_SEO_WRITE_SECRET` as the CLI; Bing sitemap submit and Yandex recrawl are wired, while GSC
+submit and Bing delete return `WRITE_DISABLED` and nothing is sent.
 
 | Tool | Kind | `readOnlyHint` | `destructiveHint` | What it does |
 |---|---|---|---|---|
@@ -217,7 +222,7 @@ and Yandex recrawl return `WRITE_DISABLED` and nothing is sent.
 | `seo_log_analysis` | read | `true` | `false` | One local nginx JSON log: bot rollups and crawl-waste share (UA-only triage) |
 | `seo_indexing_triage` | read | `true` | `false` | Group indexing problems into an action list |
 | `seo_opportunities` | read | `true` | `false` | Striking-distance and decay opportunities |
-| `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (two-phase gate; `WRITE_DISABLED` in this build) |
+| `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (two-phase gate; one POST per URL, capped to the remaining daily quota) |
 | `seo_sitemap_submit` | write | `false` | `true` | Submit a sitemap to Bing or GSC (two-phase gate; Bing submit wired, GSC/delete `WRITE_DISABLED`) |
 
 Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `weekly_seo_review`,
@@ -229,7 +234,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 | Source | Free tier | Used for | Write operations |
 |---|---|---|---|
 | Google Search Console | yes (OAuth access token or service-account JSON key) | queries, pages, countries, devices; URL Inspection adapter | sitemap submit disabled |
-| Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics | recrawl disabled |
+| Yandex Webmaster | yes (OAuth) | queries, indexing history/events, samples, sitemaps, SQI/in-search/query history, recrawl queue | recrawl (quota-capped, one URL per request) |
 | Yandex Metrika | yes | sessions and users; filtered reports through adapter; separate `metrika` auth provider (`yandex_metrika_token`) | — |
 | Bing Webmaster + IndexNow | yes | queries, crawl issues (decoded bitmask), remaining URL quota, sitemap feeds, sitemap submit, URL submit, one-click IndexNow from the sitemap | sitemap submit + URL submit + IndexNow submit |
 | Chrome UX Report | yes (API key) | origin-level field CWV | — |

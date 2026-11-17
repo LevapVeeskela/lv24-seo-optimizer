@@ -221,7 +221,7 @@ P0 prerequisites (small, additive CLI changes):
 | relative `storage.data_dir` resolves against process cwd | launch with `cwd = config parent` and prefer an absolute data dir |
 | `report weekly --out` overwrites `report.json`/`report.html` and saves a snapshot | use a dedicated output dir and `--no-save` for preview |
 | `crawl` issues are uncapped in CLI | virtualize/lazy-render the table, show counts |
-| `sitemap`/`recrawl` execute paths are not wired | show `WRITE_DISABLED` honestly; do not fake success |
+| `sitemap`/`recrawl` execute paths | Yandex recrawl is wired; GSC sitemap submit and Bing delete show `WRITE_DISABLED` honestly; do not fake success |
 | IndexNow/confirm tokens in argv are visible in process listings | keep command lines short-lived; prefer stdin support when added |
 | no concurrent jobs on one data dir | serialize all jobs per workspace; SQLite writer + delivery can block |
 

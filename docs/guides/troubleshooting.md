@@ -169,7 +169,7 @@ Do not run `lv24-seo yandex hosts`: that command does not exist in this build (`
 | GSC URL Inspection | 2,000/day/site, 600/min | One URL per call, no batch |
 | GSC project | 40,000 QPM / 30M QPD | All projects on one Cloud project |
 | Yandex Webmaster | no published global RPD/RPS | Query analytics (popular queries) is fragile above ~10k req/hour (429) |
-| Yandex recrawl | hard daily quota | The API exposes `GET /recrawl/quota`; the adapter is not wired, so the CLI only plans the write and consumes no quota |
+| Yandex recrawl | hard daily quota | `yandex recrawl` reads `GET /recrawl/quota` first and caps the list to the remainder; one POST per URL, `429` stops the loop with `not_attempted` |
 | Metrika | `/stat/v1/data` 200 requests / 5 min; 5,000/day/user; 30 rps/IP; 3 parallel | Report and stat calls |
 | CrUX | 150 queries/min/project | Origin-level field data |
 | PSI | ~25,000/day | Lab audits |
@@ -249,7 +249,7 @@ token.
 |---|---|---|
 | `indexnow submit` | `--allow-write` + `LV24_SEO_WRITE_SECRET` → plan + token | Sends the URLs to IndexNow |
 | `sitemap submit` | same → plan + token | `--provider bing`: JSON `SubmitFeed`; GSC: `WRITE_DISABLED` (`gsc sitemap submit is not wired yet`, no provider call) |
-| `yandex recrawl` | same → plan + token | `WRITE_DISABLED`: `yandex recrawl is not wired yet` (no provider call) |
+| `yandex recrawl` | same → plan + token | One `POST /recrawl/queue` per URL, capped to the remaining daily quota; `202` rows carry `task_id`/`quota_remainder`, `409` is `already_queued`, `429` stops with `not_attempted` |
 
 `yandex recrawl` reads `providers.yandex_webmaster.host_id` from `seo.toml`; if it is blank, the
 command returns `INVALID_INPUT` and exit 2 before the write gate.
@@ -297,9 +297,9 @@ promotion leaves `pending`, which is treated as in-flight until an operator rele
 | `write operations are disabled by default` | `--allow-write` was not passed | Pass `--allow-write` plus `LV24_SEO_WRITE_SECRET` to plan; apply with `--allow-write --confirm TOKEN` |
 | `write secret is empty: set LV24_SEO_WRITE_SECRET` | `--allow-write` without the environment secret | Set a long random value in the same shell or service |
 | `gsc sitemap submit is not wired yet` | GSC sitemap adapter absent | Submit in Search Console until it lands |
-| `yandex recrawl is not wired yet` | Recrawl adapter absent | Queue in Yandex Webmaster until it lands |
+| `Yandex recrawl quota exceeded for <url>` | Daily recrawl quota exhausted (429) | Wait for the quota to reset; earlier `task_id`s stay reported and the rest is in `not_attempted` |
 | `<tool> is a write tool and is disabled by default` | MCP write tool called without `allow_write=true` | Pass `allow_write=true` only after reviewing the plan |
-| `recrawl writes are not available in this build` / `sitemap writes are not available in this build` | MCP call with `allow_write=true`, but the engine service exposes no write handler yet | Use the CLI write surface; these MCP writes remain disabled |
+| `recrawl writes are not available in this build` / `sitemap writes are not available in this build` | MCP call with `allow_write=true`, but the engine service exposes no write handler | Use the CLI write surface; these MCP writes remain disabled |
 
 `WRITE_DISABLED` also comes from the secret store, with a different message:
 
@@ -311,8 +311,8 @@ promotion leaves `pending`, which is treated as in-flight until an operator rele
 
 MCP write tools implement the same two-phase flow: `allow_write=true` plus `plan_hash` and
 `confirm_token` from the dry run, with `LV24_SEO_WRITE_SECRET` in the server environment. Bing
-sitemap submit is wired through `SeoService.submit_sitemap`; GSC submit, Bing delete and Yandex
-recrawl return `WRITE_DISABLED` and nothing is sent. IndexNow stays CLI/desktop-only. Keep
+sitemap submit and Yandex recrawl are wired; GSC submit and Bing delete return `WRITE_DISABLED`
+and nothing is sent. IndexNow stays CLI/desktop-only. Keep
 `allow_write` per call; never enable writes globally in an agent config, and never log or commit
 `LV24_SEO_WRITE_SECRET`.
 

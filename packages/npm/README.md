@@ -75,8 +75,8 @@ scheduler generators and a product-grade weekly email. Recent additions:
 | `seo_sitemap_submit` | write | GSC/Bing sitemap, `allow_write=true`; Bing submit wired |
 
 The three local-state tools are not destructive; the two provider writes are
-annotated `destructiveHint: true` and gated by `allow_write=true`. Bing sitemap submit is wired;
-GSC sitemap submit, Bing sitemap delete and Yandex recrawl return `WRITE_DISABLED` and nothing is
+annotated `destructiveHint: true` and gated by `allow_write=true`. Bing sitemap submit and Yandex
+recrawl are wired; GSC sitemap submit and Bing sitemap delete return `WRITE_DISABLED` and nothing is
 sent. IndexNow is CLI/desktop-only. Yandex Metrika has its own auth provider:
 `npx @lv24/seo auth set --provider metrika --stdin` stores `yandex_metrika_token`, separate from the
 Webmaster token. Full inputs and limits:

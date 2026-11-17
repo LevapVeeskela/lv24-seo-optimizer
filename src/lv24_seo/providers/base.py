@@ -27,6 +27,8 @@ TOKEN_EXPIRING = "token_expiring"  # noqa: S105 - a limitation code, not a secre
 PAID_PROVIDER = "paid_provider"
 PARTIAL_RESPONSE = "partial_response"
 EMPTY_HISTORY = "empty_history"
+RECRAWL_QUOTA_EXCEEDED = "recrawl_quota_exceeded"
+CLIENT_SIDE_DATE_FILTER = "client_side_date_filter"
 
 # Canonical source identifiers. Collectors key ``sources`` by these, the store
 # persists them verbatim, and the report layer maps them to engine sections.

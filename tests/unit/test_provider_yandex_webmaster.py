@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import httpx
 import pytest
 
-from lv24_seo.core.errors import AUTH_INVALID, AUTH_REQUIRED, SeoError
+from lv24_seo.core.errors import AUTH_INVALID, AUTH_REQUIRED, QUOTA_EXCEEDED, SeoError
 from lv24_seo.core.http import HttpClient
 from lv24_seo.providers.base import (
+    CLIENT_SIDE_DATE_FILTER,
     DEGRADED_HOST,
     EMPTY_HISTORY,
     NO_PER_URL_SITEMAP_ERRORS,
     NO_QUERY_PAGE_JOIN,
+    ONE_URL_PER_CALL,
     TOP_3000_QUERIES,
     data_age_days,
 )
@@ -590,3 +592,357 @@ def test_recrawl_quota_maps_alternative_key_names() -> None:
             "raw": payload,
         }
     ]
+
+
+def test_search_urls_events_parses_indicator_series() -> None:
+    payload = {
+        "indicators": {
+            "APPEARED_IN_SEARCH": [
+                {"date": "2026-10-02", "value": 57},
+                {"date": "2026-10-03", "value": 1},
+            ],
+            "REMOVED_FROM_SEARCH": [{"date": "2026-10-02", "value": 0}],
+        }
+    }
+
+    result = _client(_with_user(payload)).search_urls_events(HOST)
+
+    assert result.rows == [
+        {"date": "2026-10-02", "appeared": 57, "removed": 0},
+        {"date": "2026-10-03", "appeared": 1},
+    ]
+    assert "removed" not in result.rows[1]
+
+
+def test_search_urls_events_keeps_unknown_indicator() -> None:
+    payload = {
+        "indicators": {
+            "APPEARED_IN_SEARCH": [{"date": "2026-10-02", "value": 2}],
+            "FUTURE_EVENT": [{"date": "2026-10-02", "value": 1}],
+        }
+    }
+
+    result = _client(_with_user(payload)).search_urls_events(HOST)
+
+    assert result.rows == [
+        {
+            "date": "2026-10-02",
+            "appeared": 2,
+            "extra_indicators": {"FUTURE_EVENT": 1},
+        }
+    ]
+
+
+def test_indexing_and_events_history_forward_the_date_window() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == USER_PATH:
+            return httpx.Response(200, json={"user_id": USER_ID})
+        seen.append(request)
+        return httpx.Response(200, json={"indicators": {}})
+
+    client = _client(handler)
+    client.indexing_history(HOST, date_from=date(2026, 10, 1), date_to=date(2026, 10, 2))
+    client.search_urls_events(HOST, date_from=date(2026, 10, 1), date_to=date(2026, 10, 2))
+
+    assert seen[0].url.params["date_from"] == "2026-10-01"
+    assert seen[0].url.params["date_to"] == "2026-10-02"
+    assert seen[1].url.params["date_from"] == "2026-10-01"
+    assert seen[1].url.params["date_to"] == "2026-10-02"
+
+
+def test_search_urls_events_falls_back_to_a_client_side_date_filter() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == USER_PATH:
+            return httpx.Response(200, json={"user_id": USER_ID})
+        if request.url.params.get("date_from"):
+            raise httpx.RemoteProtocolError("connection closed")
+        return httpx.Response(
+            200,
+            json={
+                "indicators": {
+                    "APPEARED_IN_SEARCH": [
+                        {"date": "2026-09-30", "value": 5},
+                        {"date": "2026-10-02", "value": 57},
+                        {"date": "2026-10-03", "value": 1},
+                    ],
+                    "REMOVED_FROM_SEARCH": [{"date": "2026-10-02", "value": 0}],
+                }
+            },
+        )
+
+    result = _client(handler).search_urls_events(
+        HOST,
+        date_from=date(2026, 10, 1),
+        date_to=date(2026, 10, 2),
+    )
+
+    assert result.rows == [{"date": "2026-10-02", "appeared": 57, "removed": 0}]
+    assert result.warnings == (CLIENT_SIDE_DATE_FILTER,)
+    assert result.limitations == (CLIENT_SIDE_DATE_FILTER,)
+
+
+def test_indexing_samples_paginates_and_reports_total() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == USER_PATH:
+            return httpx.Response(200, json={"user_id": USER_ID})
+        seen.append(request)
+        offset = int(request.url.params["offset"])
+        size = 100 if offset == 0 else 50
+        samples = [
+            {
+                "status": "OK",
+                "http_code": 200,
+                "url": f"https://example.com/{offset + index}",
+                "access_date": "2026-11-01",
+            }
+            for index in range(size)
+        ]
+        return httpx.Response(200, json={"count": 150, "samples": samples})
+
+    result = _client(handler).indexing_samples(HOST, limit=150)
+
+    assert [request.url.params["offset"] for request in seen] == ["0", "100"]
+    assert len(result.rows) == 150
+    assert result.total == 150
+    assert result.truncated is False
+
+
+def test_indexing_samples_limit_marks_truncated() -> None:
+    payload = {
+        "count": 10,
+        "samples": [
+            {
+                "status": "OK",
+                "http_code": 200,
+                "url": "https://example.com/a",
+                "access_date": "2026-11-01",
+            },
+            {
+                "status": "OK",
+                "http_code": 200,
+                "url": "https://example.com/b",
+                "access_date": "2026-11-01",
+            },
+        ],
+    }
+
+    result = _client(_with_user(payload)).indexing_samples(HOST, limit=2)
+
+    assert len(result.rows) == 2
+    assert result.total == 10
+    assert result.truncated is True
+
+
+def test_search_event_samples_returns_per_url_rows() -> None:
+    payload = {
+        "count": 1,
+        "samples": [
+            {
+                "url": "https://example.com/a",
+                "title": "Page A",
+                "event_date": "2026-10-02",
+                "last_access": "2026-10-02",
+                "event": "APPEARED_IN_SEARCH",
+                "excluded_url_status": None,
+                "bad_http_status": None,
+                "target_url": None,
+            }
+        ],
+    }
+
+    result = _client(_with_user(payload)).search_event_samples(HOST, limit=100)
+
+    assert result.rows == [
+        {
+            "url": "https://example.com/a",
+            "title": "Page A",
+            "event_date": "2026-10-02",
+            "last_access": "2026-10-02",
+            "event": "APPEARED_IN_SEARCH",
+            "excluded_url_status": None,
+            "bad_http_status": None,
+            "target_url": None,
+        }
+    ]
+    assert result.total == 1
+
+
+def test_sitemaps_lists_and_reads_one_sitemap() -> None:
+    seen: list[httpx.Request] = []
+    payload = {
+        "sitemaps": [
+            {
+                "sitemap_id": "abc",
+                "sitemap_url": "https://example.com/sitemap.xml",
+                "last_access_date": "2026-11-16",
+                "errors_count": 0,
+                "urls_count": 6532,
+                "children_count": 0,
+                "sources": ["WEBMASTER"],
+                "sitemap_type": "SITEMAP",
+            }
+        ]
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == USER_PATH:
+            return httpx.Response(200, json={"user_id": USER_ID})
+        seen.append(request)
+        if request.url.path.endswith("/sitemaps/abc"):
+            return httpx.Response(200, json=payload["sitemaps"][0])
+        return httpx.Response(200, json=payload)
+
+    client = _client(handler)
+    listed = client.sitemaps(HOST, limit=10)
+    detail = client.sitemap(HOST, "abc")
+
+    assert listed.rows[0]["urls_count"] == 6532
+    assert listed.rows[0]["sources"] == ["WEBMASTER"]
+    assert listed.total == 1
+    assert listed.truncated is False
+    assert detail.rows == listed.rows
+    assert seen[0].url.params["limit"] == "10"
+    assert seen[1].url.path == f"{HOST_PATH}/sitemaps/abc"
+
+
+def test_sqi_history_maps_points() -> None:
+    payload = {
+        "points": [
+            {"date": "2026-11-01", "value": 42},
+            {"date": "2026-11-02", "value": 43},
+        ]
+    }
+
+    result = _client(_with_user(payload)).sqi_history(HOST)
+
+    assert result.rows == [
+        {"date": "2026-11-01", "value": 42},
+        {"date": "2026-11-02", "value": 43},
+    ]
+
+
+def test_in_search_history_merges_indicator_series() -> None:
+    payload = {
+        "indicators": {
+            "SEARCHABLE": [{"date": "2026-11-01", "value": 6500}],
+            "EXCLUDED": [{"date": "2026-11-01", "value": 32}],
+        }
+    }
+
+    result = _client(_with_user(payload)).in_search_history(HOST)
+
+    assert result.rows == [{"date": "2026-11-01", "searchable": 6500, "excluded": 32}]
+
+
+def test_all_queries_and_per_query_history() -> None:
+    seen: list[httpx.Request] = []
+    payload = {
+        "indicators": {
+            "TOTAL_SHOWS": [{"date": "2026-11-01", "value": 100}],
+            "TOTAL_CLICKS": [{"date": "2026-11-01", "value": 7}],
+            "AVG_SHOW_POSITION": [{"date": "2026-11-01", "value": 4.5}],
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == USER_PATH:
+            return httpx.Response(200, json={"user_id": USER_ID})
+        seen.append(request)
+        return httpx.Response(200, json=payload)
+
+    client = _client(handler)
+    all_rows = client.all_queries_history(HOST)
+    query_rows = client.query_history(HOST, "a08b")
+
+    assert all_rows.rows == [{"date": "2026-11-01", "shows": 100, "clicks": 7, "position": 4.5}]
+    assert query_rows.rows == all_rows.rows
+    expected_indicators = [
+        "TOTAL_SHOWS",
+        "TOTAL_CLICKS",
+        "AVG_SHOW_POSITION",
+        "AVG_CLICK_POSITION",
+    ]
+    assert seen[0].url.params.get_list("query_indicator") == expected_indicators
+    assert seen[1].url.path == f"{HOST_PATH}/search-queries/a08b/history/"
+    assert seen[1].url.params.get_list("query_indicator") == expected_indicators
+
+
+def test_recrawl_queue_and_task() -> None:
+    seen: list[httpx.Request] = []
+    task = {
+        "task_id": "task-1",
+        "url": "https://example.com/a",
+        "added_time": "2026-11-16T10:00:00",
+        "state": "DONE",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == USER_PATH:
+            return httpx.Response(200, json={"user_id": USER_ID})
+        seen.append(request)
+        if request.url.path.endswith("/recrawl/queue/task-1"):
+            return httpx.Response(200, json=task)
+        return httpx.Response(200, json={"count": 28, "tasks": [task]})
+
+    client = _client(handler)
+    queue = client.recrawl_queue(HOST, limit=10)
+    detail = client.recrawl_task(HOST, "task-1")
+
+    assert queue.rows == [task]
+    assert queue.total == 28
+    assert queue.truncated is True
+    assert detail.rows == [task]
+    assert seen[0].url.params["limit"] == "10"
+    assert seen[1].url.path == f"{HOST_PATH}/recrawl/queue/task-1"
+
+
+def test_recrawl_enqueue_handles_202_409_and_429() -> None:
+    responses = [
+        httpx.Response(202, json={"task_id": "task-1", "quota_remainder": 149}),
+        httpx.Response(409, json={"error_code": "URL_ALREADY_ADDED"}),
+        httpx.Response(
+            429,
+            json={
+                "error_code": "QUOTA_EXCEEDED",
+                "daily_quota": 150,
+                "exceeded_until": "2026-11-18T00:00:00",
+            },
+        ),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == USER_PATH:
+            return httpx.Response(200, json={"user_id": USER_ID})
+        return responses.pop(0)
+
+    client = _client(handler)
+    queued = client.recrawl_enqueue(HOST, "https://example.com/a")
+    duplicate = client.recrawl_enqueue(HOST, "https://example.com/a")
+
+    assert queued.rows == [
+        {
+            "url": "https://example.com/a",
+            "status": "queued",
+            "task_id": "task-1",
+            "quota_remainder": 149,
+        }
+    ]
+    assert queued.limitations == (ONE_URL_PER_CALL,)
+    assert duplicate.rows == [
+        {
+            "url": "https://example.com/a",
+            "status": "already_queued",
+            "error_code": "URL_ALREADY_ADDED",
+        }
+    ]
+
+    with pytest.raises(SeoError) as excinfo:
+        client.recrawl_enqueue(HOST, "https://example.com/b")
+
+    assert excinfo.value.code == QUOTA_EXCEEDED
+    assert excinfo.value.detail["daily_quota"] == 150
+    assert excinfo.value.detail["exceeded_until"] == "2026-11-18T00:00:00"

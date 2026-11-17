@@ -244,8 +244,8 @@ query level (clicks/impressions) separately, and the report labels which engine 
   Local-state MCP tools
   (`seo_crawl_site`, `seo_weekly_report`) are not write-gated because they never mutate provider
   state; they are marked `writes_local_state: true` and `readOnlyHint: false`. The engine
-  exposes `submit_sitemap` for Bing submit; GSC submit, Bing delete and Yandex recrawl return
-  `WRITE_DISABLED` and nothing is sent.
+  exposes `submit_sitemap` for Bing submit and `recrawl_request` for Yandex recrawl; GSC submit and
+  Bing delete return `WRITE_DISABLED` and nothing is sent.
 * Logs are redacted at the formatter level, not per call site.
 
 ## 9. Backup bundle

@@ -643,6 +643,47 @@ def test_yandex_indexing_survives_an_indexing_event_write_failure(
     assert store.list_indexing_events(property_id=PROPERTY) == []
 
 
+def test_yandex_indexing_forwards_dates_to_both_histories() -> None:
+    calls: list[tuple[str, date | None, date | None]] = []
+
+    class DatedClient(FakeWebmasterClient):
+        def indexing_history(
+            self,
+            host_id: str,
+            *,
+            date_from: date | None = None,
+            date_to: date | None = None,
+        ) -> ProviderResult[dict[str, Any]]:
+            calls.append(("indexing_history", date_from, date_to))
+            return super().indexing_history(host_id)
+
+        def search_urls_events(
+            self,
+            host_id: str,
+            *,
+            date_from: date | None = None,
+            date_to: date | None = None,
+        ) -> ProviderResult[dict[str, Any]]:
+            calls.append(("search_urls_events", date_from, date_to))
+            return super().search_urls_events(host_id)
+
+    service = SeoService(
+        _config(),
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": DatedClient()},
+    )
+    start = date(2026, 10, 1)
+    end = date(2026, 10, 2)
+
+    response = service.yandex_indexing(date_from=start, date_to=end)
+
+    assert response["ok"] is True
+    assert calls == [
+        ("indexing_history", start, end),
+        ("search_urls_events", start, end),
+    ]
+
+
 def test_yandex_queries_missing_token_fails_with_warning() -> None:
     service = SeoService(_config(), secrets=_secrets())
 
@@ -651,6 +692,324 @@ def test_yandex_queries_missing_token_fails_with_warning() -> None:
     assert response["ok"] is False
     assert response["error"]["code"] == AUTH_REQUIRED
     assert "yandex_webmaster: token missing" in response["warnings"]
+
+
+class FakeYandexDepthClient:
+    """Record the new Yandex read/write calls and return one canned row each."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def _record(self, name: str, *args: Any, **kwargs: Any) -> None:
+        self.calls.append((name, args, kwargs))
+
+    def indexing_samples(self, host_id: str, *, limit: int, offset: int) -> ProviderResult[Any]:
+        self._record("indexing_samples", host_id, limit=limit, offset=offset)
+        return _result(
+            "yandex_webmaster",
+            [{"status": "OK", "http_code": 200, "url": "https://example.com/a"}],
+            property_id=host_id,
+            truncated=True,
+        )
+
+    def search_event_samples(self, host_id: str, *, limit: int, offset: int) -> ProviderResult[Any]:
+        self._record("search_event_samples", host_id, limit=limit, offset=offset)
+        return _result(
+            "yandex_webmaster",
+            [{"event": "APPEARED_IN_SEARCH", "url": "https://example.com/a"}],
+            property_id=host_id,
+        )
+
+    def sitemaps(self, host_id: str, **kwargs: Any) -> ProviderResult[Any]:
+        self._record("sitemaps", host_id, **kwargs)
+        return _result(
+            "yandex_webmaster",
+            [{"sitemap_id": "abc", "sitemap_url": "https://example.com/sitemap.xml"}],
+            property_id=host_id,
+        )
+
+    def sitemap(self, host_id: str, sitemap_id: str) -> ProviderResult[Any]:
+        self._record("sitemap", host_id, sitemap_id)
+        return _result(
+            "yandex_webmaster",
+            [{"sitemap_id": sitemap_id, "sitemap_url": "https://example.com/sitemap.xml"}],
+            property_id=host_id,
+        )
+
+    def sqi_history(
+        self, host_id: str, *, date_from: date | None = None, date_to: date | None = None
+    ) -> ProviderResult[Any]:
+        self._record("sqi_history", host_id, date_from=date_from, date_to=date_to)
+        return _result(
+            "yandex_webmaster",
+            [{"date": "2026-11-01", "value": 42}],
+            property_id=host_id,
+        )
+
+    def in_search_history(
+        self, host_id: str, *, date_from: date | None = None, date_to: date | None = None
+    ) -> ProviderResult[Any]:
+        self._record("in_search_history", host_id, date_from=date_from, date_to=date_to)
+        return _result(
+            "yandex_webmaster",
+            [{"date": "2026-11-01", "searchable": 6500}],
+            property_id=host_id,
+        )
+
+    def all_queries_history(
+        self, host_id: str, *, date_from: date | None = None, date_to: date | None = None
+    ) -> ProviderResult[Any]:
+        self._record("all_queries_history", host_id, date_from=date_from, date_to=date_to)
+        return _result(
+            "yandex_webmaster",
+            [{"date": "2026-11-01", "shows": 100}],
+            property_id=host_id,
+        )
+
+    def query_history(
+        self,
+        host_id: str,
+        query_id: str,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> ProviderResult[Any]:
+        self._record(
+            "query_history",
+            host_id,
+            query_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return _result(
+            "yandex_webmaster",
+            [{"date": "2026-11-01", "shows": 100}],
+            property_id=host_id,
+        )
+
+    def recrawl_queue(
+        self,
+        host_id: str,
+        *,
+        offset: int,
+        limit: int,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> ProviderResult[Any]:
+        self._record(
+            "recrawl_queue",
+            host_id,
+            offset=offset,
+            limit=limit,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return _result(
+            "yandex_webmaster",
+            [{"task_id": "task-1", "url": "https://example.com/a", "state": "DONE"}],
+            property_id=host_id,
+        )
+
+    def recrawl_task(self, host_id: str, task_id: str) -> ProviderResult[Any]:
+        self._record("recrawl_task", host_id, task_id)
+        return _result(
+            "yandex_webmaster",
+            [{"task_id": task_id, "url": "https://example.com/a", "state": "DONE"}],
+            property_id=host_id,
+        )
+
+
+def test_yandex_samples_routes_to_the_requested_kind() -> None:
+    client = FakeYandexDepthClient()
+    service = SeoService(
+        _config(),
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": client},
+    )
+
+    indexing = service.yandex_samples(kind="indexing", limit=5, offset=10)
+    events = service.yandex_samples(kind="events", limit=5)
+
+    assert indexing["ok"] is True
+    assert indexing["data"]["kind"] == "indexing"
+    assert indexing["meta"]["truncated"] is True
+    assert indexing["meta"]["total"] == 1
+    assert events["data"]["kind"] == "events"
+    assert [call[0] for call in client.calls] == ["indexing_samples", "search_event_samples"]
+    assert client.calls[0][2] == {"limit": 5, "offset": 10}
+
+
+def test_yandex_samples_rejects_an_unknown_kind() -> None:
+    service = SeoService(
+        _config(),
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": FakeYandexDepthClient()},
+    )
+
+    response = service.yandex_samples(kind="other")
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == INVALID_INPUT
+
+
+def test_yandex_sitemaps_lists_and_reads_one() -> None:
+    client = FakeYandexDepthClient()
+    service = SeoService(
+        _config(),
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": client},
+    )
+
+    listed = service.yandex_sitemaps(parent_id="root", limit=10, from_="abc")
+    detail = service.yandex_sitemaps(sitemap_id="abc")
+
+    assert listed["data"]["rows"][0]["sitemap_id"] == "abc"
+    assert detail["meta"]["sitemap_id"] == "abc"
+    assert client.calls[0] == (
+        "sitemaps",
+        (HOST_ID,),
+        {"parent_id": "root", "from_": "abc", "limit": 10},
+    )
+    assert client.calls[1] == ("sitemap", (HOST_ID, "abc"), {})
+
+
+def test_yandex_history_routes_all_four_kinds() -> None:
+    client = FakeYandexDepthClient()
+    service = SeoService(
+        _config(),
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": client},
+    )
+    start = date(2026, 11, 1)
+    end = date(2026, 11, 2)
+
+    for kind in ("sqi", "in-search", "queries"):
+        response = service.yandex_history(kind=kind, date_from=start, date_to=end)
+        assert response["ok"] is True
+        assert response["data"]["kind"] == kind
+    query = service.yandex_history(
+        kind="query",
+        query_id="a08b",
+        date_from=start,
+        date_to=end,
+    )
+
+    assert query["ok"] is True
+    assert query["meta"]["query_id"] == "a08b"
+    assert [call[0] for call in client.calls] == [
+        "sqi_history",
+        "in_search_history",
+        "all_queries_history",
+        "query_history",
+    ]
+    assert client.calls[3][1][1] == "a08b"
+
+
+def test_yandex_history_requires_a_query_id_for_query_kind() -> None:
+    service = SeoService(
+        _config(),
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": FakeYandexDepthClient()},
+    )
+
+    response = service.yandex_history(kind="query")
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == INVALID_INPUT
+
+
+def test_yandex_queue_reads_a_page_or_one_task() -> None:
+    client = FakeYandexDepthClient()
+    service = SeoService(
+        _config(),
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": client},
+    )
+
+    queue = service.yandex_queue(limit=25, offset=5)
+    task = service.yandex_queue(task_id="task-1")
+
+    assert queue["data"]["rows"][0]["task_id"] == "task-1"
+    assert task["meta"]["task_id"] == "task-1"
+    assert client.calls[0] == (
+        "recrawl_queue",
+        (HOST_ID,),
+        {"offset": 5, "limit": 25, "date_from": None, "date_to": None},
+    )
+    assert client.calls[1] == ("recrawl_task", (HOST_ID, "task-1"), {})
+
+
+class FakeRecrawlClient:
+    def __init__(self, *, quota: int, reject_url: str = "") -> None:
+        self.quota = quota
+        self.reject_url = reject_url
+        self.enqueued: list[str] = []
+
+    def recrawl_quota(self, host_id: str) -> ProviderResult[Any]:
+        return _result(
+            "yandex_webmaster",
+            [{"daily_quota": 150, "quota_remainder": self.quota}],
+            property_id=host_id,
+        )
+
+    def recrawl_enqueue(self, host_id: str, url: str) -> ProviderResult[Any]:
+        self.enqueued.append(url)
+        if url == self.reject_url:
+            raise SeoError(
+                code=QUOTA_EXCEEDED,
+                message="quota",
+                detail={"daily_quota": 150, "exceeded_until": "2026-11-18T00:00:00"},
+            )
+        return _result(
+            "yandex_webmaster",
+            [{"url": url, "status": "queued", "task_id": f"task-{len(self.enqueued)}"}],
+            property_id=host_id,
+        )
+
+
+def test_recrawl_request_caps_the_list_to_the_remaining_quota() -> None:
+    client = FakeRecrawlClient(quota=1)
+    service = SeoService(
+        _config(),
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": client},
+    )
+
+    response = service.recrawl_request(
+        urls=["https://example.com/a", "https://example.com/b", "https://example.com/c"]
+    )
+
+    assert response["ok"] is True
+    assert response["data"]["queued"] == 1
+    assert response["data"]["not_attempted"] == [
+        "https://example.com/b",
+        "https://example.com/c",
+    ]
+    assert response["meta"]["truncated"] is True
+    assert client.enqueued == ["https://example.com/a"]
+
+
+def test_recrawl_request_reports_a_429_and_keeps_earlier_tasks() -> None:
+    client = FakeRecrawlClient(quota=10, reject_url="https://example.com/b")
+    service = SeoService(
+        _config(),
+        secrets=_secrets(webmaster="token"),
+        clients={"yandex_webmaster": client},
+    )
+
+    response = service.recrawl_request(
+        urls=["https://example.com/a", "https://example.com/b", "https://example.com/c"]
+    )
+
+    assert response["ok"] is True
+    assert response["data"]["queued"] == 1
+    assert response["data"]["quota"]["daily_quota"] == 150
+    assert response["data"]["not_attempted"] == [
+        "https://example.com/b",
+        "https://example.com/c",
+    ]
+    assert response["meta"]["truncated"] is True
+    assert client.enqueued == ["https://example.com/a", "https://example.com/b"]
 
 
 # -- weekly report ---------------------------------------------------------------------------

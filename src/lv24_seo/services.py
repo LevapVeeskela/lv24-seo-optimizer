@@ -45,6 +45,7 @@ from lv24_seo.core.errors import (
     CONFIG_INVALID,
     INTERNAL,
     INVALID_INPUT,
+    QUOTA_EXCEEDED,
     UPSTREAM_UNAVAILABLE,
     WRITE_DISABLED,
     SeoError,
@@ -59,6 +60,8 @@ from lv24_seo.crawl.rules import run_all
 from lv24_seo.crawl.sitemap import MAX_BYTES as SITEMAP_MAX_BYTES
 from lv24_seo.crawl.sitemap import OFF_ORIGIN_LOC, SitemapReader
 from lv24_seo.providers.base import (
+    ONE_URL_PER_CALL,
+    RECRAWL_QUOTA_EXCEEDED,
     SOURCE_BING,
     SOURCE_CRUX,
     SOURCE_GSC,
@@ -118,6 +121,17 @@ _WEEKLY_GSC_LIMIT = 5_000
 _WEEKLY_YANDEX_LIMIT = 500
 _GSC_MAX_LIMIT = 50_000
 _YANDEX_MAX_LIMIT = 500
+_YANDEX_SAMPLES_MAX = 1000
+_YANDEX_SAMPLE_KINDS = {
+    "indexing": "indexing_samples",
+    "events": "search_event_samples",
+}
+_YANDEX_HISTORY_KINDS = {
+    "sqi": "sqi_history",
+    "in-search": "in_search_history",
+    "queries": "all_queries_history",
+    "query": "query_history",
+}
 
 # Dashboard stats: a date-dimensioned GSC window has one row per day, and the
 # Yandex top-queries report is capped at 3,000 rows server-side. PSI is run for
@@ -869,22 +883,49 @@ class SeoService:
         meta.update({"host_id": host_id, "limit": size})
         return ok({"host_id": host_id, "rows": rows}, meta=meta, warnings=warnings)
 
-    def yandex_indexing(self) -> dict[str, Any]:
+    def yandex_indexing(
+        self,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> dict[str, Any]:
         """Yandex indexing history, search-URL events, problems and current counters."""
         warnings: list[str] = []
         return self._respond(
             "yandex_indexing",
             warnings,
-            lambda: self._yandex_indexing(warnings),
+            lambda: self._yandex_indexing(warnings, date_from=date_from, date_to=date_to),
         )
 
-    def _yandex_indexing(self, warnings: list[str]) -> dict[str, Any]:
+    def _yandex_indexing(
+        self,
+        warnings: list[str],
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> dict[str, Any]:
         client = self._client_for("yandex_webmaster", warnings)
         host_id = self._yandex_host_id()
 
         summary = _call(client, "summary", host_id)
-        history = _call(client, "indexing_history", host_id)
-        events = _optional_call(client, "search_urls_events", host_id)
+        if date_from is not None or date_to is not None:
+            history = _call(
+                client,
+                "indexing_history",
+                host_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            events = _optional_call(
+                client,
+                "search_urls_events",
+                host_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        else:
+            history = _call(client, "indexing_history", host_id)
+            events = _optional_call(client, "search_urls_events", host_id)
         problems = _call(client, "diagnostics", host_id)
 
         parts = {
@@ -927,6 +968,346 @@ class SeoService:
             meta["indexing_events"] = persisted
             meta["limitations"] = _unique(limitations)
         return ok(data, meta=meta, warnings=_unique(warnings))
+
+    def yandex_samples(
+        self,
+        *,
+        kind: str = "indexing",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Read bounded indexing or search-event samples (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "yandex_samples",
+            warnings,
+            lambda: self._yandex_samples(kind, limit, offset, warnings),
+        )
+
+    def _yandex_samples(
+        self,
+        kind: str,
+        limit: int,
+        offset: int,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        kind_key = kind.strip().lower()
+        method = _YANDEX_SAMPLE_KINDS.get(kind_key)
+        if method is None:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=f"unknown Yandex sample kind {kind!r}",
+                next_action="pass --kind indexing or --kind events",
+            )
+        size = _positive_int(limit, name="limit", maximum=_YANDEX_SAMPLES_MAX)
+        start = _non_negative_int(offset, name="offset")
+        client = self._client_for("yandex_webmaster", warnings)
+        host_id = self._yandex_host_id()
+        result = _call(client, method, host_id, limit=size, offset=start)
+        rows = _result_rows(result)
+        warnings.extend(_result_warnings(result))
+        meta = _result_meta(result, source=SOURCE_YANDEX_WEBMASTER, rows=rows)
+        meta.update({"host_id": host_id, "kind": kind_key, "limit": size, "offset": start})
+        return ok(
+            {"host_id": host_id, "kind": kind_key, "rows": rows},
+            meta=meta,
+            warnings=_unique(warnings),
+        )
+
+    def yandex_sitemaps(
+        self,
+        *,
+        sitemap_id: str = "",
+        parent_id: str = "",
+        limit: int = 100,
+        from_: str = "",
+    ) -> dict[str, Any]:
+        """List the host's sitemaps or read one sitemap by id (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "yandex_sitemaps",
+            warnings,
+            lambda: self._yandex_sitemaps(sitemap_id, parent_id, limit, from_, warnings),
+        )
+
+    def _yandex_sitemaps(
+        self,
+        sitemap_id: str,
+        parent_id: str,
+        limit: int,
+        from_: str,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        client = self._client_for("yandex_webmaster", warnings)
+        host_id = self._yandex_host_id()
+        target = sitemap_id.strip()
+        if target:
+            result = _call(client, "sitemap", host_id, target)
+        else:
+            params: dict[str, Any] = {}
+            if parent_id.strip():
+                params["parent_id"] = parent_id.strip()
+            if from_.strip():
+                params["from_"] = from_.strip()
+            if limit:
+                params["limit"] = _positive_int(
+                    limit,
+                    name="limit",
+                    maximum=_YANDEX_MAX_LIMIT,
+                )
+            result = _call(client, "sitemaps", host_id, **params)
+        rows = _result_rows(result)
+        warnings.extend(_result_warnings(result))
+        meta = _result_meta(result, source=SOURCE_YANDEX_WEBMASTER, rows=rows)
+        meta.update({"host_id": host_id, "limit": limit})
+        if target:
+            meta["sitemap_id"] = target
+        return ok({"host_id": host_id, "rows": rows}, meta=meta, warnings=_unique(warnings))
+
+    def yandex_history(
+        self,
+        *,
+        kind: str = "sqi",
+        query_id: str = "",
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> dict[str, Any]:
+        """Read one Yandex history series: SQI, in-search, all queries or one query."""
+        warnings: list[str] = []
+        return self._respond(
+            "yandex_history",
+            warnings,
+            lambda: self._yandex_history(kind, query_id, date_from, date_to, warnings),
+        )
+
+    def _yandex_history(
+        self,
+        kind: str,
+        query_id: str,
+        date_from: date | None,
+        date_to: date | None,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        kind_key = kind.strip().lower()
+        method = _YANDEX_HISTORY_KINDS.get(kind_key)
+        if method is None:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=f"unknown Yandex history kind {kind!r}",
+                next_action="pass --kind sqi, in-search, queries or query",
+            )
+        target = query_id.strip()
+        client = self._client_for("yandex_webmaster", warnings)
+        host_id = self._yandex_host_id()
+        if kind_key == "query":
+            if not target:
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message="query_id is required for --kind query",
+                    next_action="pass --query-id from `lv24-seo yandex queries`",
+                )
+            result = _call(
+                client,
+                method,
+                host_id,
+                target,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        else:
+            if target:
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message="query_id is only valid with --kind query",
+                    next_action="drop --query-id or use --kind query",
+                )
+            result = _call(client, method, host_id, date_from=date_from, date_to=date_to)
+        rows = _result_rows(result)
+        warnings.extend(_result_warnings(result))
+        meta = _result_meta(result, source=SOURCE_YANDEX_WEBMASTER, rows=rows)
+        meta.update(
+            {
+                "host_id": host_id,
+                "kind": kind_key,
+                "date_from": date_from.isoformat() if date_from else None,
+                "date_to": date_to.isoformat() if date_to else None,
+            }
+        )
+        if target:
+            meta["query_id"] = target
+        return ok(
+            {"host_id": host_id, "kind": kind_key, "rows": rows},
+            meta=meta,
+            warnings=_unique(warnings),
+        )
+
+    def yandex_queue(
+        self,
+        *,
+        task_id: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> dict[str, Any]:
+        """Read the Yandex recrawl queue or one task by id (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "yandex_queue",
+            warnings,
+            lambda: self._yandex_queue(task_id, limit, offset, date_from, date_to, warnings),
+        )
+
+    def _yandex_queue(
+        self,
+        task_id: str,
+        limit: int,
+        offset: int,
+        date_from: date | None,
+        date_to: date | None,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        client = self._client_for("yandex_webmaster", warnings)
+        host_id = self._yandex_host_id()
+        target = task_id.strip()
+        if target:
+            result = _call(client, "recrawl_task", host_id, target)
+        else:
+            size = _positive_int(limit, name="limit", maximum=_YANDEX_MAX_LIMIT)
+            start = _non_negative_int(offset, name="offset")
+            result = _call(
+                client,
+                "recrawl_queue",
+                host_id,
+                offset=start,
+                limit=size,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        rows = _result_rows(result)
+        warnings.extend(_result_warnings(result))
+        meta = _result_meta(result, source=SOURCE_YANDEX_WEBMASTER, rows=rows)
+        meta["host_id"] = host_id
+        if target:
+            meta["task_id"] = target
+        return ok({"host_id": host_id, "rows": rows}, meta=meta, warnings=_unique(warnings))
+
+    def recrawl_request(
+        self,
+        *,
+        host_id: str = "",
+        urls: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        """Queue URLs for Yandex recrawl, one provider request per URL.
+
+        The caller owns the two-phase write gate. The remaining daily quota is read first and
+        the list is capped to it; a ``429`` is reported as ``quota`` with the remaining URLs
+        listed in ``not_attempted``. ``202`` rows carry ``task_id`` and ``quota_remainder``;
+        ``409`` rows are ``already_queued`` and do not consume quota.
+        """
+        warnings: list[str] = []
+        return self._respond(
+            "recrawl_request",
+            warnings,
+            lambda: self._recrawl_request(host_id, urls, warnings),
+        )
+
+    def _recrawl_request(
+        self,
+        host_id: str,
+        urls: Sequence[str] | None,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        target = host_id.strip() if isinstance(host_id, str) else ""
+        if not target:
+            target = self._yandex_host_id()
+        cleaned: list[str] = []
+        for value in urls or ():
+            url = _absolute_http_url(str(value), name="urls[]")
+            if url not in cleaned:
+                cleaned.append(url)
+        if not cleaned:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="at least one URL is required",
+                next_action="pass one or more absolute http(s) URLs",
+            )
+
+        client = self._client_for("yandex_webmaster", warnings)
+        quota_before = self._recrawl_quota_row(client, target, warnings)
+        allowed = cleaned
+        not_attempted: list[str] = []
+        if quota_before is not None:
+            remainder = _int_or_none(quota_before.get("quota_remainder"))
+            if remainder is not None:
+                allowed = cleaned[: max(0, remainder)]
+                not_attempted = cleaned[len(allowed) :]
+
+        rows: list[dict[str, Any]] = []
+        quota: dict[str, Any] | None = None
+        for index, url in enumerate(allowed):
+            try:
+                result = _call(client, "recrawl_enqueue", target, url)
+            except SeoError as exc:
+                if exc.code != QUOTA_EXCEEDED:
+                    raise
+                quota = dict(exc.detail)
+                not_attempted = cleaned[index:]
+                break
+            rows.extend(_result_rows(result))
+            warnings.extend(_result_warnings(result))
+
+        queued = sum(1 for row in rows if row.get("status") == "queued")
+        already = sum(1 for row in rows if row.get("status") == "already_queued")
+        limitations = [ONE_URL_PER_CALL]
+        if not_attempted:
+            limitations.append(RECRAWL_QUOTA_EXCEEDED)
+            warnings.append(
+                f"yandex_webmaster: {len(not_attempted)} URL(s) were not queued because the "
+                "daily recrawl quota is exhausted"
+            )
+        data: dict[str, Any] = {
+            "host_id": target,
+            "rows": rows,
+            "queued": queued,
+            "already_queued": already,
+            "not_attempted": not_attempted,
+        }
+        if quota_before is not None:
+            data["quota_before"] = quota_before
+        if quota is not None:
+            data["quota"] = quota
+        meta: dict[str, Any] = {
+            "source": SOURCE_YANDEX_WEBMASTER,
+            "host_id": target,
+            "queued": queued,
+            "already_queued": already,
+            "not_attempted": len(not_attempted),
+            "truncated": bool(not_attempted),
+            "limitations": limitations,
+        }
+        if quota_before is not None:
+            meta["quota_before"] = quota_before
+        if quota is not None:
+            meta["quota"] = quota
+        return ok(data, meta=meta, warnings=_unique(warnings))
+
+    def _recrawl_quota_row(
+        self,
+        client: object,
+        host_id: str,
+        warnings: list[str],
+    ) -> dict[str, Any] | None:
+        """Read the remaining recrawl quota; a failure is a warning, never a failed write."""
+        try:
+            result = _optional_call(client, "recrawl_quota", host_id)
+            if result is None:
+                return None
+            rows = _result_rows(result)
+        except SeoError as exc:
+            warnings.append(f"yandex_webmaster: recrawl quota read failed ({exc.code})")
+            return None
+        return rows[0] if rows else None
 
     def _persist_indexing_events(
         self,
@@ -3807,6 +4188,16 @@ def _int_of(value: object) -> int:
     if isinstance(value, float) and value.is_integer():
         return int(value)
     return 0
+
+
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
 
 
 def _iso_or_empty(value: object) -> str:

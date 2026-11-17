@@ -19,6 +19,11 @@ lv24-seo init --property https://example.com
 lv24-seo auth set --provider gsc --stdin   # нужен extra: pip install "lv24-seo[secrets]"
 lv24-seo auth set --provider metrika --stdin  # у Метрики отдельный auth-провайдер и токен
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
+lv24-seo yandex indexing --date-from 2026-10-01 --date-to 2026-10-31 --json  # история + appeared/removed
+lv24-seo yandex sitemaps --json                 # id, URL, счётчики и ошибки sitemap (read-only)
+lv24-seo yandex history --kind sqi --json       # SQI / in-search / queries / query
+lv24-seo yandex queue --json                    # задачи recrawl + total провайдера (read-only)
+lv24-seo yandex recrawl --url https://example.com/page --allow-write  # план; confirm — POST
 lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown            # разница двух сохранённых недельных снапшотов
 lv24-seo stats --days 7 --json             # срез по провайдерам для дашборда
@@ -91,9 +96,9 @@ Windows) общий только при одном и том же workspace/data
 `seo_weekly_report` и `yandex_indexing_state` сохраняют локальные снимки или события индексации,
 поэтому у них `readOnlyHint: false` (они не destructive). Два write-инструмента требуют
 `allow_write=true`, помечены `destructiveHint: true` и используют тот же двухфазный поток
-`plan_hash` / `confirm_token` и `LV24_SEO_WRITE_SECRET`, что и CLI; Bing sitemap submit и Bing
-URL submit подключены,
-а GSC submit, Bing delete и Yandex recrawl отвечают `WRITE_DISABLED`, ничего не отправляя.
+`plan_hash` / `confirm_token` и `LV24_SEO_WRITE_SECRET`, что и CLI; Bing sitemap submit, Bing
+URL submit и Yandex recrawl подключены,
+а GSC submit и Bing delete отвечают `WRITE_DISABLED`, ничего не отправляя.
 
 | Инструмент | Тип | `readOnlyHint` | `destructiveHint` | Что делает |
 |---|---|---|---|---|
@@ -107,7 +112,7 @@ URL submit подключены,
 | `seo_log_analysis` | чтение | `true` | `false` | Один локальный nginx JSON-лог: боты по дням и доля мусорного обхода (UA-only) |
 | `seo_indexing_triage` | чтение | `true` | `false` | Группирует проблемы индексации в план действий |
 | `seo_opportunities` | чтение | `true` | `false` | Striking distance и деградация контента |
-| `seo_recrawl_request` | запись | `false` | `true` | Ставит URL в очередь переобхода Яндекса (gated; `WRITE_DISABLED` в этой сборке) |
+| `seo_recrawl_request` | запись | `false` | `true` | Ставит URL в очередь переобхода Яндекса (gated; один POST на URL, не больше остатка дневной квоты) |
 | `seo_sitemap_submit` | запись | `false` | `true` | Отправляет sitemap в Bing или GSC (gated; Bing submit подключён, GSC/delete — `WRITE_DISABLED`) |
 
 Ресурсы: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Промпты:
@@ -129,8 +134,8 @@ URL submit подключены,
 Бета (v0.10.0). `0.10.0` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-17): Bing URL submit,
 остаток квоты, статусы sitemap-фидов и crawl issues с битмаской. Десктоп `0.8.0` — текущий
 релиз десктопа, он несёт движок `0.10.0` и требует `>= 0.10.0`. Открытые честные ограничения: GSC
-sitemap submit, Bing sitemap delete и `recrawl` отвечают `WRITE_DISABLED` (Bing sitemap/URL submit
-и IndexNow реально отправляют),
+sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing sitemap/URL submit, IndexNow
+и Yandex recrawl реально отправляют),
 `crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`), анализ логов
 определяет ботов только по User-Agent, `portfolio list` и `backup restore` доступны только в CLI,
 а CWV-секция строится лишь по сохранённым field-данным CrUX/PSI. GSC принимает и обычный OAuth
