@@ -122,8 +122,8 @@ notification settings, Yandex Business card/reviews.
 | Auth | one API key per user (Bing Webmaster → Settings → API access) |
 | Free quota | free; remaining daily/monthly submission quota is reported by `GetUrlSubmissionQuota`, 500 URLs per `SubmitUrlbatch` |
 | Freshness | `data_age_days` is the age of the newest dated row in that feed: `Date` for `GetQueryStats`, `LastCrawled` (falling back to `Submitted`) for `GetFeeds`. `GetCrawlIssues` has no date and reports `0`, which is not proof of freshness. |
-| IndexNow | `https://api.indexnow.org/indexnow` (also `yandex.com/indexnow`), key file `https://host/<key>.txt` (8–128 hex) |
-| Limits | 10k URLs per IndexNow POST; engines apply their own daily caps; **Google does not participate** |
+| IndexNow | `https://api.indexnow.org/indexnow` (also `yandex.com/indexnow`), key file `https://host/<key>.txt` (8–128 chars, `[A-Za-z0-9-]`) |
+| Limits | 10k URLs per IndexNow POST; engines apply their own daily caps; **Google does not participate**. A non-root `keyLocation` only allows URLs under its directory prefix. |
 
 **URL submission.** `SubmitUrlbatch` accepts at most **500 URLs** per call:
 `POST .../SubmitUrlbatch?apikey=KEY` with `{"siteUrl": "...", "urlList": [...]}` and returns
@@ -172,32 +172,68 @@ Bing submit is wired.
 `lv24-seo indexnow submit --from-sitemap`. The host, key and key location resolve from
 `providers.bing.site`, `providers.bing.indexnow_key` and
 `providers.bing.indexnow_key_location` (default `https://<host>/<key>.txt`); both new fields are
-public identifiers, safe in `seo.toml`, unlike the `bing_api_key` secret. A `<urlset>` is read
+public identifiers, safe in `seo.toml`, unlike the `bing_api_key` secret. The key must be 8–128
+characters from `A-Z`, `a-z`, `0-9` and `-`; it is validated before the plan and never echoed.
+When `keyLocation` is set, the protocol scopes the submission to that key file's directory: a key at
+`https://example.com/catalog/<key>.txt` may submit only URLs under `https://example.com/catalog/`,
+and the host must match. The engine checks this during the dry run (and again in the adapter), so a
+bad location is `INVALID_INPUT` before any request. A `<urlset>` is read
 directly and a `<sitemapindex>` is bounded to the root plus five child sitemaps and 10,000 URLs.
 Explicit `--url` values are merged, URLs outside the host are skipped, and the envelope reports
 `truncated`, `total` and `limitations`. The apply re-fetches the sitemap; a changed URL set
-invalidates the plan token with `CONFIRM_REQUIRED`. A 422 response means the key file is missing
-or mismatched and is reported with the exact key-file URL.
+invalidates the plan token with `CONFIRM_REQUIRED`.
+
+**IndexNow responses.** The protocol documents no per-URL status. `200` means accepted (never
+"indexed"), `202` means accepted-pending: the engine still has to validate the key, so the result
+carries a warning and `indexnow_accepted_pending`. `400` is an invalid format (`INVALID_INPUT`),
+`403` is a missing/mismatched key file (`AUTH_INVALID`, with the exact expected key URL), `422` is a
+host/key-schema mismatch (`INVALID_INPUT`) and `429` is potential spam or quota (`QUOTA_EXCEEDED`,
+retryable). Error messages keep the host, path and status; the key appears only inside the public
+key-file URL that the operator must publish.
 
 ## 5. Chrome UX Report (CrUX) and PageSpeed Insights (PSI)
 
 | | |
 |---|---|
-| CrUX | `POST https://chromeuxreport.googleapis.com/v1/records:queryRecord?key=…` — 150 QPM/project, cannot be raised; 28-day rolling p75; 404 when a URL has too little traffic |
-| PSI | `GET https://www.googleapis.com/pagespeedonline/v5/runPagespeed` — ~25k/day; Lighthouse lab + (deprecated) field block |
+| CrUX | `POST https://chromeuxreport.googleapis.com/v1/records:queryRecord?key=…` and `records:queryHistoryRecord` — 150 QPM/project, cannot be raised; 28-day rolling p75; 404 when a URL has too little traffic |
+| PSI | `GET https://www.googleapis.com/pagespeedonline/v5/runPagespeed` — ~25k/day; Lighthouse lab categories, audits and (deprecated) field block |
 | Metrics | LCP ≤ 2.5 s, INP ≤ 200 ms, CLS ≤ 0.1 (p75) |
 
 **Field vs lab.** CrUX is the field source of record. `lv24-seo cwv collect` queries it per URL and
 `formFactor` (`PHONE`, `DESKTOP`, `TABLET`) and persists each p75 into `metric_daily` as
 `source=crux`, `scope=<device>`, `key=<url>`, metric `LCP`/`INP`/`CLS`/`FCP`/`TTFB`, dated on the
 fetch day. That is the exact shape the weekly CWV-by-template section reads. A 404 is "no field
-data" (`low_traffic`), not a zero row. CrUX data lags ~2 days, so `data_age_days` is never 0.
+data" (`low_traffic`), not a zero row.
+
+The collection period is not guessed: `data_age_days` is `today - collectionPeriod.lastDate`, and
+each row carries `first_date`/`last_date` while `meta.collection_period` carries the same bounds.
+Only when the provider omits the period (or returns 404)
+does the adapter fall back to the old two-day heuristic, adding `crux_period_missing`. A URL that
+CrUX silently normalizes produces a warning plus `crux_url_normalized`, so a caller never assumes
+the requested spelling was queried verbatim.
+
+`lv24-seo cwv history` uses `records:queryHistoryRecord`: one row per weekly collection period
+(newest last), `first_date`/`last_date`, an optional canonical device and the p75 values
+`lcp`/`inp`/`cls`/`fcp`/`ttfb`/`fid`. `--weeks` (1..40) is sent as `collectionPeriodCount` and
+enforced locally. The API returns `null` p75 entries for periods without eligible data; those
+become `crux_history_gaps` and are never filled. Fewer periods than requested adds
+`crux_history_short`; non-CWV metrics are filtered with `crux_history_metrics_filtered`. History is
+read-only and not persisted.
 
 PSI is **lab** data: one synthetic Lighthouse load, never averaged across runs and never merged with
 field p75. `cwv collect --source psi` returns lab rows for diagnosis but does not persist them; a
 stored Lighthouse score would be read back as field data by the CWV builder. PSI has only `mobile`
 and `desktop` strategies: `tablet` is skipped and reported as `psi_tablet_unsupported`, never mapped
 to another device. PSI works keyless; CrUX requires a Google API key.
+
+`lv24-seo cwv audits` exposes the Lighthouse diagnostics that the category score alone hides: up to
+100 audit rows with `id`, `title`, `score`, `display_value`, `description` (plain text, HTML
+stripped), `details_type`, `overall_savings_ms`, `overall_savings_bytes` and `items_count`. Item
+arrays are never returned; `meta.total`/`meta.truncated`/`psi_audits_cap` state the bound. The
+adapter also surfaces `runtimeError` (`psi_runtime_error`), a CAPTCHA (`psi_captcha`) and a
+`finalUrl` that differs from the requested URL (`psi_final_url_differs`), plus
+`analysisUTCTimestamp` and `finalUrl` in meta. An HTTP 200 Lighthouse run with a runtime error is
+therefore not reported as clean. Nothing is persisted.
 
 **Rules:** use CrUX for field data, PSI for lab diagnosis only, cache 24 h, never average lab runs.
 

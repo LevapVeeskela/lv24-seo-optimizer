@@ -164,6 +164,9 @@ _CWV_METRICS: dict[str, str] = {
 # PSI has no tablet strategy. Mapping tablet to mobile/desktop would fabricate a device,
 # so the pair is skipped and reported as a limitation instead.
 _CWV_PSI_STRATEGIES: dict[str, str] = {"phone": "mobile", "desktop": "desktop"}
+# CrUX history rows carry period bounds plus an optional device; everything else is a metric.
+_CWV_HISTORY_ROW_KEYS = frozenset({"first_date", "last_date", "device"})
+_CWV_HISTORY_METRIC_ORDER = ("lcp", "inp", "cls", "fcp", "ttfb", "fid")
 # Provider event history can be long; one command must not write an unbounded number of rows.
 # The digest reads at most _DIGEST_EVIDENCE_LIMIT events, so this is already generous.
 _INDEXING_EVENTS_LIMIT = 500
@@ -1327,6 +1330,7 @@ class SeoService:
         device: str = "phone",
         source: str = "crux",
         limit: int = 10,
+        categories: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """Collect URL+device Core Web Vitals and persist CrUX field rows.
 
@@ -1335,12 +1339,15 @@ class SeoService:
         which is exactly what the weekly CWV section reads. PSI is lab data and is
         never persisted: the builder treats every stored p75 as field data, so
         writing a Lighthouse score there would pollute the field series.
+
+        ``categories`` only affects the PSI lab path; CrUX has no Lighthouse
+        categories. Omitted, it keeps the historical ``performance`` + ``seo`` set.
         """
         warnings: list[str] = []
         return self._respond(
             "cwv_collect",
             warnings,
-            lambda: self._cwv_collect(urls, device, source, limit, warnings),
+            lambda: self._cwv_collect(urls, device, source, limit, categories, warnings),
         )
 
     def _cwv_collect(
@@ -1349,6 +1356,7 @@ class SeoService:
         device: str,
         source: str,
         limit: int,
+        categories: Sequence[str] | None,
         warnings: list[str],
     ) -> dict[str, Any]:
         source_name = _cwv_source(source)
@@ -1373,6 +1381,8 @@ class SeoService:
             limitations.append("cwv_lab_ignored")
             if "tablet" in devices:
                 limitations.append("psi_tablet_unsupported")
+        if categories and source_name == "crux":
+            limitations.append("cwv_categories_ignored")
 
         crux_client: object | None = None
         if source_name in {"crux", "both"}:
@@ -1437,7 +1447,13 @@ class SeoService:
                 warnings.append("psi: tablet is not supported; no lab run was made")
             for url in selected:
                 for form_factor, strategy in strategies:
-                    result = _call(psi, "run", url, strategy=strategy)
+                    result = _call(
+                        psi,
+                        "run",
+                        url,
+                        strategy=strategy,
+                        categories=_cwv_categories(categories),
+                    )
                     psi_calls += 1
                     data_ages.append(_result_data_age(result))
                     limitations.extend(_result_limitations(result))
@@ -1514,6 +1530,114 @@ class SeoService:
             "limitations": _unique(limitations),
         }
         return ok(data, meta=meta, warnings=_unique(warnings))
+
+    def cwv_audits(
+        self,
+        *,
+        url: str,
+        strategy: str = "mobile",
+        categories: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        """Run one Lighthouse lab audit list (read-only, never persisted)."""
+        warnings: list[str] = []
+        return self._respond(
+            "cwv_audits",
+            warnings,
+            lambda: self._cwv_audits(url, strategy, categories, warnings),
+        )
+
+    def _cwv_audits(
+        self,
+        url: str,
+        strategy: str,
+        categories: Sequence[str] | None,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        psi = self._client_for(SOURCE_PSI, warnings)
+        requested = _cwv_categories(categories)
+        report = _call(psi, "audits", url, strategy=strategy, categories=requested)
+        audit_rows = _result_rows(report)
+        raw_categories: object = getattr(report, "categories", ())
+        category_rows = (
+            [dict(row) for row in raw_categories if isinstance(row, Mapping)]
+            if isinstance(raw_categories, Sequence)
+            else []
+        )
+        meta = _result_meta(report, source=SOURCE_PSI, rows=audit_rows)
+        meta.update(
+            {
+                "strategy": _string_or(getattr(report, "strategy", strategy), strategy),
+                "categories": len(category_rows),
+                "analysis_utc_timestamp": _string_or(
+                    getattr(report, "analysis_utc_timestamp", ""), ""
+                ),
+                "final_url": _string_or(getattr(report, "final_url", ""), ""),
+            }
+        )
+        data = {
+            "url": url,
+            "strategy": meta["strategy"],
+            "categories": category_rows,
+            "audits": audit_rows,
+        }
+        return ok(data, meta=meta, warnings=_unique([*warnings, *_result_warnings(report)]))
+
+    def cwv_history(
+        self,
+        *,
+        url: str = "",
+        origin: str = "",
+        device: str = "",
+        weeks: int = 25,
+    ) -> dict[str, Any]:
+        """Read weekly CrUX p75 history (read-only; nothing is persisted)."""
+        warnings: list[str] = []
+        return self._respond(
+            "cwv_history",
+            warnings,
+            lambda: self._cwv_history(url, origin, device, weeks, warnings),
+        )
+
+    def _cwv_history(
+        self,
+        url: str,
+        origin: str,
+        device: str,
+        weeks: int,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        crux = self._client_for(SOURCE_CRUX, warnings)
+        result = _call(
+            crux,
+            "history",
+            origin=origin,
+            url=url,
+            form_factor=device.strip() or None,
+            weeks=weeks,
+        )
+        rows = _result_rows(result)
+        metric_keys = sorted(
+            {key for row in rows for key in row if key not in _CWV_HISTORY_ROW_KEYS},
+            key=_cwv_history_metric_order,
+        )
+        canonical_device = _cwv_history_device(device)
+        meta = _result_meta(result, source=SOURCE_CRUX, rows=rows)
+        meta.update(
+            {
+                "weeks_requested": weeks,
+                "weeks_returned": len(rows),
+                "device": canonical_device,
+            }
+        )
+        data = {
+            "target": _string_or(getattr(result, "property_id", ""), ""),
+            "scope": "url" if url.strip() else "origin",
+            "device": canonical_device,
+            "weeks_requested": weeks,
+            "periods": rows,
+            "metrics": metric_keys,
+        }
+        return ok(data, meta=meta, warnings=_unique([*warnings, *_result_warnings(result)]))
 
     def crawl_and_store(
         self,
@@ -3754,6 +3878,28 @@ def _cwv_metric(value: object) -> str | None:
     return _CWV_METRICS.get(value.strip().casefold())
 
 
+def _cwv_categories(values: Sequence[str] | None) -> tuple[str, ...]:
+    """PSI Lighthouse categories; omitted keeps the historical performance+seo set."""
+    if not values:
+        return ("performance", "seo")
+    return tuple(values)
+
+
+def _cwv_history_metric_order(metric: str) -> tuple[int, str]:
+    try:
+        return (_CWV_HISTORY_METRIC_ORDER.index(metric), metric)
+    except ValueError:
+        return (len(_CWV_HISTORY_METRIC_ORDER), metric)
+
+
+def _cwv_history_device(value: str) -> str:
+    """Canonical device label; empty means the device-agnostic CrUX record."""
+    device = value.strip().casefold()
+    if not device:
+        return "all"
+    return _CWV_DEVICE_ALIASES.get(device, device)
+
+
 def _positive_int(value: object, *, name: str, maximum: int | None = None) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise SeoError(
@@ -3813,6 +3959,10 @@ def _iso_or_empty(value: object) -> str:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     return ""
+
+
+def _string_or(value: object, default: str) -> str:
+    return value if isinstance(value, str) and value else default
 
 
 def _list_of_str(value: object) -> list[str]:

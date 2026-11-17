@@ -485,7 +485,15 @@ def test_cwv_collect_help_lists_the_documented_options() -> None:
     # Rich may split an option across lines or inject ANSI resets at narrow widths.
     plain = re.sub(r"\x1b\[[0-9;]*m", "", help_text)
     compact = re.sub(r"\s+", "", plain)
-    for flag in ("--url", "--device", "--source", "--limit", "--config", "--json"):
+    for flag in (
+        "--url",
+        "--device",
+        "--source",
+        "--category",
+        "--limit",
+        "--config",
+        "--json",
+    ):
         assert flag in compact
     assert "phone,desktop,tabletorall" in compact
 
@@ -502,9 +510,16 @@ def test_cwv_collect_emits_the_standard_envelope(
         device: str = "phone",
         source: str = "crux",
         limit: int = 10,
+        categories: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         del self
-        captured.update(urls=list(urls), device=device, source=source, limit=limit)
+        captured.update(
+            urls=list(urls),
+            device=device,
+            source=source,
+            limit=limit,
+            categories=list(categories or []),
+        )
         return ok(
             {
                 "date": "2026-11-16",
@@ -550,6 +565,7 @@ def test_cwv_collect_emits_the_standard_envelope(
         "device": "phone",
         "source": "crux",
         "limit": 5,
+        "categories": [],
     }
     assert payload["ok"] is True
     assert payload["meta"]["total"] == 1

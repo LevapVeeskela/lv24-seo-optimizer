@@ -67,7 +67,11 @@ from lv24_seo.crawl.fetcher import Fetcher
 from lv24_seo.crawl.sitemap import MAX_BYTES as SITEMAP_MAX_BYTES
 from lv24_seo.crawl.sitemap import SitemapReader
 from lv24_seo.mcp.registry import tools_as_json
-from lv24_seo.providers.bing import indexnow_submit
+from lv24_seo.providers.bing import (
+    indexnow_submit,
+    validate_indexnow_key,
+    validate_indexnow_key_location,
+)
 from lv24_seo.providers.gsc.auth import service_account_file_problem
 from lv24_seo.report.i18n import normalize_locale
 from lv24_seo.report.models import Report, ReportSection
@@ -106,7 +110,7 @@ report_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Build
 cwv_app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Core Web Vitals collection (CrUX field, PSI lab).",
+    help="Core Web Vitals: CrUX field/history, PSI lab/audits.",
 )
 schedule_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Host scheduler jobs.")
 export_app = typer.Typer(
@@ -121,7 +125,7 @@ app.add_typer(sitemap_app, name="sitemap", help="Sitemap submission (write, gate
 app.add_typer(indexnow_app, name="indexnow", help="IndexNow submission (write, gated).")
 app.add_typer(bing_app, name="bing", help="Bing URL submission, quota and sitemap status.")
 app.add_typer(report_app, name="report", help="Build reports.")
-app.add_typer(cwv_app, name="cwv", help="Collect URL+device Core Web Vitals.")
+app.add_typer(cwv_app, name="cwv", help="Core Web Vitals: collect, audits and history.")
 app.add_typer(schedule_app, name="schedule", help="Host scheduler jobs.")
 app.add_typer(export_app, name="export", help="Export machine contracts.")
 app.add_typer(logs_app, name="logs", help="Analyze local nginx JSON access logs (read-only).")
@@ -872,6 +876,8 @@ def indexnow_submit_command(
         discovered = _dedupe([*explicit_urls, *sitemap_urls])
         total = len(discovered)
         targets = discovered[:_INDEXNOW_URL_LIMIT]
+        # Fail the dry run, not the apply: the key file's directory bounds the URL set.
+        validate_indexnow_key_location(key_location=key_location, host=host_value, urls=targets)
         truncated = sitemap_truncated or len(discovered) > len(targets)
         limitations = _sitemap_write_limitations(
             action="indexnow",
@@ -1475,14 +1481,7 @@ def _host_from_site(site: str) -> str:
 
 
 def _indexnow_key(value: str) -> str:
-    key = value.strip()
-    if not key or "://" in key or "/" in key:
-        raise SeoError(
-            code=INVALID_INPUT,
-            message="IndexNow key must be a non-empty bare token",
-            next_action="publish the key at https://<host>/<key>.txt and pass the same key",
-        )
-    return key
+    return validate_indexnow_key(value)
 
 
 def _indexnow_sitemap_url(value: str, config: SeoConfig) -> str:
@@ -1847,6 +1846,16 @@ def cwv_collect(
         str,
         typer.Option("--source", help="crux (field), psi (lab) or both."),
     ] = "crux",
+    category: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--category",
+            help=(
+                "PSI Lighthouse category; repeat for more "
+                "(default: performance and seo). Ignored for crux-only runs."
+            ),
+        ),
+    ] = None,
     limit: Annotated[
         int,
         typer.Option("--limit", min=1, max=50, help="Maximum URLs to query (1..50)."),
@@ -1862,11 +1871,88 @@ def cwv_collect(
     payload = _run(
         config_path,
         lambda service, config: service.cwv_collect(
-            urls=url, device=device, source=source, limit=limit
+            urls=url, device=device, source=source, limit=limit, categories=category
         ),
         persist=True,
     )
     emit(payload, as_json=as_json, lines=_cwv_lines(payload))
+
+
+@cwv_app.command("audits")
+def cwv_audits(
+    url: Annotated[
+        str,
+        typer.Option("--url", help="Absolute page URL for one Lighthouse run."),
+    ],
+    strategy: Annotated[
+        str,
+        typer.Option("--strategy", help="mobile or desktop."),
+    ] = "mobile",
+    category: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--category",
+            help=(
+                "Lighthouse category; repeat for more "
+                "(default: performance and seo). Example: best-practices."
+            ),
+        ),
+    ] = None,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Read Lighthouse audits (lab, read-only) for one URL.
+
+    Returns bounded audit rows with savings and item counts. PSI works without a key.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.cwv_audits(url=url, strategy=strategy, categories=category),
+    )
+    emit(payload, as_json=as_json, lines=_cwv_audits_lines(payload))
+
+
+@cwv_app.command("history")
+def cwv_history(
+    url: Annotated[
+        str,
+        typer.Option("--url", help="Absolute page URL (mutually exclusive with --origin)."),
+    ] = "",
+    origin: Annotated[
+        str,
+        typer.Option("--origin", help="Origin URL, for example https://example.com."),
+    ] = "",
+    device: Annotated[
+        str,
+        typer.Option("--device", help="phone, desktop or tablet; omit for all devices."),
+    ] = "",
+    weeks: Annotated[
+        int,
+        typer.Option("--weeks", min=1, max=40, help="Weekly collection periods to return (1..40)."),
+    ] = 25,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Read weekly CrUX p75 history (read-only; nothing is persisted).
+
+    The newest collection period is last. Missing p75 cells are reported as
+    `crux_history_gaps`, never filled.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.cwv_history(
+            url=url, origin=origin, device=device, weeks=weeks
+        ),
+    )
+    emit(payload, as_json=as_json, lines=_cwv_history_lines(payload))
 
 
 def _cwv_lines(payload: Mapping[str, Any]) -> list[str]:
@@ -1886,6 +1972,77 @@ def _cwv_lines(payload: Mapping[str, Any]) -> list[str]:
     if limitations:
         lines.append("limitations: " + ", ".join(str(item) for item in limitations))
     return lines
+
+
+def _cwv_audits_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    meta = payload.get("meta") or {}
+    if not isinstance(data, Mapping) or not isinstance(meta, Mapping):
+        return ["cwv audits: no data"]
+    audits = [row for row in (data.get("audits") or []) if isinstance(row, Mapping)]
+    categories = [row for row in (data.get("categories") or []) if isinstance(row, Mapping)]
+    lines = [
+        f"psi audits: {len(audits)} audit(s) for {data.get('url') or '-'} "
+        f"({meta.get('strategy') or '-'})"
+    ]
+    if categories:
+        lines.append(
+            "categories: "
+            + ", ".join(
+                f"{row.get('category')} {_score_text(row.get('score'))}" for row in categories
+            )
+        )
+    savings = sorted(
+        (
+            row
+            for row in audits
+            if isinstance(row.get("overall_savings_ms"), (int, float))
+            and not isinstance(row.get("overall_savings_ms"), bool)
+        ),
+        key=lambda row: (-float(row["overall_savings_ms"]), str(row.get("id") or "")),
+    )[:5]
+    for row in savings:
+        lines.append(f"  {row.get('id')}: {row.get('overall_savings_ms')} ms")
+    limitations = meta.get("limitations") or []
+    if limitations:
+        lines.append("limitations: " + ", ".join(str(item) for item in limitations))
+    return lines
+
+
+def _cwv_history_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    meta = payload.get("meta") or {}
+    if not isinstance(data, Mapping) or not isinstance(meta, Mapping):
+        return ["cwv history: no data"]
+    periods = [row for row in (data.get("periods") or []) if isinstance(row, Mapping)]
+    lines = [
+        f"crux history: {len(periods)} period(s) for {data.get('target') or '-'} "
+        f"({data.get('device') or 'all'})"
+    ]
+    if periods:
+        newest = periods[-1]
+        metrics = [
+            name for name in (data.get("metrics") or []) if isinstance(name, str) and name in newest
+        ]
+        values = ", ".join(f"{name} {newest[name]}" for name in metrics)
+        lines.append(
+            f"newest {newest.get('first_date') or '-'}..{newest.get('last_date') or '-'}: "
+            f"{values or 'no values'}"
+        )
+    limitations = meta.get("limitations") or []
+    if limitations:
+        lines.append("limitations: " + ", ".join(str(item) for item in limitations))
+    return lines
+
+
+def _score_text(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "-"
+    return f"{float(value):.2f}"
 
 
 # -- automation ------------------------------------------------------------------------------

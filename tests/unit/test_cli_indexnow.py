@@ -377,6 +377,68 @@ def test_provider_422_surfaces_the_key_file_next_action(
     assert f"https://{HOST}/{KEY}.txt" in payload["error"]["next_action"]
 
 
+def test_invalid_key_is_rejected_before_the_sitemap_or_network(
+    workspace: Path, write_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_sitemap(_url: str, _host: str) -> Any:
+        raise AssertionError("the sitemap must not be read when the key is invalid")
+
+    monkeypatch.setattr(cli_main, "_read_sitemap_inventory", no_sitemap)
+
+    result = _invoke(*_args(workspace, "--from-sitemap", "--key", "short", "--allow-write"))
+
+    assert result.exit_code == 2
+    payload = _payload(result)
+    assert payload["error"]["code"] == "INVALID_INPUT"
+    assert "8-128" in payload["error"]["message"]
+
+
+def _key_location_workspace(tmp_path: Path) -> Path:
+    path = tmp_path / "seo.toml"
+    path.write_text(
+        "[project]\n"
+        'base_url = "https://example.com"\n'
+        "\n"
+        "[providers.bing]\n"
+        'site = "https://example.com"\n'
+        f'indexnow_key = "{KEY}"\n'
+        'indexnow_key_location = "https://example.com/catalog/abc12345.txt"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "data").mkdir(exist_ok=True)
+    return path
+
+
+def test_urls_outside_the_key_location_prefix_are_rejected_before_the_plan(
+    tmp_path: Path, write_env: None
+) -> None:
+    workspace = _key_location_workspace(tmp_path)
+
+    result = _invoke(*_args(workspace, "--url", "https://example.com/help/x", "--allow-write"))
+
+    assert result.exit_code == 2
+    payload = _payload(result)
+    assert payload["error"]["code"] == "INVALID_INPUT"
+    assert "/catalog/" in payload["error"]["message"]
+
+
+def test_urls_under_the_key_location_prefix_pass_the_plan(
+    tmp_path: Path, write_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _key_location_workspace(tmp_path)
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(cli_main, "indexnow_submit", lambda **kwargs: calls.append(kwargs))
+
+    result = _invoke(*_args(workspace, "--url", "https://example.com/catalog/x", "--allow-write"))
+
+    assert result.exit_code == 0, result.output
+    payload = _payload(result)
+    assert payload["data"]["plan"]["payload"]["key_location"] == (
+        "https://example.com/catalog/abc12345.txt"
+    )
+    assert calls == []
+
+
 # -- the real bounded sitemap reader ---------------------------------------------------------
 
 

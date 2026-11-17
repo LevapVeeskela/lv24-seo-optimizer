@@ -99,6 +99,9 @@ lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
 lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown                 # week-over-week diff of stored snapshots
 lv24-seo stats --days 7 --json                  # read-only per-provider dashboard snapshot
+lv24-seo cwv collect --url https://example.com/ --device phone --source crux --json
+lv24-seo cwv audits --url https://example.com/ --category performance --json
+lv24-seo cwv history --origin https://example.com --weeks 12 --json
 lv24-seo crawl --json                           # issues + sitemap↔crawl coverage diff
 lv24-seo logs analyze --file /var/log/nginx/access.log --json   # bot rollups + crawl waste (read-only)
 lv24-seo tasks list --json                      # local finding lifecycle (open → verified)
@@ -189,7 +192,7 @@ audit → plan → fix → verify.
 
 | Surface | Examples |
 |---|---|
-| **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions, and a Core Web Vitals section fed by `cwv collect` (CrUX URL+device p75, PSI lab) |
+| **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions, and a Core Web Vitals section fed by `cwv collect` (CrUX URL+device p75, PSI lab); `cwv audits` returns bounded Lighthouse diagnostics and `cwv history` weekly CrUX p75 periods |
 | **MCP tools** | 12 tools across GSC, Yandex, crawl, reports, logs and gated writes — see the table below |
 | **CLI** | 23 top-level commands (16 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `bing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`; read commands accept `--strict` to exit `5` on truncated data |
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
@@ -232,8 +235,8 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 | Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics | recrawl disabled |
 | Yandex Metrika | yes | sessions and users; filtered reports through adapter; separate `metrika` auth provider (`yandex_metrika_token`) | — |
 | Bing Webmaster + IndexNow | yes | queries, crawl issues (decoded bitmask), remaining URL quota, sitemap feeds, sitemap submit, URL submit, one-click IndexNow from the sitemap | sitemap submit + URL submit + IndexNow submit |
-| Chrome UX Report | yes (API key) | origin-level field CWV | — |
-| PageSpeed Insights | yes | lab audits per URL | — |
+| Chrome UX Report | yes (API key) | URL+device field p75, weekly p75 history, collection period and URL-normalization warnings | — |
+| PageSpeed Insights | yes | lab category scores and bounded Lighthouse audits per URL, with runtime-error/redirect warnings | — |
 | Your site | — | crawl, robots, sitemap, JSON-LD, hreflang, links | — |
 | nginx access logs | — | `logs analyze` + `seo_log_analysis`: bot/day rollups and crawl-waste share (UA-only triage, 100 MiB cap); nothing stored | — |
 

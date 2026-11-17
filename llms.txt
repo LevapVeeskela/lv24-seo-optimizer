@@ -15,15 +15,23 @@
   two-phase write gate; `bing submit` calls `SubmitUrlbatch` in 500-URL batches with a quota
   pre-check, deduplication and `accepted` (not indexed) results; `indexnow submit --from-sitemap`
   reads a bounded sitemap (root + five children, 10k URLs) and resolves host/key from
-  `[providers.bing]`. GSC sitemap submit and Bing sitemap delete stay `WRITE_DISABLED`.
+  `[providers.bing]`. IndexNow validates the key (8-128 `[A-Za-z0-9-]`) and the `keyLocation`
+  directory prefix before the plan; `200`/`202` are accepted/accepted-pending, `400` format,
+  `403` key file, `422` host/key mismatch, `429` spam/quota. GSC sitemap submit and Bing sitemap
+  delete stay `WRITE_DISABLED`.
 - Bing reads: `bing quota` reports remaining daily/monthly submissions (Bing's `DailyQuota` /
   `MonthlyQuota` are remaining, not totals; the monthly window can bind first and its reset is
   undocumented); `bing sitemaps [--details FEED_URL]` lists feed fields and states that per-URL
   errors/crawl status are not exposed; `bing issues` decodes the `Issues` bitmask
   (`1=301, 2=302, 4=4xx, 8=5xx, 16=robots, 32=malware, 64=important_robots, 128=dns, 256=timeout`).
-- Core Web Vitals writer: `lv24-seo cwv collect --url URL [--url URL ...] --device all --source crux`
+- Core Web Vitals: `lv24-seo cwv collect --url URL [--url URL ...] --device all --source crux`
   persists CrUX URL+device p75 rows (`metric_daily`: `source=crux`, `scope=<device>`, `key=<url>`)
-  for the weekly `cwv` section; PSI lab rows are returned but never persisted.
+  for the weekly `cwv` section; PSI lab rows are returned but never persisted. `--category` selects
+  PSI Lighthouse categories. `cwv audits --url URL` returns bounded lab audit rows (savings, details
+  type, item counts, plain-text descriptions) plus `runtimeError`/CAPTCHA/`finalUrl` warnings.
+  `cwv history (--url URL | --origin ORIGIN) [--device ...] [--weeks 1..40]` returns weekly CrUX p75
+  periods with `collectionPeriod` bounds, honest truncation and `null`-gap reporting; nothing is
+  persisted.
 - Backup restore has two modes: `--to DIR` extracts into a new directory (no write gate, never
   overwrites; an existing directory is refused) and `--config ABS` replaces the current workspace
   only with `--allow-write --confirm TOKEN`.
@@ -88,6 +96,8 @@ lv24-seo bing submit --from-sitemap --allow-write --config ./seo.toml --json    
 lv24-seo bing quota --config ./seo.toml --json                                    # remaining daily/monthly quota
 lv24-seo bing sitemaps --config ./seo.toml --json                                 # feed status; no per-URL errors
 lv24-seo bing issues --config ./seo.toml --json                                   # decoded Issues bitmask
+lv24-seo cwv audits --url https://example.com/ --category performance --json      # bounded Lighthouse audits
+lv24-seo cwv history --origin https://example.com --device phone --weeks 12 --json  # weekly CrUX p75
 lv24-seo indexnow submit --from-sitemap --allow-write --config ./seo.toml --json  # plan; host/key from [providers.bing]
 lv24-seo indexnow submit --from-sitemap --allow-write --confirm TOKEN             # re-fetches; changed sitemap aborts
 lv24-seo schedule install --kind weekly --config ./seo.toml              # plan only: dry_run=true, installed=false
