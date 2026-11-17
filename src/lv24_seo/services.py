@@ -65,8 +65,10 @@ from lv24_seo.providers.base import (
     SOURCE_PSI,
     SOURCE_YANDEX_METRIKA,
     SOURCE_YANDEX_WEBMASTER,
+    ProviderResult,
 )
 from lv24_seo.providers.bing import BingClient
+from lv24_seo.providers.bing.client import CHILDREN_PAGE_MAX, PROVIDER_RETURNED_NO_ROWS
 from lv24_seo.providers.crux import CruxClient
 from lv24_seo.providers.gsc import GscClient
 from lv24_seo.providers.gsc.auth import (
@@ -104,6 +106,11 @@ _ENGINE_LABELS: dict[str, str] = {
     "psi": "PageSpeed Insights",
 }
 _BING_KEY_NEXT_ACTION = "run `lv24-seo auth login --provider bing` or set LV24_SEO_BING_API_KEY"
+# One `bing children` call reads one provider page; the CLI walk is capped so a directory
+# with tens of thousands of children cannot turn into an unbounded request loop.
+_BING_CHILDREN_PAGE_CAP = 10
+_BING_CHILDREN_PAGE_MAX = CHILDREN_PAGE_MAX
+_BING_CHILDREN_PAGE_CAP_LIMITATION = "children_page_cap"
 _ENGINE_NEXT_ACTIONS: dict[str, str] = {
     "gsc": "lv24-seo auth login --provider gsc",
     "yandex_webmaster": "lv24-seo auth login --provider yandex",
@@ -1224,6 +1231,271 @@ class SeoService:
             self._close_bing(client)
         warnings.extend(result.warnings)
         rows = _result_rows(result)
+        return ok(
+            {"site_url": target, "rows": rows},
+            meta=_result_meta(result, source="bing", rows=rows),
+            warnings=_unique(warnings),
+        )
+
+    def bing_pages(self, *, site: str = "") -> dict[str, Any]:
+        """Read Bing page-level traffic statistics (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "bing_pages",
+            warnings,
+            lambda: self._bing_rows_read(site, lambda client: client.page_stats(), warnings),
+        )
+
+    def bing_traffic(self, *, site: str = "") -> dict[str, Any]:
+        """Read Bing daily site clicks and impressions (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "bing_traffic",
+            warnings,
+            lambda: self._bing_rows_read(site, lambda client: client.rank_and_traffic(), warnings),
+        )
+
+    def bing_crawl(self, *, site: str = "") -> dict[str, Any]:
+        """Read Bing daily crawl statistics for the six-month window (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "bing_crawl",
+            warnings,
+            lambda: self._bing_rows_read(site, lambda client: client.crawl_stats(), warnings),
+        )
+
+    def bing_url_info(self, url: str, *, site: str = "") -> dict[str, Any]:
+        """Read Bing index details for one URL, directory or ``domain:`` target (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "bing_url_info",
+            warnings,
+            lambda: self._bing_url_info(url, site, warnings),
+        )
+
+    def _bing_url_info(self, url: str, site: str, warnings: list[str]) -> dict[str, Any]:
+        target, result, rows = self._bing_read(site, lambda client: client.url_info(url), warnings)
+        return ok(
+            {"site_url": target, "url": url.strip(), "rows": rows},
+            meta=_result_meta(result, source="bing", rows=rows),
+            warnings=_unique(warnings),
+        )
+
+    def bing_children(
+        self,
+        url: str,
+        *,
+        page: int = 0,
+        pages: int = 1,
+        site: str = "",
+    ) -> dict[str, Any]:
+        """Read a bounded walk of Bing directory children (read-only).
+
+        ``pages`` is the number of provider pages to read, capped at
+        ``_BING_CHILDREN_PAGE_CAP``. A full final page means more children may exist, so the
+        result is ``truncated`` with ``children_page_cap`` rather than silently looking
+        complete.
+        """
+        warnings: list[str] = []
+        return self._respond(
+            "bing_children",
+            warnings,
+            lambda: self._bing_children(url, page, pages, site, warnings),
+        )
+
+    def _bing_children(
+        self,
+        url: str,
+        page: int,
+        pages: int,
+        site: str,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        start = _bing_page_number(page)
+        limit = _positive_int(pages, name="pages", maximum=_BING_CHILDREN_PAGE_CAP)
+        if start + limit - 1 > _BING_CHILDREN_PAGE_MAX:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="page + pages exceeds the provider page range",
+                next_action=f"use a start page that leaves room for {limit} page(s)",
+                detail={"page": page, "pages": limit, "limit": _BING_CHILDREN_PAGE_MAX},
+            )
+        target = self._bing_site(site)
+        client = self._bing_submit_client(target)
+        rows: list[dict[str, Any]] = []
+        ages: list[int] = []
+        limitations: list[str] = []
+        pages_read = 0
+        complete = False
+        last_result: ProviderResult[dict[str, Any]] | None = None
+        try:
+            for offset in range(limit):
+                result = client.children_url_info(url, page=start + offset)
+                last_result = result
+                warnings.extend(result.warnings)
+                page_rows = _result_rows(result)
+                limitations.extend(
+                    limitation
+                    for limitation in _result_limitations(result)
+                    if not (limitation == PROVIDER_RETURNED_NO_ROWS and rows)
+                )
+                pages_read += 1
+                if page_rows:
+                    ages.append(result.data_age_days)
+                rows.extend(page_rows)
+                if not page_rows:
+                    complete = True
+                    break
+        finally:
+            self._close_bing(client)
+        truncated = not complete and bool(rows)
+        if truncated:
+            limitations.append(_BING_CHILDREN_PAGE_CAP_LIMITATION)
+        meta = (
+            _result_meta(last_result, source="bing", rows=rows)
+            if last_result is not None
+            else {"source": "bing", "rows": 0, "truncated": False}
+        )
+        meta["total"] = len(rows)
+        meta["truncated"] = truncated
+        meta["data_age_days"] = min(ages) if ages else 0
+        meta["limitations"] = _unique(limitations)
+        return ok(
+            {
+                "site_url": target,
+                "url": url.strip(),
+                "page": start,
+                "pages": limit,
+                "pages_read": pages_read,
+                "rows": rows,
+            },
+            meta=meta,
+            warnings=_unique(warnings),
+        )
+
+    def bing_users(self, *, site: str = "") -> dict[str, Any]:
+        """Read the users and roles that can access the configured site (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "bing_users",
+            warnings,
+            lambda: self._bing_rows_read(site, lambda client: client.site_roles(), warnings),
+        )
+
+    def bing_sites(self, *, site: str = "") -> dict[str, Any]:
+        """List every site the Bing API key can see (read-only, account-scoped).
+
+        ``GetUserSites`` needs no ``siteUrl``, so this command works before
+        ``providers.bing.site`` is configured. When a site is configured it is echoed in
+        ``data.site_url`` for consistency with the other Bing reads.
+        """
+        warnings: list[str] = []
+        return self._respond("bing_sites", warnings, lambda: self._bing_sites(site, warnings))
+
+    def _bing_sites(self, site: str, warnings: list[str]) -> dict[str, Any]:
+        bing = self._config.providers.bing
+        configured = bing.site.strip() if bing is not None else ""
+        value = site.strip() or configured
+        target = _absolute_http_url(value, name="providers.bing.site") if value else ""
+        client = self._bing_submit_client(target)
+        try:
+            result = client.user_sites()
+        finally:
+            self._close_bing(client)
+        warnings.extend(result.warnings)
+        rows = _result_rows(result)
+        data: dict[str, Any] = {"rows": rows}
+        if target:
+            data["site_url"] = target
+        return ok(
+            data,
+            meta=_result_meta(result, source="bing", rows=rows),
+            warnings=_unique(warnings),
+        )
+
+    def bing_joins(
+        self,
+        *,
+        query: str = "",
+        page: str = "",
+        site: str = "",
+    ) -> dict[str, Any]:
+        """Read one of Bing's three query↔page joins (read-only).
+
+        ``--query`` alone lists pages for that query, ``--page`` alone lists queries for that
+        page, and both select the daily detail rows for the pair. Every row carries explicit
+        ``query`` and ``page`` keys so the join is never implied by the call.
+        """
+        warnings: list[str] = []
+        return self._respond(
+            "bing_joins",
+            warnings,
+            lambda: self._bing_joins(query, page, site, warnings),
+        )
+
+    def _bing_joins(
+        self,
+        query: str,
+        page: str,
+        site: str,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        q = query.strip()
+        p = page.strip()
+        if not q and not p:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="pass --query and/or --page",
+                next_action=(
+                    "use `bing joins --query QUERY` for pages, `--page URL` for queries, "
+                    "or both for the daily detail"
+                ),
+            )
+        mode = "query_page_detail" if q and p else "query_pages" if q else "page_queries"
+
+        def call(client: BingClient) -> ProviderResult[dict[str, Any]]:
+            if q and p:
+                return client.query_page_detail_stats(q, p)
+            if q:
+                return client.query_page_stats(q)
+            return client.page_query_stats(p)
+
+        target, result, rows = self._bing_read(site, call, warnings)
+        return ok(
+            {
+                "site_url": target,
+                "mode": mode,
+                "query": q or None,
+                "page": p or None,
+                "rows": rows,
+            },
+            meta=_result_meta(result, source="bing", rows=rows),
+            warnings=_unique(warnings),
+        )
+
+    def _bing_read(
+        self,
+        site: str,
+        call: Callable[[BingClient], ProviderResult[dict[str, Any]]],
+        warnings: list[str],
+    ) -> tuple[str, ProviderResult[dict[str, Any]], list[dict[str, Any]]]:
+        """Run one read against a lazily built Bing client and normalize its rows."""
+        target = self._bing_site(site)
+        client = self._bing_submit_client(target)
+        try:
+            result = call(client)
+        finally:
+            self._close_bing(client)
+        warnings.extend(result.warnings)
+        return target, result, _result_rows(result)
+
+    def _bing_rows_read(
+        self,
+        site: str,
+        call: Callable[[BingClient], ProviderResult[dict[str, Any]]],
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        target, result, rows = self._bing_read(site, call, warnings)
         return ok(
             {"site_url": target, "rows": rows},
             meta=_result_meta(result, source="bing", rows=rows),
@@ -3930,6 +4202,19 @@ def _non_negative_int(value: object, *, name: str) -> int:
             next_action=f"pass a non-negative integer for {name}",
         )
     return value
+
+
+def _bing_page_number(value: object) -> int:
+    """Validate a Bing children page (the provider parameter is a ``ushort``)."""
+    page = _non_negative_int(value, name="page")
+    if page > _BING_CHILDREN_PAGE_MAX:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"page must be <= {_BING_CHILDREN_PAGE_MAX}",
+            next_action=f"pass a page between 0 and {_BING_CHILDREN_PAGE_MAX}",
+            detail={"page": page, "limit": _BING_CHILDREN_PAGE_MAX},
+        )
+    return page
 
 
 def _float_or_none(value: object) -> float | None:

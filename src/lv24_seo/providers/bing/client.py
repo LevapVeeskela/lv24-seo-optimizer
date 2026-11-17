@@ -40,6 +40,7 @@ from urllib.parse import urlsplit
 from lv24_seo.core.errors import (
     AUTH_INVALID,
     AUTH_REQUIRED,
+    CONFIG_INVALID,
     INVALID_INPUT,
     PROPERTY_NOT_FOUND,
     QUOTA_EXCEEDED,
@@ -76,6 +77,13 @@ INDEXNOW_ACCEPTED_PENDING = "indexnow_accepted_pending"
 # Stable warning codes: consumers must be able to detect a lossy parse without a schema.
 UNEXPECTED_SHAPE_WARNING = "unexpected_response_shape"
 MALFORMED_ROWS_WARNING = "malformed_rows_skipped"
+
+# Stable limitation codes for read diagnostics. An empty stats response is "no data for the
+# window", never "zero impressions": the two are indistinguishable once rendered as 0.
+NO_ROWS_FOR_WINDOW = "no_rows_for_window"
+PROVIDER_RETURNED_NO_ROWS = "provider_returned_no_rows"
+NEVER_CRAWLED = "never_crawled"
+CRAWL_STATS_SIX_MONTHS = "crawl_stats_six_month_window"
 
 # The quota endpoint reports *remaining* submissions (verified against lv24.by). The monthly
 # window can bind before the daily one and its reset schedule is not documented.
@@ -114,6 +122,22 @@ _FEED_MAPPED_KEYS = frozenset(
 )
 _QUOTA_REMAINING_KEYS = ("daily_remaining", "monthly_remaining")
 _AUTH_NEXT_ACTION = "run `lv24-seo auth login --provider bing` or replace LV24_SEO_BING_API_KEY"
+_SITE_NEXT_ACTION = "set providers.bing.site in seo.toml or pass --site https://example.com"
+# GetChildrenUrlInfo takes a ushort page; walking every page of a large directory is a
+# caller decision, so one call stays one page.
+CHILDREN_PAGE_MAX = 65_535
+# WCF DateTime.MinValue (0001-01-01T00:00:00Z) is Bing's "never" sentinel for crawl and
+# discovery dates. It must map to null, not to a 0001 date or a 739k-day age.
+_WCF_NULL_DATE_MS = -62_135_596_800_000
+_ROLE_NAMES: dict[int, str] = {0: "Administrator", 1: "ReadOnly", 2: "ReadWrite"}
+# The JSON sample sends this object; all-zero filters mean "any" and never hide rows.
+_CHILD_FILTER_PROPERTIES: dict[str, Any] = {
+    "__type": "FilterProperties:#Microsoft.Bing.Webmaster.Api",
+    "CrawlDateFilter": 0,
+    "DiscoveredDateFilter": 0,
+    "DocFlagsFilters": 0,
+    "HttpCodeFilters": 0,
+}
 
 
 class BingClient:
@@ -136,13 +160,8 @@ class BingClient:
             )
 
         site = site_url.strip()
-        if not site:
-            raise SeoError(
-                code=INVALID_INPUT,
-                message="site_url is required",
-                next_action="pass the verified site URL from Bing Webmaster Tools",
-            )
-
+        # Site-agnostic reads (GetUserSites) construct the client without a site. A
+        # site-scoped call raises CONFIG_INVALID through _require_site().
         base = base_url.strip().rstrip("/")
         if not base:
             raise SeoError(
@@ -162,6 +181,16 @@ class BingClient:
         if self._owns_http:
             self._http.close()
 
+    def _require_site(self) -> str:
+        """Return the verified site URL, or raise the CLI's ``CONFIG_INVALID`` contract."""
+        if not self._site_url:
+            raise SeoError(
+                code=CONFIG_INVALID,
+                message="Bing Webmaster site is not configured",
+                next_action=_SITE_NEXT_ACTION,
+            )
+        return self._site_url
+
     def __enter__(self) -> BingClient:
         return self
 
@@ -178,7 +207,8 @@ class BingClient:
 
         Bing aggregates query stats per day and stamps every row with ``Date``; the newest
         row date is the end of the reported window, so it drives ``data_age_days`` instead of
-        a hardcoded zero that would present week-old data as fresh.
+        a hardcoded zero that would present week-old data as fresh. Zero rows carry
+        ``no_rows_for_window``: an empty response is missing data, not zero impressions.
         """
         items, warnings = self._fetch_rows("GetQueryStats")
         rows: list[Row] = [_query_row(item) for item in items]
@@ -190,7 +220,126 @@ class BingClient:
             data_age_days=_newest_row_age(items, fetched_at, ("Date", "date")),
             rows=rows,
             total=len(rows),
+            limitations=(NO_ROWS_FOR_WINDOW,) if not rows else (),
             warnings=warnings,
+        )
+
+    def page_stats(self) -> ProviderResult[Row]:
+        """Return page-level traffic rows from ``GetPageStats``.
+
+        The endpoint returns ``QueryStats`` objects whose ``Query`` field holds the page URL,
+        not a search query. Each row therefore exposes ``page`` plus clicks, impressions, both
+        average positions and the provider ``Date``. An empty response is reported with
+        ``no_rows_for_window``; the engine never fabricates a zero row or a date.
+        """
+        items, warnings = self._fetch_rows("GetPageStats")
+        rows: list[Row] = [_page_row(item) for item in items]
+        return self._window_result(items, rows, warnings)
+
+    def query_page_stats(self, query: str) -> ProviderResult[Row]:
+        """Return the pages that received impressions for one query.
+
+        ``GetQueryPageStats`` returns ``QueryStats`` rows; because the query is fixed, the
+        row's ``Query`` field carries the page URL. The requested query is attached to every
+        row so the join is explicit instead of implied by the call.
+        """
+        value = _required_text(query, name="query")
+        payload = self._request_json(
+            "GET",
+            "GetQueryPageStats",
+            params={"apikey": self._api_key, "siteUrl": self._require_site(), "query": value},
+        )
+        items, warnings = _mapping_items(payload)
+        rows: list[Row] = [
+            _join_row(
+                item,
+                query=value,
+                page=_as_str(_pick(item, "Query", "query")),
+            )
+            for item in items
+        ]
+        return self._window_result(items, rows, warnings)
+
+    def page_query_stats(self, page: str) -> ProviderResult[Row]:
+        """Return the queries that produced impressions for one page.
+
+        ``GetPageQueryStats`` is the mirror of :meth:`query_page_stats`: the page is fixed and
+        the row's ``Query`` field carries the search query. The requested page is attached to
+        every row.
+        """
+        target = _url_info_target(page, name="page")
+        payload = self._request_json(
+            "GET",
+            "GetPageQueryStats",
+            params={"apikey": self._api_key, "siteUrl": self._require_site(), "page": target},
+        )
+        items, warnings = _mapping_items(payload)
+        rows: list[Row] = [
+            _join_row(
+                item,
+                query=_as_str(_pick(item, "Query", "query")),
+                page=target,
+            )
+            for item in items
+        ]
+        return self._window_result(items, rows, warnings)
+
+    def query_page_detail_stats(self, query: str, page: str) -> ProviderResult[Row]:
+        """Return daily detail rows for one query/page pair.
+
+        ``GetQueryPageDetailStats`` returns ``DetailedQueryStats`` (``Clicks``, ``Impressions``,
+        ``Position``, ``Date``) without the query or page columns, so the requested pair is
+        attached to each row. There is no average click/impression position in this shape.
+        """
+        value = _required_text(query, name="query")
+        target = _url_info_target(page, name="page")
+        payload = self._request_json(
+            "GET",
+            "GetQueryPageDetailStats",
+            params={
+                "apikey": self._api_key,
+                "siteUrl": self._require_site(),
+                "query": value,
+                "page": target,
+            },
+        )
+        items, warnings = _mapping_items(payload)
+        rows: list[Row] = [_join_row(item, query=value, page=target) for item in items]
+        return self._window_result(items, rows, warnings)
+
+    def rank_and_traffic(self) -> ProviderResult[Row]:
+        """Return daily site clicks and impressions from ``GetRankAndTrafficStats``.
+
+        The feed is daily (``Date``, ``Clicks``, ``Impressions``) and, since 2023-03-24,
+        includes every Bing vertical, not only web search. Zero rows carry
+        ``no_rows_for_window``.
+        """
+        items, warnings = self._fetch_rows("GetRankAndTrafficStats")
+        rows: list[Row] = [
+            {
+                "date": _optional_date(_pick(item, "Date", "date")),
+                "clicks": _as_int(_pick(item, "Clicks", "clicks")),
+                "impressions": _as_int(_pick(item, "Impressions", "impressions")),
+            }
+            for item in items
+        ]
+        return self._window_result(items, rows, warnings)
+
+    def crawl_stats(self) -> ProviderResult[Row]:
+        """Return daily crawl statistics for the last six months.
+
+        ``GetCrawlStats`` reports response-code buckets, robots/malware counts and index/link
+        totals per day. The provider caps the window at six months, so the result always
+        carries ``crawl_stats_six_month_window``; zero rows additionally carry
+        ``no_rows_for_window``.
+        """
+        items, warnings = self._fetch_rows("GetCrawlStats")
+        rows: list[Row] = [_crawl_stats_row(item) for item in items]
+        return self._window_result(
+            items,
+            rows,
+            warnings,
+            limitations=(CRAWL_STATS_SIX_MONTHS,),
         )
 
     def crawl_issues(self) -> ProviderResult[Row]:
@@ -216,6 +365,137 @@ class BingClient:
             warnings=warnings,
         )
 
+    def url_info(self, url: str) -> ProviderResult[Row]:
+        """Return Bing's index details for one page, directory or domain.
+
+        ``GetUrlInfo`` accepts an absolute URL or ``domain:<host>``. Fields are ``Url``,
+        ``AnchorCount``, ``DiscoveryDate``, ``DocumentSize``, ``HttpStatus``, ``IsPage``,
+        ``LastCrawledDate`` and ``TotalChildUrlCount``. WCF's ``Date(-62135596800000)``
+        sentinel means "never" and maps to ``null``; a never-crawled row also carries
+        ``never_crawled`` instead of pretending to be fresh. An empty ``d`` is
+        ``provider_returned_no_rows``.
+        """
+        target = _url_info_target(url, name="url")
+        payload = self._request_json(
+            "GET",
+            "GetUrlInfo",
+            params={"apikey": self._api_key, "siteUrl": self._require_site(), "url": target},
+        )
+        item, warnings = _unwrap_single(payload)
+        rows: list[Row] = [] if item is None else [_url_info_row(item)]
+        limitations: list[str] = []
+        if not rows:
+            limitations.append(PROVIDER_RETURNED_NO_ROWS)
+        elif rows[0].get("last_crawled_date") is None:
+            limitations.append(NEVER_CRAWLED)
+        fetched_at = now_utc()
+        return ProviderResult(
+            source="bing",
+            property_id=self._site_url,
+            fetched_at=fetched_at,
+            data_age_days=(
+                0
+                if item is None
+                else _newest_row_age([item], fetched_at, ("LastCrawledDate", "lastCrawledDate"))
+            ),
+            rows=rows,
+            total=len(rows),
+            limitations=tuple(limitations),
+            warnings=warnings,
+        )
+
+    def children_url_info(self, url: str, page: int = 0) -> ProviderResult[Row]:
+        """Return one page of children for a directory or domain.
+
+        ``GetChildrenUrlInfo`` is a read-only ``POST`` with
+        ``{siteUrl, url, page, filterProperties}``; ``filterProperties`` is sent with
+        all-zero (Any) filters so the call never hides rows. One call returns one page: the
+        caller owns walking, and ``page`` is bounded to the provider's ``ushort`` range.
+        """
+        target = _url_info_target(url, name="url")
+        number = _page_number(page)
+        payload = self._request_json(
+            "POST",
+            "GetChildrenUrlInfo",
+            params={"apikey": self._api_key},
+            body={
+                "siteUrl": self._require_site(),
+                "url": target,
+                "page": number,
+                "filterProperties": dict(_CHILD_FILTER_PROPERTIES),
+            },
+            retry_post=True,
+        )
+        items, warnings = _mapping_items(payload)
+        rows: list[Row] = [_url_info_row(item) for item in items]
+        fetched_at = now_utc()
+        return ProviderResult(
+            source="bing",
+            property_id=self._site_url,
+            fetched_at=fetched_at,
+            data_age_days=_newest_row_age(
+                items, fetched_at, ("LastCrawledDate", "lastCrawledDate")
+            ),
+            rows=rows,
+            total=len(rows),
+            limitations=(PROVIDER_RETURNED_NO_ROWS,) if not rows else (),
+            warnings=warnings,
+        )
+
+    def site_roles(self, *, include_all_subdomains: bool = False) -> ProviderResult[Row]:
+        """Return the users and roles that can access this site (read-only).
+
+        ``GetSiteRoles`` maps ``Email``, ``Role``, ``Site``, ``VerificationSite``,
+        ``DelegatorEmail``, ``DelegatedCodeOwnerEmail``, ``Expired`` and ``Date``. JSON returns
+        the role as an enum number (0 Administrator, 1 ReadOnly, 2 ReadWrite), so both
+        ``role`` (name) and ``role_code`` are exposed. The delegated verification code is a
+        secret and is deliberately not echoed.
+        """
+        items, warnings = self._fetch_rows(
+            "GetSiteRoles",
+            params={"includeAllSubdomains": "true" if include_all_subdomains else "false"},
+        )
+        rows: list[Row] = [_site_role_row(item) for item in items]
+        fetched_at = now_utc()
+        return ProviderResult(
+            source="bing",
+            property_id=self._site_url,
+            fetched_at=fetched_at,
+            data_age_days=_newest_row_age(items, fetched_at, ("Date", "date")),
+            rows=rows,
+            total=len(rows),
+            limitations=(PROVIDER_RETURNED_NO_ROWS,) if not rows else (),
+            warnings=warnings,
+        )
+
+    def user_sites(self) -> ProviderResult[Row]:
+        """Return every site the API key can see, with its verification state.
+
+        ``GetUserSites`` is account-scoped: it needs no ``siteUrl`` and works even when the
+        project has no site configured. Only ``Url`` and ``IsVerified`` are exposed;
+        authentication and DNS verification codes are secrets and are not echoed. Zero rows
+        carry ``provider_returned_no_rows``.
+        """
+        payload = self._request_json("GET", "GetUserSites", params={"apikey": self._api_key})
+        items, warnings = _mapping_items(payload)
+        rows: list[Row] = [
+            {
+                "url": _as_str(_pick(item, "Url", "url")),
+                "is_verified": _as_bool(_pick(item, "IsVerified", "isVerified")),
+            }
+            for item in items
+        ]
+        return ProviderResult(
+            source="bing",
+            property_id=self._site_url,
+            fetched_at=now_utc(),
+            data_age_days=0,
+            rows=rows,
+            total=len(rows),
+            limitations=(PROVIDER_RETURNED_NO_ROWS,) if not rows else (),
+            warnings=warnings,
+        )
+
     def submission_quota(self) -> ProviderResult[Row]:
         """Return the URL submission quota Bing reports for this site.
 
@@ -229,7 +509,7 @@ class BingClient:
         payload = self._request_json(
             "GET",
             "GetUrlSubmissionQuota",
-            params={"apikey": self._api_key, "siteUrl": self._site_url},
+            params={"apikey": self._api_key, "siteUrl": self._require_site()},
         )
         item, warnings = _unwrap_single(payload)
         rows: list[Row] = []
@@ -276,7 +556,7 @@ class BingClient:
         payload = self._request_json(
             "GET",
             "GetFeedDetails",
-            params={"apikey": self._api_key, "siteUrl": self._site_url, "feedUrl": feed},
+            params={"apikey": self._api_key, "siteUrl": self._require_site(), "feedUrl": feed},
         )
         items, warnings = _unwrap_rows(payload)
         return _feed_provider_result(
@@ -290,7 +570,7 @@ class BingClient:
         payload = self._request_json(
             "GET",
             path,
-            params={"apikey": self._api_key, "siteUrl": self._site_url},
+            params={"apikey": self._api_key, "siteUrl": self._require_site()},
         )
         items, warnings = _unwrap_rows(payload)
         return _feed_provider_result(
@@ -416,7 +696,7 @@ class BingClient:
             "POST",
             "SubmitUrlbatch",
             params={"apikey": self._api_key},
-            body={"siteUrl": self._site_url, "urlList": list(batch)},
+            body={"siteUrl": self._require_site(), "urlList": list(batch)},
         )
 
     def submit_feed(self, sitemap_url: str) -> ProviderResult[Row]:
@@ -435,7 +715,7 @@ class BingClient:
             "POST",
             "SubmitFeed",
             params={"apikey": self._api_key},
-            body={"siteUrl": self._site_url, "feedUrl": feed},
+            body={"siteUrl": self._require_site(), "feedUrl": feed},
         )
         row: Row = {"submitted": True, "site_url": self._site_url, "sitemap_url": feed}
         return ProviderResult(
@@ -446,23 +726,41 @@ class BingClient:
             rows=[row],
         )
 
-    def _fetch_rows(self, path: str) -> tuple[list[Mapping[str, Any]], tuple[str, ...]]:
-        payload = self._request_json(
-            "GET",
-            path,
-            params={"apikey": self._api_key, "siteUrl": self._site_url},
+    def _fetch_rows(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+    ) -> tuple[list[Mapping[str, Any]], tuple[str, ...]]:
+        query: dict[str, Any] = {"apikey": self._api_key, "siteUrl": self._require_site()}
+        if params:
+            query.update(params)
+        payload = self._request_json("GET", path, params=query)
+        return _mapping_items(payload)
+
+    def _window_result(
+        self,
+        items: Sequence[Mapping[str, Any]],
+        rows: list[Row],
+        warnings: tuple[str, ...],
+        *,
+        limitations: tuple[str, ...] = (),
+    ) -> ProviderResult[Row]:
+        """Build a dated stats result and mark an empty window as missing, not zero."""
+        fetched_at = now_utc()
+        notes = limitations
+        if not rows:
+            notes = (*notes, NO_ROWS_FOR_WINDOW)
+        return ProviderResult(
+            source="bing",
+            property_id=self._site_url,
+            fetched_at=fetched_at,
+            data_age_days=_newest_row_age(items, fetched_at, ("Date", "date")),
+            rows=rows,
+            total=len(rows),
+            limitations=notes,
+            warnings=warnings,
         )
-        items, warnings = _unwrap_items(payload)
-        rows: list[Mapping[str, Any]] = []
-        skipped = False
-        for item in items:
-            if isinstance(item, Mapping):
-                rows.append(item)
-            else:
-                skipped = True
-        if skipped:
-            warnings = (*warnings, MALFORMED_ROWS_WARNING)
-        return rows, warnings
 
     def _request_json(
         self,
@@ -471,6 +769,7 @@ class BingClient:
         *,
         params: Mapping[str, Any],
         body: Any = None,
+        retry_post: bool = False,
     ) -> Any:
         """Perform one JSON call and map a Bing ``ErrorCode`` before the HTTP status.
 
@@ -478,7 +777,8 @@ class BingClient:
         auth failures as HTTP 400 with ``{"ErrorCode": 3, "Message": ...}``, so the body is
         needed. ``Message`` is never echoed: it could carry request context, and the API key
         must never reach an error. Only ``host + path``, the status and the numeric code are
-        kept in ``detail``.
+        kept in ``detail``. ``retry_post`` is set only for safe read POSTs such as
+        ``GetChildrenUrlInfo``.
         """
         url = f"{self._base_url}/{path}"
         kwargs: dict[str, Any] = {
@@ -488,6 +788,8 @@ class BingClient:
         }
         if body is not None:
             kwargs["json"] = body
+        if retry_post:
+            kwargs["retry_post"] = True
         response = self._http.request(method, url, **kwargs)
         try:
             if response.is_error:
@@ -747,6 +1049,21 @@ def _unwrap_rows(payload: Any) -> tuple[list[Any], tuple[str, ...]]:
     return _unwrap_items(payload)
 
 
+def _mapping_items(payload: Any) -> tuple[list[Mapping[str, Any]], tuple[str, ...]]:
+    """Unwrap a response and keep only object rows, flagging skipped scalars."""
+    items, warnings = _unwrap_items(payload)
+    rows: list[Mapping[str, Any]] = []
+    skipped = False
+    for item in items:
+        if isinstance(item, Mapping):
+            rows.append(item)
+        else:
+            skipped = True
+    if skipped:
+        warnings = (*warnings, MALFORMED_ROWS_WARNING)
+    return rows, warnings
+
+
 def _unwrap_single(payload: Any) -> tuple[Mapping[str, Any] | None, tuple[str, ...]]:
     """Return the one object of a WCF ``{"d": {...}}`` response, or ``None``."""
     candidate: Any = payload
@@ -832,11 +1149,20 @@ def _newest_row_age(
     newest: datetime | None = None
     for item in items:
         parsed = _parse_row_date(_pick(item, *keys))
-        if parsed is not None and (newest is None or parsed > newest):
+        # Year 1 is WCF DateTime.MinValue, Bing's "never" sentinel, not a real age.
+        if parsed is not None and parsed.year > 1 and (newest is None or parsed > newest):
             newest = parsed
     if newest is None:
         return 0
     return data_age_days(end=newest, fetched_at=fetched_at)
+
+
+def _optional_date(value: Any) -> str | None:
+    """Return an ISO-8601 UTC timestamp, or ``None`` for a missing/never sentinel date."""
+    parsed = _parse_row_date(value)
+    if parsed is None or parsed.year <= 1:
+        return None
+    return parsed.astimezone(UTC).isoformat()
 
 
 def _parse_row_date(value: Any) -> datetime | None:
@@ -848,8 +1174,14 @@ def _parse_row_date(value: Any) -> datetime | None:
     elif isinstance(value, bool):
         return None
     elif isinstance(value, int | float):
-        # WCF JSON dates are milliseconds since the Unix epoch.
-        parsed = datetime.fromtimestamp(float(value) / 1000.0, tz=UTC)
+        # WCF JSON dates are milliseconds since the Unix epoch. Windows cannot convert
+        # the DateTime.MinValue sentinel, so a failed conversion is "no date", not a crash.
+        if float(value) <= _WCF_NULL_DATE_MS:
+            return None
+        try:
+            parsed = datetime.fromtimestamp(float(value) / 1000.0, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
     elif isinstance(value, str):
         text = value.strip()
         if text.startswith("/Date(") and text.endswith(")/"):
@@ -877,7 +1209,96 @@ def _query_row(item: Mapping[str, Any]) -> Row:
         "query": _as_str(_pick(item, "Query", "query")),
         "clicks": _as_int(_pick(item, "Clicks", "clicks")),
         "impressions": _as_int(_pick(item, "Impressions", "impressions")),
-        "position": _as_float(_pick(item, "AvgImpressionPos", "avgImpressionPos", "position")),
+        "position": _as_float(
+            _pick(
+                item,
+                "AvgImpressionPosition",
+                "AvgImpressionPos",
+                "avgImpressionPosition",
+                "position",
+            )
+        ),
+    }
+
+
+def _page_row(item: Mapping[str, Any]) -> Row:
+    """Map one ``GetPageStats`` row: ``Query`` is the page URL, not a search query."""
+    return {
+        "page": _as_str(_pick(item, "Query", "query")),
+        "clicks": _as_int(_pick(item, "Clicks", "clicks")),
+        "impressions": _as_int(_pick(item, "Impressions", "impressions")),
+        "click_position": _as_float(_pick(item, "AvgClickPosition", "avgClickPosition")),
+        "impression_position": _as_float(
+            _pick(item, "AvgImpressionPosition", "AvgImpressionPos", "avgImpressionPosition")
+        ),
+        "date": _optional_date(_pick(item, "Date", "date")),
+    }
+
+
+def _join_row(item: Mapping[str, Any], *, query: str | None, page: str | None) -> Row:
+    """One query↔page row with both dimensions explicit and a stable key order."""
+    return {
+        "query": query,
+        "page": page,
+        "clicks": _as_int(_pick(item, "Clicks", "clicks")),
+        "impressions": _as_int(_pick(item, "Impressions", "impressions")),
+        "click_position": _as_float(_pick(item, "AvgClickPosition", "avgClickPosition")),
+        "impression_position": _as_float(
+            _pick(item, "AvgImpressionPosition", "AvgImpressionPos", "avgImpressionPosition")
+        ),
+        "position": _as_float(_pick(item, "Position", "position")),
+        "date": _optional_date(_pick(item, "Date", "date")),
+    }
+
+
+def _crawl_stats_row(item: Mapping[str, Any]) -> Row:
+    return {
+        "date": _optional_date(_pick(item, "Date", "date")),
+        "code_2xx": _as_int(_pick(item, "Code2xx", "code2xx")),
+        "code_301": _as_int(_pick(item, "Code301", "code301")),
+        "code_302": _as_int(_pick(item, "Code302", "code302")),
+        "code_4xx": _as_int(_pick(item, "Code4xx", "code4xx")),
+        "code_5xx": _as_int(_pick(item, "Code5xx", "code5xx")),
+        "blocked_by_robots_txt": _as_int(_pick(item, "BlockedByRobotsTxt", "blockedByRobotsTxt")),
+        "contains_malware": _as_int(_pick(item, "ContainsMalware", "containsMalware")),
+        "crawl_errors": _as_int(_pick(item, "CrawlErrors", "crawlErrors")),
+        "crawled_pages": _as_int(_pick(item, "CrawledPages", "crawledPages")),
+        "in_index": _as_int(_pick(item, "InIndex", "inIndex")),
+        "in_links": _as_int(_pick(item, "InLinks", "inLinks")),
+        "all_other_codes": _as_int(_pick(item, "AllOtherCodes", "allOtherCodes")),
+    }
+
+
+def _url_info_row(item: Mapping[str, Any]) -> Row:
+    return {
+        "url": _as_str(_pick(item, "Url", "URL", "url")),
+        "anchor_count": _as_int(_pick(item, "AnchorCount", "anchorCount")),
+        "discovery_date": _optional_date(_pick(item, "DiscoveryDate", "discoveryDate")),
+        "document_size": _as_int(_pick(item, "DocumentSize", "documentSize")),
+        "http_status": _as_int(_pick(item, "HttpStatus", "httpStatus")),
+        "is_page": _as_bool(_pick(item, "IsPage", "isPage")),
+        "last_crawled_date": _optional_date(_pick(item, "LastCrawledDate", "lastCrawledDate")),
+        "total_child_url_count": _as_int(_pick(item, "TotalChildUrlCount", "totalChildUrlCount")),
+    }
+
+
+def _site_role_row(item: Mapping[str, Any]) -> Row:
+    code = _as_int(_pick(item, "Role", "role"))
+    name = _as_str(_pick(item, "Role", "role")) or (
+        _ROLE_NAMES.get(code) if code is not None else None
+    )
+    return {
+        "email": _as_str(_pick(item, "Email", "email")),
+        "role": name,
+        "role_code": code,
+        "site": _as_str(_pick(item, "Site", "site")),
+        "verification_site": _as_str(_pick(item, "VerificationSite", "verificationSite")),
+        "delegator_email": _as_str(_pick(item, "DelegatorEmail", "delegatorEmail")),
+        "delegated_code_owner_email": _as_str(
+            _pick(item, "DelegatedCodeOwnerEmail", "delegatedCodeOwnerEmail")
+        ),
+        "expired": _as_bool(_pick(item, "Expired", "expired")),
+        "date": _optional_date(_pick(item, "Date", "date")),
     }
 
 
@@ -1058,6 +1479,55 @@ def _as_float(value: Any) -> float | None:
 
 def _as_bool(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
+
+
+def _required_text(value: str, *, name: str) -> str:
+    """Return trimmed text or raise ``INVALID_INPUT`` before a network call."""
+    text = value.strip()
+    if not text:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must not be empty",
+            next_action=f"pass a non-empty {name}",
+        )
+    return text
+
+
+def _url_info_target(value: str, *, name: str) -> str:
+    """Accept an absolute URL or Bing's ``domain:<host>`` form for URL info calls."""
+    text = value.strip()
+    if not text:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must not be empty",
+            next_action=f"pass an absolute URL or domain:<host> to {name}",
+        )
+    if text.lower().startswith("domain:"):
+        host = text[len("domain:") :].strip()
+        if not host or "/" in host or " " in host:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=f"{name} has an invalid domain: target",
+                next_action=f"pass domain:example.com to {name}",
+                detail={"value": text},
+            )
+        return f"domain:{host}"
+    return _absolute_http_url(text, name=name)
+
+
+def _page_number(value: int) -> int:
+    """Validate the ``GetChildrenUrlInfo`` page (a provider ``ushort``)."""
+    valid = (
+        not isinstance(value, bool) and isinstance(value, int) and 0 <= value <= CHILDREN_PAGE_MAX
+    )
+    if not valid:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"page must be between 0 and {CHILDREN_PAGE_MAX}",
+            next_action="pass a zero-based page number",
+            detail={"page": value, "limit": CHILDREN_PAGE_MAX},
+        )
+    return value
 
 
 def _absolute_http_url(value: str, *, name: str) -> str:

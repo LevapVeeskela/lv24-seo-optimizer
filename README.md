@@ -61,8 +61,9 @@ crawler, SQLite history, analysis (deltas, opportunities, indexing triage, multi
 nginx log analysis with UA-only bot triage, CWV by template), per-provider `stats`, report builders
 + HTML/text/Markdown renderers with an attributed change digest and a Core Web Vitals section, the
 finding/task lifecycle, portable backup bundles with non-destructive and two-phase restore, a
-read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, Bing sitemap and URL
-submission, one-click IndexNow from the project sitemap, the 23-command CLI, the MCP server
+read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, Bing page/traffic/
+crawl/URL diagnostics, Bing sitemap and URL submission, one-click IndexNow from the project
+sitemap, the 23-command CLI, the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
 enforced with regression tests. `0.10.0` is the current release: Bing URL submission,
@@ -234,7 +235,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 | Google Search Console | yes (OAuth access token or service-account JSON key) | queries, pages, countries, devices; URL Inspection adapter | sitemap submit disabled |
 | Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics | recrawl disabled |
 | Yandex Metrika | yes | sessions and users; filtered reports through adapter; separate `metrika` auth provider (`yandex_metrika_token`) | — |
-| Bing Webmaster + IndexNow | yes | queries, crawl issues (decoded bitmask), remaining URL quota, sitemap feeds, sitemap submit, URL submit, one-click IndexNow from the sitemap | sitemap submit + URL submit + IndexNow submit |
+| Bing Webmaster + IndexNow | yes | queries, pages, daily traffic, six-month crawl stats, query/page joins, URL index details, directory children, site roles, account sites, crawl issues (decoded bitmask), remaining URL quota, sitemap feeds, sitemap submit, URL submit, one-click IndexNow from the sitemap | sitemap submit + URL submit + IndexNow submit |
 | Chrome UX Report | yes (API key) | URL+device field p75, weekly p75 history, collection period and URL-normalization warnings | — |
 | PageSpeed Insights | yes | lab category scores and bounded Lighthouse audits per URL, with runtime-error/redirect warnings | — |
 | Your site | — | crawl, robots, sitemap, JSON-LD, hreflang, links | — |
