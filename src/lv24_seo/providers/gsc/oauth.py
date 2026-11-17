@@ -42,6 +42,7 @@ __all__ = [
     "OAUTH_SOURCE",
     "REFRESH_MARGIN_SECONDS",
     "REFRESH_TOKEN_SECRET",
+    "SCOPE_SECRET",
     "TOKEN_ENDPOINT",
     "OAuthTokenProvider",
     "authorization_url",
@@ -54,6 +55,7 @@ REFRESH_TOKEN_SECRET = "gsc_refresh_token"  # noqa: S105 - a secret name, not a 
 EXPIRES_AT_SECRET = "gsc_token_expires_at"  # noqa: S105 - a secret name, not a value
 CLIENT_SECRET_NAME = "gsc_oauth_client_secret"  # noqa: S105 - a secret name, not a value
 CODE_VERIFIER_SECRET = "gsc_oauth_code_verifier"  # noqa: S105 - a secret name, not a value
+SCOPE_SECRET = "gsc_token_scopes"  # noqa: S105 - a secret name, not a value
 OAUTH_SOURCE = "oauth_refresh_token"
 LOGIN_NEXT_ACTION = "lv24-seo auth login --provider gsc"
 
@@ -168,9 +170,21 @@ class OAuthTokenProvider:
             self._store.set(REFRESH_TOKEN_SECRET, response.refresh_token)
         expires_at = datetime.fromtimestamp(now + response.expires_in, tz=UTC)
         self._store.set(EXPIRES_AT_SECRET, expires_at.isoformat(timespec="seconds"))
+        _store_scopes(self._store, response.scope)
         return response.access_token
 
 
 def _stored(store: SecretStore, name: str) -> str:
     value = store.get(name)
     return value.strip() if value is not None else ""
+
+
+def _store_scopes(store: SecretStore, raw: str) -> None:
+    """Persist the granted scopes as one space-separated string.
+
+    Google usually echoes ``scope`` on a refresh; when it does not, the previously
+    recorded list is kept instead of being replaced with an empty value.
+    """
+    scopes = tuple(part for part in raw.split() if part)
+    if scopes:
+        store.set(SCOPE_SECRET, " ".join(scopes))

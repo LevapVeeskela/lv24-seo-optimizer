@@ -49,6 +49,14 @@ resolves or `LV24_SEO_DATA_DIR` is set), the `data_dir` check becomes fatal: a m
 directory returns `ok: false` with `meta.healthy: false` and exit `1`, instead of a green
 `healthy: true`. `doctor` makes no network calls.
 
+`doctor --json` also reports one OAuth check per provider: `gsc_oauth`, `yandex_oauth` and
+`metrika_oauth`. Each carries `id`, `ok`, `detail`, `code` and `next_action`; `code` is one of
+`oauth_client_missing`, `oauth_client_secret_missing`, `oauth_token_missing`,
+`oauth_token_expired`, `oauth_scope_missing`, `oauth_scope_unknown`, `oauth_redirect_invalid`
+or `oauth_ready`. A missing app is a warning with the registration link, not a crash: these
+checks never change `healthy` or the exit code. See
+[OAuth connectors](auth.md#readiness-diagnostics) for every code and its fix.
+
 ## Authentication
 
 ```bash
@@ -112,6 +120,14 @@ files return `CONFIG_INVALID` with a next action.
 `auth status` reports only stored secrets (`env`, `keyring`, `file`); it does not inspect the
 service-account file. `properties` and `doctor` (the `gsc_auth` check) are the readiness surfaces,
 and neither prints the key.
+
+`auth status --json` adds an `oauth` object per provider (`gsc`, `yandex`, `metrika`) with
+`state`, `detail`, `client_id_present`, `client_secret_present`, `access_token_present`,
+`refresh_token_present`, `expires_at`, `scopes_recorded`, `next_action` and `limitations`.
+`state` is the stable code documented in
+[OAuth connectors](auth.md#readiness-diagnostics); `oauth_scope_unknown` is a limitation, not
+a pass. The `providers`, `present` and `missing` fields keep their previous shape and values,
+and no token or client secret is printed.
 
 ### Yandex Webmaster and Metrika credentials
 

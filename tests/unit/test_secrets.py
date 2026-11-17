@@ -66,11 +66,14 @@ def test_secret_names_contract() -> None:
         "gsc_token_expires_at",
         "gsc_oauth_client_secret",
         "gsc_oauth_code_verifier",
+        "gsc_token_scopes",
         "yandex_refresh_token",
         "yandex_token_expires_at",
         "yandex_metrika_refresh_token",
         "yandex_metrika_token_expires_at",
         "yandex_oauth_client_secret",
+        "yandex_token_scopes",
+        "yandex_metrika_token_scopes",
     )
 
 

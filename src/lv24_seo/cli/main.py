@@ -72,6 +72,7 @@ from lv24_seo.providers.bing import (
     validate_indexnow_key_location,
 )
 from lv24_seo.providers.gsc.auth import service_account_file_problem
+from lv24_seo.providers.oauth_status import oauth_readiness_all
 from lv24_seo.report.i18n import normalize_locale
 from lv24_seo.report.models import Report, ReportSection
 from lv24_seo.report.render import render_html, render_text
@@ -348,9 +349,8 @@ def doctor(
         resolved = resolve_config_path(config_path)
         config = load_config(config_path)
         data_dir = data_dir_path(config)
-        statuses = SecretStore(data_dir=config.storage.data_dir).status(
-            [*SECRET_NAMES, *OAUTH_SECRET_NAMES]
-        )
+        store = SecretStore(data_dir=config.storage.data_dir)
+        statuses = store.status([*SECRET_NAMES, *OAUTH_SECRET_NAMES])
         present = [status.name for status in statuses if status.present]
         scope_note = _data_dir_scope_note(data_dir, resolved)
         gsc = config.providers.gsc
@@ -385,6 +385,12 @@ def doctor(
                     "`lv24-seo auth set --provider gsc --stdin`"
                 )
         gsc_file_ok = bool(gsc_file) and gsc_problem is None
+        webmaster = config.providers.yandex_webmaster
+        metrika = config.providers.yandex_metrika
+        optional_notes = {
+            "yandex": not (webmaster is not None and webmaster.host_id.strip()),
+            "metrika": not (metrika is not None and metrika.counter.strip()),
+        }
         checks = [
             {
                 "id": "python",
@@ -432,6 +438,24 @@ def doctor(
                 "detail": gsc_detail,
             },
         ]
+        # OAuth readiness is reported per provider, but never makes the environment check
+        # fatal: a missing app is a warning with the registration link, not a crash. Tokens
+        # are represented by booleans and names only.
+        for key, readiness in oauth_readiness_all(config, store).items():
+            detail = readiness.detail
+            if key == "gsc" and gsc_file_ok:
+                detail += " (service-account file configured; OAuth is optional)"
+            elif optional_notes.get(key):
+                detail += " (provider not configured; OAuth is optional)"
+            checks.append(
+                {
+                    "id": f"{key}_oauth",
+                    "ok": readiness.ok,
+                    "detail": detail,
+                    "code": readiness.state,
+                    "next_action": readiness.next_action,
+                }
+            )
         # A declared data directory is part of the workspace contract: when the config file or
         # LV24_SEO_DATA_DIR names one, every store-backed command needs it. Reporting
         # `healthy: true` while the directory is missing or unusable made the CI gate useless.
@@ -4085,7 +4109,11 @@ def _doctor_lines(checks: Sequence[Mapping[str, Any]], healthy: bool) -> list[st
     lines = []
     for check in checks:
         mark = "OK  " if check.get("ok") else "FAIL"
-        lines.append(f"[{mark}] {check.get('id')}: {check.get('detail')}")
+        code = check.get("code")
+        label = f"{check.get('id')} ({code})" if code else str(check.get("id"))
+        lines.append(f"[{mark}] {label}: {check.get('detail')}")
+        if not check.get("ok") and check.get("next_action"):
+            lines.append(f"       next: {check.get('next_action')}")
     if not healthy:
         lines.append("")
         lines.append("next: fix the failing checks and rerun `lv24-seo doctor`")

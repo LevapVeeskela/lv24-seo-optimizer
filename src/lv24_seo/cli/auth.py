@@ -26,6 +26,7 @@ from lv24_seo.core.config import SeoConfig, load_config
 from lv24_seo.core.envelope import ok
 from lv24_seo.core.errors import INVALID_INPUT, SeoError
 from lv24_seo.core.secrets import SecretStatus, SecretStore
+from lv24_seo.providers.oauth_status import OAUTH_PROVIDERS, oauth_readiness_all
 
 auth_app = typer.Typer(
     add_completion=False,
@@ -101,7 +102,15 @@ def auth_status(
         ]
         present = [entry["provider"] for entry in entries if entry["present"]]
         missing = [entry["provider"] for entry in entries if not entry["present"]]
-        return ok({"providers": entries, "present": present, "missing": missing})
+        readiness = oauth_readiness_all(config, store)
+        return ok(
+            {
+                "providers": entries,
+                "present": present,
+                "missing": missing,
+                "oauth": {key: readiness[key].as_dict() for key in OAUTH_PROVIDERS},
+            }
+        )
 
     payload = run_envelope(action)
     emit(payload, as_json=as_json, lines=_status_lines(payload))
@@ -349,7 +358,18 @@ def _status_lines(payload: dict[str, Any]) -> list[str]:
         ]
         for entry in entries
     ]
-    return _table(["provider", "secret", "state", "source"], rows)
+    lines = _table(["provider", "secret", "state", "source"], rows)
+    oauth = data.get("oauth")
+    if isinstance(oauth, dict) and oauth:
+        lines.extend(["", "oauth readiness:"])
+        for provider, item in oauth.items():
+            if not isinstance(item, dict):
+                continue
+            lines.append(f"  {provider}: {item.get('state', '')} - {item.get('detail', '')}")
+            next_action = item.get("next_action")
+            if next_action:
+                lines.append(f"    next: {next_action}")
+    return lines
 
 
 def _login_lines(payload: dict[str, Any]) -> list[str]:
