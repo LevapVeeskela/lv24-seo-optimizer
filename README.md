@@ -64,7 +64,7 @@ finding/task lifecycle, portable backup bundles with non-destructive and two-pha
 read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, Bing page/traffic/
 crawl/URL diagnostics, Bing sitemap and URL submission, one-click IndexNow from the project
 sitemap, GSC URL inspection + sitemap reads + filtered search analytics, Yandex events/sitemaps/
-history/recrawl-queue reads, organic Metrika pages/goals/dimensions, the 24-command CLI,
+history/recrawl-queue reads, organic Metrika pages/goals/dimensions, the 25-command CLI,
 the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
@@ -109,6 +109,8 @@ lv24-seo yandex sitemaps --json                 # sitemap ids, URLs, counts, err
 lv24-seo yandex history --kind sqi --json       # SQI / in-search / queries / query series
 lv24-seo yandex queue --json                    # recrawl tasks + provider total (read-only)
 lv24-seo yandex recrawl --url https://example.com/page --allow-write  # plan; confirm to POST
+lv24-seo indexing status --live --json          # indexed/submitted/queued per provider + quotas
+lv24-seo indexing run --from-sitemap --json     # plan; add --allow-write to submit within quotas
 lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown                 # week-over-week diff of stored snapshots
 lv24-seo stats --days 7 --json                  # read-only per-provider dashboard snapshot
@@ -210,9 +212,9 @@ audit → plan → fix → verify.
 |---|---|
 | **Reports** | weekly search performance + delta, indexing triage, striking-distance opportunities, content decay, technical regressions, and a Core Web Vitals section fed by `cwv collect` (CrUX URL+device p75, PSI lab); `cwv audits` returns bounded Lighthouse diagnostics and `cwv history` weekly CrUX p75 periods |
 | **MCP tools** | 12 tools across GSC, Yandex, crawl, reports, logs and gated writes — see the table below |
-| **CLI** | 24 top-level commands (17 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `metrika`, `sitemap`, `indexnow`, `bing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`; read commands accept `--strict` to exit `5` on truncated data |
+| **CLI** | 25 top-level commands (18 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `metrika`, `sitemap`, `indexnow`, `bing`, `indexing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp`; read commands accept `--strict` to exit `5` on truncated data |
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
-| **Automation** | cron / systemd timer / Windows Task Scheduler generators with plan-first `schedule install` (`--allow-write` to apply), read-only `schedule status`, exact and idempotent `schedule uninstall`, plus a GitHub Actions recipe |
+| **Automation** | cron / systemd timer / Windows Task Scheduler generators with plan-first `schedule install` (`--allow-write` to apply), read-only `schedule status`, exact and idempotent `schedule uninstall`, a daily `indexing run` job, plus a GitHub Actions recipe |
 
 ### MCP tools
 

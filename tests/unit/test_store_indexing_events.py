@@ -49,7 +49,7 @@ def _add(store: Store, **overrides: object) -> str:
 
 
 def test_schema_version_covers_the_indexing_events_migration() -> None:
-    assert SCHEMA_VERSION == INDEXING_EVENTS_MIGRATION_VERSION
+    assert SCHEMA_VERSION >= INDEXING_EVENTS_MIGRATION_VERSION
 
 
 def test_fresh_database_has_indexing_events_and_the_full_ledger(store: Store) -> None:

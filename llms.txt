@@ -10,7 +10,7 @@
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
-- CLI: 24 top-level commands (17 groups + 7 commands), every command with `--json`.
+- CLI: 25 top-level commands (18 groups + 7 commands), every command with `--json`.
 - Metrika reads: `lv24-seo metrika pages|goals|queries|devices|countries|engagement|bytime` are
   organic-only (`filters=ym:s:lastTrafficSource=='organic'`) and read-only. `stats` and the weekly
   digest expose `organic_visits`/`organic_users` and `all_visits`/`all_users` separately; goals come
@@ -23,6 +23,12 @@
   directory prefix before the plan; `200`/`202` are accepted/accepted-pending, `400` format,
   `403` key file, `422` host/key mismatch, `429` spam/quota. GSC sitemap submit and Bing sitemap
   delete stay `WRITE_DISABLED`.
+- Indexing automation: `indexing status|run|history` keeps a per-provider URL queue
+  (`indexing_state`), checks GSC URL Inspection and Bing `GetUrlInfo`, and plans/applies Bing,
+  Yandex and IndexNow submissions within fresh quotas. `--allow-write` needs
+  `[indexing] enabled=true` and `LV24_SEO_WRITE_SECRET`; the daily `schedule install --kind
+  indexing` job embeds `--allow-write` but never the secret. GSC's sitemap `indexed` aggregate is
+  deprecated, and Bing/Yandex/IndexNow expose no per-URL index count (`no_per_url_index_count`).
 - Bing reads: `bing quota` reports remaining daily/monthly submissions (Bing's `DailyQuota` /
   `MonthlyQuota` are remaining, not totals; the monthly window can bind first and its reset is
   undocumented); `bing sitemaps [--details FEED_URL]` lists feed fields and states that per-URL

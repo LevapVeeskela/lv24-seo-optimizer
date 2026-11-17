@@ -110,6 +110,11 @@ bing_app = typer.Typer(
     no_args_is_help=True,
     help="Bing URL submission, quota and sitemap status.",
 )
+indexing_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Quota-aware index checks and URL submission (write gated).",
+)
 report_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Build reports.")
 cwv_app = typer.Typer(
     add_completion=False,
@@ -134,6 +139,11 @@ app.add_typer(sitemap_app, name="sitemap", help="Sitemap submission (write, gate
 app.add_typer(indexnow_app, name="indexnow", help="IndexNow submission (write, gated).")
 app.add_typer(
     bing_app, name="bing", help="Bing Webmaster reads, URL submission, quota and sitemaps."
+)
+app.add_typer(
+    indexing_app,
+    name="indexing",
+    help="Quota-aware index checks and URL submission (write gated).",
 )
 app.add_typer(report_app, name="report", help="Build reports.")
 app.add_typer(cwv_app, name="cwv", help="Core Web Vitals: collect, audits and history.")
@@ -172,6 +182,7 @@ _BING_SUBMIT_BATCH = 500
 _SCHEDULE_CRONS: dict[str, str] = {
     "weekly": "0 6 * * 1",
     "daily": "0 6 * * *",
+    "indexing": "0 4 * * *",
 }
 
 _MCP_ARGS: tuple[str, ...] = ("--from", "lv24-seo", "lv24-seo", "mcp", "serve")
@@ -2084,6 +2095,167 @@ def bing_quota_command(
     emit(payload, as_json=as_json, lines=_bing_quota_lines(payload))
 
 
+# -- indexing automation ---------------------------------------------------------------------
+
+
+@indexing_app.command("status")
+def indexing_status_command(
+    provider: Annotated[
+        str,
+        typer.Option(
+            "--provider",
+            help="all, bing, yandex, gsc or indexnow (default all).",
+        ),
+    ] = "all",
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="URL rows per provider (default 50, max 1000)."),
+    ] = 50,
+    live: Annotated[
+        bool,
+        typer.Option(
+            "--live",
+            help=(
+                "Read Bing and Yandex quotas now; without it stored quotas are used. "
+                "GSC's sitemap aggregate is read when the GSC client is available."
+            ),
+        ),
+    ] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Show how many URLs are indexed, submitted, queued or still pending (read-only).
+
+    The GSC sitemap ``contents[].indexed`` aggregate is read whenever the GSC client is
+    available; it is deprecated by Google and reported separately from the per-URL ``indexed``
+    count. ``--live`` additionally reads Bing and Yandex quotas. Bing, Yandex and IndexNow
+    expose no per-URL index count, so their ``indexed_total`` stays null with
+    ``no_per_url_index_count``.
+
+    ``write_secret_present`` reports only whether ``LV24_SEO_WRITE_SECRET`` is set; the value
+    is never read into the envelope. When it is false, ``--allow-write`` would fail
+    ``WRITE_DISABLED``.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.indexing_status(provider=provider, limit=limit, live=live),
+        persist=True,
+    )
+    emit(payload, as_json=as_json, lines=_indexing_status_lines(payload))
+
+
+@indexing_app.command("run")
+def indexing_run_command(
+    provider: Annotated[
+        str,
+        typer.Option(
+            "--provider",
+            help="all, bing, yandex, gsc or indexnow (default all).",
+        ),
+    ] = "all",
+    from_sitemap: Annotated[
+        bool,
+        typer.Option("--from-sitemap", help="Read the URL queue from the project sitemap."),
+    ] = False,
+    sitemap_url: Annotated[
+        str,
+        typer.Option(
+            "--sitemap-url",
+            help=(
+                "Absolute sitemap URL (default: <project.base_url>/sitemap.xml); "
+                "implies --from-sitemap."
+            ),
+        ),
+    ] = "",
+    url: Annotated[
+        list[str] | None,
+        typer.Option("--url", help="URL to include; repeat the flag. Merged with the sitemap."),
+    ] = None,
+    max_submit: Annotated[
+        int | None,
+        typer.Option("--max-submit", help="Submission cap for this run (default: config)."),
+    ] = None,
+    max_inspect: Annotated[
+        int | None,
+        typer.Option("--max-inspect", help="Index-check cap for this run (default: config)."),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Resubmit even when last_submitted_at is newer than lastmod."),
+    ] = False,
+    allow_write: Annotated[
+        bool,
+        typer.Option(
+            "--allow-write",
+            help=(
+                "Apply provider submissions. Requires [indexing] enabled=true and "
+                "LV24_SEO_WRITE_SECRET; without it the command only checks and plans."
+            ),
+        ),
+    ] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Check index status and plan/apply submissions within provider quotas.
+
+    Checks are read-only and run in both modes. Without ``--allow-write`` nothing is sent.
+    With it, the engine re-reads quotas, verifies the plan hash, consumes an internal confirm
+    token and records one ``indexing_runs`` row per provider. A scheduled run uses
+    ``--allow-write``; the host scheduler must provide ``LV24_SEO_WRITE_SECRET`` in its
+    environment (systemd ``Environment=``/``EnvironmentFile=``, Windows user environment,
+    cron export). The secret is never embedded in the generated command line.
+
+    A URL whose ``last_submitted_at`` is newer than its sitemap ``lastmod`` is skipped unless
+    ``--force`` is set. Empty quotas are reported as ``quota_exhausted`` with
+    ``not_attempted``; the command never reports zero as "all indexed".
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.indexing_run(
+            provider=provider,
+            from_sitemap=from_sitemap,
+            sitemap_url=sitemap_url,
+            urls=url or [],
+            max_submit=max_submit,
+            max_inspect=max_inspect,
+            force=force,
+            allow_write=allow_write,
+        ),
+        persist=True,
+    )
+    emit(payload, as_json=as_json, lines=_indexing_run_lines(payload))
+
+
+@indexing_app.command("history")
+def indexing_history_command(
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="Runs to show, newest first (default 20, max 1000)."),
+    ] = 20,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """List recorded indexing runs, newest first (read-only)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.indexing_history(limit=limit),
+        persist=True,
+    )
+    emit(payload, as_json=as_json, lines=_indexing_history_lines(payload))
+
+
 def _write_command(
     prepare: Callable[[], tuple[WritePlan, Callable[[WritePlan], Any] | None]],
     *,
@@ -2573,6 +2745,100 @@ def _bing_quota_lines(payload: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+def _indexing_status_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    providers = data.get("providers")
+    lines = [f"write secret: {'present' if data.get('write_secret_present') else 'missing'}"]
+    if not isinstance(providers, Mapping) or not providers:
+        return [*lines, "providers: none"]
+    for name in sorted(providers):
+        entry = providers[name]
+        if not isinstance(entry, Mapping):
+            continue
+        lines.append(
+            f"{name}: urls={entry.get('urls', 0)} submitted={entry.get('submitted', 0)} "
+            f"inspected={entry.get('inspected', 0)} indexed={entry.get('indexed', 0)} "
+            f"crawled={entry.get('crawled', 0)} queued={entry.get('queued', 0)} "
+            f"pending={entry.get('pending', 0)}"
+        )
+        indexed_total = entry.get("indexed_total")
+        if indexed_total is not None:
+            lines.append(f"  indexed_total: {indexed_total} (gsc sitemaps, deprecated)")
+        else:
+            lines.append("  indexed_total: unknown (no per-URL index count)")
+        quota = entry.get("quota")
+        if isinstance(quota, Mapping):
+            lines.append(
+                "  quota: remaining="
+                f"{_cell(quota.get('remaining')) or 'unknown'} "
+                f"reset={_cell(quota.get('reset')) or 'unknown'}"
+            )
+        limits = entry.get("limitations")
+        if isinstance(limits, Sequence) and not isinstance(limits, (str, bytes)) and limits:
+            lines.append(f"  limitations: {', '.join(str(item) for item in limits)}")
+    return lines
+
+
+def _indexing_run_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    meta = payload.get("meta") or {}
+    if not isinstance(data, Mapping) or not isinstance(meta, Mapping):
+        return []
+    queue = data.get("queue")
+    queue_info: Mapping[str, Any] = queue if isinstance(queue, Mapping) else {}
+    lines = [
+        f"mode: {'dry run' if meta.get('dry_run') else 'apply'}",
+        f"queue: total={queue_info.get('total', 0)} selected={queue_info.get('selected', 0)} "
+        f"truncated={bool(queue_info.get('truncated'))}",
+    ]
+    providers = data.get("providers")
+    if isinstance(providers, Mapping):
+        for name in sorted(providers):
+            entry = providers[name]
+            if not isinstance(entry, Mapping):
+                continue
+            lines.append(
+                f"{name}: planned={entry.get('planned', 0)} submitted={entry.get('submitted', 0)} "
+                f"checked={entry.get('checked', 0)} skipped={entry.get('skipped', 0)} "
+                f"not_attempted={entry.get('not_attempted', 0)} status={entry.get('status', '-')}"
+            )
+            limits = entry.get("limitations")
+            if isinstance(limits, Sequence) and not isinstance(limits, (str, bytes)) and limits:
+                lines.append(f"  limitations: {', '.join(str(item) for item in limits)}")
+    limits = data.get("limitations")
+    if isinstance(limits, Sequence) and not isinstance(limits, (str, bytes)) and limits:
+        lines.append(f"limitations: {', '.join(str(item) for item in limits)}")
+    return lines
+
+
+def _indexing_history_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    runs = data.get("runs")
+    if not isinstance(runs, Sequence) or isinstance(runs, (str, bytes)) or not runs:
+        return ["no indexing runs recorded"]
+    lines: list[str] = []
+    for run in runs:
+        if not isinstance(run, Mapping):
+            continue
+        lines.append(
+            f"{run.get('started_at') or '-'} {run.get('provider') or '-'} "
+            f"{run.get('status') or '-'} planned={run.get('planned', 0)} "
+            f"submitted={run.get('submitted', 0)} checked={run.get('checked', 0)} "
+            f"skipped={run.get('skipped', 0)}"
+        )
+    return lines
+
+
 def _sitemap_write_limitations(
     *,
     action: str,
@@ -2992,7 +3258,7 @@ def _score_text(value: object) -> str:
 
 @schedule_app.command("install")
 def schedule_install(
-    kind: Annotated[str, typer.Option("--kind", help="weekly or daily.")] = "weekly",
+    kind: Annotated[str, typer.Option("--kind", help="weekly, daily or indexing.")] = "weekly",
     cron: Annotated[
         str | None, typer.Option("--cron", help="Override the default cron expression.")
     ] = None,
@@ -3038,7 +3304,7 @@ def schedule_install(
 
 @schedule_app.command("status")
 def schedule_status_cmd(
-    kind: Annotated[str, typer.Option("--kind", help="weekly or daily.")] = "weekly",
+    kind: Annotated[str, typer.Option("--kind", help="weekly, daily or indexing.")] = "weekly",
     cron: Annotated[
         str | None, typer.Option("--cron", help="Cron expression to compare against.")
     ] = None,
@@ -3066,7 +3332,7 @@ def schedule_status_cmd(
 
 @schedule_app.command("uninstall")
 def schedule_uninstall_cmd(
-    kind: Annotated[str, typer.Option("--kind", help="weekly or daily.")] = "weekly",
+    kind: Annotated[str, typer.Option("--kind", help="weekly, daily or indexing.")] = "weekly",
     cron: Annotated[
         str | None, typer.Option("--cron", help="Cron expression of the installed job.")
     ] = None,
@@ -3107,7 +3373,17 @@ def schedule_uninstall_cmd(
 
 @schedule_app.command("print")
 def schedule_print(
-    cron: Annotated[str, typer.Option("--cron", help="Cron expression, for example '0 6 * * 1'.")],
+    cron: Annotated[
+        str,
+        typer.Option(
+            "--cron",
+            help="Cron expression, for example '0 6 * * 1' (default: from --kind).",
+        ),
+    ] = "",
+    kind: Annotated[
+        str,
+        typer.Option("--kind", help="weekly, daily or indexing (optional)."),
+    ] = "",
     target: Annotated[
         str, typer.Option("--target", help="cron, systemd or windows (default cron).")
     ] = "cron",
@@ -3121,15 +3397,29 @@ def schedule_print(
     """Render a schedule artefact without touching the host."""
 
     def action() -> dict[str, Any]:
+        if kind.strip():
+            spec, name = _schedule_spec(kind, cron or None, config_path, target)
+            return ok(
+                install_schedule(spec, target=target, dry_run=True),
+                meta={"target": target, "kind": name},
+            )
+        if not cron.strip():
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="pass --kind or --cron",
+                next_action=(
+                    "use --kind weekly, --kind daily, --kind indexing or --cron '0 6 * * 1'"
+                ),
+            )
         config = load_config(config_path)
-        kind = _kind_from_cron(cron)
+        name = _kind_from_cron(cron)
         spec = ScheduleSpec(
-            name=f"lv24-seo-{kind}",
+            name=f"lv24-seo-{name}",
             cron=cron,
-            command=_report_command(kind, config_path, target=target),
+            command=_report_command(name, config_path, target=target),
             workdir=_schedule_workdir(config_path),
             timezone=config.report.timezone,
-            description=f"lv24-seo {kind} SEO report",
+            description=f"lv24-seo {name} SEO report",
         )
         return ok(install_schedule(spec, target=target, dry_run=True), meta={"target": target})
 
@@ -3641,7 +3931,7 @@ def _schedule_kind(value: str) -> str:
         raise SeoError(
             code=INVALID_INPUT,
             message=f"unknown schedule kind {value!r}",
-            next_action="use --kind weekly or --kind daily",
+            next_action="use --kind weekly, --kind daily or --kind indexing",
         )
     return kind
 
@@ -3652,19 +3942,25 @@ def _schedule_spec(
     config_path: Path | None,
     target: str,
 ) -> tuple[ScheduleSpec, str]:
-    """Build the report job spec shared by install, status and uninstall."""
+    """Build the scheduled job spec shared by install, status, uninstall and print."""
 
     name = _schedule_kind(kind)
     config = load_config(config_path)
-    # "auto" must keep platform detection in _report_command, so pass None there.
+    # "auto" must keep platform detection in the command builder, so pass None there.
     command_target = None if target == "auto" else target
+    if name == "indexing":
+        command = _indexing_command(config_path, target=command_target)
+        description = "lv24-seo indexing automation"
+    else:
+        command = _report_command(name, config_path, target=command_target)
+        description = f"lv24-seo {name} SEO report"
     spec = ScheduleSpec(
         name=f"lv24-seo-{name}",
         cron=cron or _SCHEDULE_CRONS[name],
-        command=_report_command(name, config_path, target=command_target),
+        command=command,
         workdir=_schedule_workdir(config_path),
         timezone=config.report.timezone,
-        description=f"lv24-seo {name} SEO report",
+        description=description,
     )
     return spec, name
 
@@ -3683,6 +3979,24 @@ def _report_command(kind: str, config_path: Path | None, *, target: str | None =
     if kind == "daily":
         arguments.extend(["--days", "1", "--lag-days", "0"])
     arguments.append("--send")
+    if resolved is not None:
+        arguments.extend(["--config", str(resolved)])
+    arguments.append("--json")
+    windows = target == "windows" or (target is None and _platform_family() == "windows")
+    return subprocess.list2cmdline(arguments) if windows else shlex.join(arguments)
+
+
+def _indexing_command(config_path: Path | None, *, target: str | None = None) -> str:
+    """Render the scheduled indexing run.
+
+    ``--allow-write`` is embedded because installing the job is the automation opt-in. The
+    write secret is **not** embedded: the host scheduler must provide
+    ``LV24_SEO_WRITE_SECRET`` in its environment (systemd ``Environment=`` or
+    ``EnvironmentFile=``, a Windows user environment variable, or an exported cron variable).
+    """
+    executable = shutil.which("lv24-seo") or "lv24-seo"
+    resolved = resolve_config_path(config_path)
+    arguments = [executable, "indexing", "run", "--allow-write"]
     if resolved is not None:
         arguments.extend(["--config", str(resolved)])
     arguments.append("--json")

@@ -315,6 +315,20 @@ host/key-schema mismatch (`INVALID_INPUT`) and `429` is potential spam or quota 
 retryable). Error messages keep the host, path and status; the key appears only inside the public
 key-file URL that the operator must publish.
 
+### Quota and index-status matrix (indexing automation)
+
+| Provider | Submission path | Quota source | Per-URL index check | Honest limitations |
+|---|---|---|---|---|
+| Bing | `SubmitUrlbatch`, max 500 URLs per call | `GetUrlSubmissionQuota`: `daily_remaining` / `monthly_remaining` (remaining, not totals) | `GetUrlInfo` gives `http_status` and `last_crawled_date` only | `bing_no_per_url_index_status`, `no_per_url_index_count`, `site_scan_no_api` (Site Scan has no public API), `bing_quota_reset_undocumented` |
+| Yandex | `recrawl/queue`, one URL per request | `recrawl/quota`: `daily_quota` / `quota_remainder` | none | `yandex_no_per_url_index_status`, `no_per_url_index_count`, `one_url_per_call`; reset is the provider's daily boundary |
+| IndexNow | one POST, max 10,000 URLs | local UTC-day counter capped by `[indexing].indexnow_daily_limit` (default 1000) | none | `indexnow_no_status_api`, `no_per_url_index_count`; `200` is accepted, never indexed |
+| GSC | not used by this feature (no submission path) | local UTC-day counter capped by `[indexing].gsc_inspect_daily_limit` (default 2000) for URL Inspection | `urlInspection`: `PASS` / `Submitted and indexed` -> `indexed`; `NEUTRAL` / `FAIL` -> `not_indexed`; anything else `unknown` | `gsc_indexed_count_deprecated` for the aggregate `sitemaps[].contents[].indexed` total; the field is deprecated and always reported separately from the per-URL count |
+
+`indexing status --live` reads the provider quotas above. `indexing run` re-reads them immediately
+before an apply, caps the plan to the smaller of `max_submit_per_run` and the remaining quota, and
+reports an exhausted quota as `quota_exhausted` with `not_attempted`. A zero is never presented as
+"all indexed": only GSC has a per-URL verdict, and its aggregate sitemap count is deprecated.
+
 ## 5. Chrome UX Report (CrUX) and PageSpeed Insights (PSI)
 
 | | |

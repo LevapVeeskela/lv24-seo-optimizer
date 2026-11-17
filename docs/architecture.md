@@ -26,7 +26,9 @@
 ```
 
 Dependencies point downward only. `providers` and `crawl` never import `report` or `cli`. `analysis`
-depends on `store` models, not on provider client classes.
+depends on `store` models, not on provider client classes. `indexing.py` is the quota-aware
+submission/check engine: `SeoService` builds its clients and targets, the engine reads/writes
+`indexing_state`/`indexing_runs` and calls provider adapters only through the write gate.
 
 ## 2. The provider contract
 
@@ -86,6 +88,9 @@ Rules:
 | `issues` | crawl + provider findings | `rule_id`, `severity`, `property_id`, `url`, `detail_json`, `first_seen`, `last_seen`, `state` (`open`/`fixed`/`ignored`) |
 | `tasks` | finding/task lifecycle (v3) | `kind`, `property_id`, `url`, `rule_id`, `state` (`open`/`in_progress`/`verified`/`dismissed`), `payload_json`, `created_at`, `updated_at`; unique on `(kind, property_id, url, rule_id)` |
 | `indexing_events` | provider-reported per-URL index status (v4) | `provider`, `property_id`, `url`, `event`, `event_date`, `detail_json`, `first_seen`, `last_seen`; unique on `(provider, property_id, url, event, event_date)` |
+| `indexing_state` | local queue position per provider/URL (v5) | `provider`, `property_id`, `url`, `first_seen`, `last_submitted_at`, `last_checked_at`, `submit_status`, `index_status`, `coverage_state`, `http_status`, `last_crawled_at`, `next_check_at`, `detail_json`; unique on `(provider, property_id, url)` |
+| `indexing_runs` | one row per provider per indexing run (v5) | `id`, `started_at`, `finished_at`, `provider`, `planned`, `submitted`, `checked`, `skipped`, `quota_before_json`, `quota_after_json`, `status`, `detail_json` |
+| `quota_usage` | local UTC-day counters for GSC inspection and IndexNow (v5) | `provider`, `property_id`, `day`, `kind`, `used`; unique on `(provider, property_id, day, kind)` |
 | `snapshots` | diff base for reports | `kind`, `property_id`, `period`, `content_hash`, `payload_gz` |
 | `sends` | delivery ledger | `kind`, `property_id`, `period`, `content_hash`, `channel`, `sent_at`, `status` |
 | `bot_daily` | nginx log rollup | `property_id`, `date`, `bot`, `status`, `hits`, `bytes`, `p95_ms` |
@@ -101,12 +106,13 @@ original window cannot be recovered. Normal daily reads exclude them. Repository
 explicitly use `include_legacy=True` to inspect retained data; no historical rows are deleted.
 Migration 3 adds the `tasks` table (state `CHECK` plus two indexes) and is applied on the next open;
 migration 4 adds `indexing_events` (provider-reported per-URL index status) with two indexes, and a
-fresh database records versions 1..4 in `schema_migrations`. The task natural key is
+fresh database records versions 1..4 in `schema_migrations`. Migration 5 adds `indexing_state`,
+`indexing_runs` and `quota_usage`; a fresh database records versions 1..5. The task natural key is
 `(kind, property_id, url, rule_id)`, so re-running a crawl or decay scan never duplicates a task.
 The indexing-event natural key is `(provider, property_id, url, event, event_date)`: a replayed
 provider sync updates `last_seen`/`detail_json` instead of inserting a duplicate, and `first_seen`
 never moves. Daily aggregate history rows from Yandex carry no URL, so they are skipped rather than
-assigned a guessed one. Both migrations are additive; no user data is rewritten or deleted.
+assigned a guessed one. All migrations are additive; no user data is rewritten or deleted.
 `bot_daily` stays a reserved table: `logs analyze` and `seo_log_analysis` return their rollups
 in-memory and do not persist them, so log history is not stored.
 

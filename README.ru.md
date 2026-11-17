@@ -53,7 +53,7 @@ lv24-seo export skills --out ./skills      # скиллы из wheel-пакет�
 | Источники | GSC, Вебмастер, Метрика, Bing/IndexNow (страницы, трафик, краул, URL-диагностика, отправка), CrUX, PSI, собственный краул, логи nginx |
 | Отчёты | недельный дайджест с дельтами (дельта — только по окнам GSC), атрибутированные изменения (причина/уверенность/доказательства), CWV по шаблонам и устройствам (наполняется `cwv collect`: CrUX URL+устройство, PSI — только lab), триаж индексации, striking distance, деградация контента, техрегрессии |
 | MCP | 12 инструментов, 3 ресурса, 3 промпта; без записи к провайдеру по умолчанию — таблица ниже |
-| CLI | 24 команды верхнего уровня (17 групп + 7 команд): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `metrika`, `sitemap`, `indexnow`, `bing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp` |
+| CLI | 25 команды верхнего уровня (18 групп + 7 команд): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `metrika`, `sitemap`, `indexnow`, `bing`, `indexing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp` |
 | Скиллы | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
 | Автоматизация | cron / systemd timer / Планировщик Windows: `schedule install` по умолчанию только печатает план, запись — с `--allow-write`; `schedule status` только читает; `schedule uninstall` удаляет ровно созданную задачу и идемпотентен; плюс рецепт GitHub Actions |
 
