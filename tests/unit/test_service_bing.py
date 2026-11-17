@@ -38,8 +38,154 @@ class FakeBingClient:
         self.site_url = site_url
         self.submit_calls: list[tuple[list[str], int]] = []
         self.details: list[str] = []
+        self.children_calls: list[tuple[str, int]] = []
+        self.join_calls: list[tuple[str, str, str]] = []
+        self.url_info_calls: list[str] = []
         self.closed = False
         FakeBingClient.instances.append(self)
+
+    def page_stats(self) -> ProviderResult[dict[str, object]]:
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=1,
+            rows=[
+                {
+                    "page": URL_A,
+                    "clicks": 3,
+                    "impressions": 40,
+                    "click_position": 2.0,
+                    "impression_position": 3.0,
+                    "date": "2026-11-14T00:00:00+00:00",
+                }
+            ],
+            total=1,
+        )
+
+    def rank_and_traffic(self) -> ProviderResult[dict[str, object]]:
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=1,
+            rows=[{"date": "2026-11-14T00:00:00+00:00", "clicks": 3, "impressions": 40}],
+            total=1,
+        )
+
+    def crawl_stats(self) -> ProviderResult[dict[str, object]]:
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=1,
+            rows=[{"date": "2026-11-14T00:00:00+00:00", "code_2xx": 10}],
+            total=1,
+            limitations=("crawl_stats_six_month_window",),
+        )
+
+    def url_info(self, url: str) -> ProviderResult[dict[str, object]]:
+        self.url_info_calls.append(url)
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=2,
+            rows=[
+                {
+                    "url": url,
+                    "anchor_count": 1,
+                    "discovery_date": "2026-11-01T00:00:00+00:00",
+                    "document_size": 100,
+                    "http_status": 200,
+                    "is_page": True,
+                    "last_crawled_date": "2026-11-13T00:00:00+00:00",
+                    "total_child_url_count": 0,
+                }
+            ],
+            total=1,
+        )
+
+    def children_url_info(self, url: str, page: int = 0) -> ProviderResult[dict[str, object]]:
+        self.children_calls.append((url, page))
+        pages = {
+            0: [
+                {"url": URL_A, "http_status": 200, "is_page": True},
+                {"url": URL_B, "http_status": 200, "is_page": True},
+            ],
+            1: [{"url": "https://example.com/c", "http_status": 200, "is_page": True}],
+        }
+        rows = pages.get(page, [])
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=2 if rows else 0,
+            rows=rows,
+            total=len(rows),
+            limitations=("provider_returned_no_rows",) if not rows else (),
+        )
+
+    def site_roles(self, **_: object) -> ProviderResult[dict[str, object]]:
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=0,
+            rows=[{"email": "user@example.com", "role": "ReadWrite", "role_code": 2}],
+            total=1,
+        )
+
+    def user_sites(self) -> ProviderResult[dict[str, object]]:
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=0,
+            rows=[{"url": "https://example.com/", "is_verified": True}],
+            total=1,
+        )
+
+    def query_page_stats(self, query: str) -> ProviderResult[dict[str, object]]:
+        self.join_calls.append(("query_pages", query, ""))
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=0,
+            rows=[{"query": query, "page": URL_A, "clicks": 1, "impressions": 2}],
+            total=1,
+        )
+
+    def page_query_stats(self, page: str) -> ProviderResult[dict[str, object]]:
+        self.join_calls.append(("page_queries", "", page))
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=0,
+            rows=[{"query": "seo tools", "page": page, "clicks": 1, "impressions": 2}],
+            total=1,
+        )
+
+    def query_page_detail_stats(self, query: str, page: str) -> ProviderResult[dict[str, object]]:
+        self.join_calls.append(("query_page_detail", query, page))
+        return ProviderResult(
+            source="bing",
+            property_id=self.site_url,
+            fetched_at=utc_now(),
+            data_age_days=0,
+            rows=[
+                {
+                    "query": query,
+                    "page": page,
+                    "clicks": 1,
+                    "impressions": 2,
+                    "position": 3.5,
+                }
+            ],
+            total=1,
+        )
 
     def submission_quota(self) -> ProviderResult[dict[str, object]]:
         return ProviderResult(
@@ -276,3 +422,168 @@ def test_unknown_client_override_is_still_rejected(tmp_path: Path) -> None:
         SeoService(_config(tmp_path), clients={"nope": object()})
 
     assert caught.value.code == INVALID_INPUT
+
+
+def test_bing_pages_traffic_and_crawl_return_rows(tmp_path: Path) -> None:
+    pages = _service(tmp_path).bing_pages()
+    assert pages["ok"] is True
+    assert pages["data"]["rows"][0]["page"] == URL_A
+    assert pages["meta"]["data_age_days"] == 1
+
+    traffic = _service(tmp_path).bing_traffic()
+    assert traffic["data"]["rows"][0]["clicks"] == 3
+
+    crawl = _service(tmp_path).bing_crawl()
+    assert crawl["data"]["rows"][0]["code_2xx"] == 10
+    assert "crawl_stats_six_month_window" in crawl["meta"]["limitations"]
+
+
+def test_bing_empty_stats_keep_the_no_rows_limitation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class EmptyStats(FakeBingClient):
+        def page_stats(self) -> ProviderResult[dict[str, object]]:
+            return ProviderResult(
+                source="bing",
+                property_id=self.site_url,
+                fetched_at=utc_now(),
+                data_age_days=0,
+                rows=[],
+                total=0,
+                limitations=("no_rows_for_window",),
+            )
+
+    monkeypatch.setattr("lv24_seo.services.BingClient", EmptyStats)
+
+    payload = _service(tmp_path).bing_pages()
+
+    assert payload["ok"] is True
+    assert payload["data"]["rows"] == []
+    assert payload["meta"]["total"] == 0
+    assert "no_rows_for_window" in payload["meta"]["limitations"]
+
+
+def test_bing_url_info_returns_one_row_and_echoes_the_target(tmp_path: Path) -> None:
+    payload = _service(tmp_path).bing_url_info("domain:example.com")
+
+    assert payload["ok"] is True
+    assert payload["data"]["url"] == "domain:example.com"
+    assert payload["data"]["rows"][0]["total_child_url_count"] == 0
+    assert FakeBingClient.instances[0].url_info_calls == ["domain:example.com"]
+
+
+def test_bing_url_info_empty_is_provider_returned_no_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class EmptyUrlInfo(FakeBingClient):
+        def url_info(self, url: str) -> ProviderResult[dict[str, object]]:
+            return ProviderResult(
+                source="bing",
+                property_id=self.site_url,
+                fetched_at=utc_now(),
+                data_age_days=0,
+                rows=[],
+                total=0,
+                limitations=("provider_returned_no_rows",),
+            )
+
+    monkeypatch.setattr("lv24_seo.services.BingClient", EmptyUrlInfo)
+
+    payload = _service(tmp_path).bing_url_info("https://example.com/missing")
+
+    assert payload["ok"] is True
+    assert payload["data"]["rows"] == []
+    assert "provider_returned_no_rows" in payload["meta"]["limitations"]
+
+
+def test_bing_children_walks_pages_and_marks_the_cap(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    complete = service.bing_children(URL_A, page=0, pages=3)
+
+    assert complete["ok"] is True
+    assert complete["data"]["pages_read"] == 3
+    assert len(complete["data"]["rows"]) == 3
+    assert complete["meta"]["truncated"] is False
+    assert "provider_returned_no_rows" not in complete["meta"]["limitations"]
+    assert FakeBingClient.instances[0].children_calls == [
+        (URL_A, 0),
+        (URL_A, 1),
+        (URL_A, 2),
+    ]
+
+    capped = _service(tmp_path).bing_children(URL_A, page=0, pages=1)
+
+    assert capped["data"]["pages_read"] == 1
+    assert len(capped["data"]["rows"]) == 2
+    assert capped["meta"]["truncated"] is True
+    assert "children_page_cap" in capped["meta"]["limitations"]
+
+
+def test_bing_children_rejects_pages_above_the_cap(tmp_path: Path) -> None:
+    payload = _service(tmp_path).bing_children(URL_A, pages=11)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == INVALID_INPUT
+    assert FakeBingClient.instances == []
+
+
+def test_bing_users_and_sites_read_the_account_views(tmp_path: Path) -> None:
+    users = _service(tmp_path).bing_users()
+    assert users["data"]["rows"][0]["role"] == "ReadWrite"
+
+    sites = _service(tmp_path).bing_sites()
+    assert sites["data"]["rows"] == [{"url": "https://example.com/", "is_verified": True}]
+
+
+def test_bing_sites_works_without_a_configured_site(tmp_path: Path) -> None:
+    payload = _service(tmp_path, site="").bing_sites()
+
+    assert payload["ok"] is True
+    assert payload["data"]["rows"][0]["url"] == "https://example.com/"
+    assert "site_url" not in payload["data"]
+    assert FakeBingClient.instances[0].site_url == ""
+
+
+def test_bing_joins_selects_the_mode_from_the_flags(tmp_path: Path) -> None:
+    query_pages = _service(tmp_path).bing_joins(query="seo tools")
+    assert query_pages["data"]["mode"] == "query_pages"
+    assert query_pages["data"]["query"] == "seo tools"
+    assert query_pages["data"]["page"] is None
+
+    page_queries = _service(tmp_path).bing_joins(page=URL_A)
+    assert page_queries["data"]["mode"] == "page_queries"
+    assert page_queries["data"]["query"] is None
+    assert page_queries["data"]["page"] == URL_A
+
+    detail = _service(tmp_path).bing_joins(query="seo tools", page=URL_A)
+    assert detail["data"]["mode"] == "query_page_detail"
+    assert detail["data"]["rows"][0]["position"] == 3.5
+
+    assert FakeBingClient.instances[-1].join_calls == [("query_page_detail", "seo tools", URL_A)]
+
+
+def test_bing_joins_requires_a_query_or_page(tmp_path: Path) -> None:
+    payload = _service(tmp_path).bing_joins()
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == INVALID_INPUT
+    assert FakeBingClient.instances == []
+
+
+def test_bing_url_info_missing_site_is_config_invalid(tmp_path: Path) -> None:
+    payload = _service(tmp_path, site="").bing_url_info(URL_A)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == CONFIG_INVALID
+    assert "providers.bing.site" in payload["error"]["next_action"]
+
+
+def test_bing_url_info_missing_key_requires_auth(tmp_path: Path) -> None:
+    service = SeoService(_config(tmp_path), secrets=SecretStore(env={}))
+
+    payload = service.bing_url_info(URL_A)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == AUTH_REQUIRED
+    assert FakeBingClient.instances == []

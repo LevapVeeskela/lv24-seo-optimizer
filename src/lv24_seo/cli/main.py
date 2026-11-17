@@ -119,7 +119,9 @@ app.add_typer(gsc_app, name="gsc", help="Google Search Console.")
 app.add_typer(yandex_app, name="yandex", help="Yandex Webmaster.")
 app.add_typer(sitemap_app, name="sitemap", help="Sitemap submission (write, gated).")
 app.add_typer(indexnow_app, name="indexnow", help="IndexNow submission (write, gated).")
-app.add_typer(bing_app, name="bing", help="Bing URL submission, quota and sitemap status.")
+app.add_typer(
+    bing_app, name="bing", help="Bing Webmaster reads, URL submission, quota and sitemaps."
+)
 app.add_typer(report_app, name="report", help="Build reports.")
 app.add_typer(cwv_app, name="cwv", help="Collect URL+device Core Web Vitals.")
 app.add_typer(schedule_app, name="schedule", help="Host scheduler jobs.")
@@ -1204,6 +1206,307 @@ def bing_issues_command(
     emit(payload, as_json=as_json, lines=_bing_issues_lines(payload))
 
 
+@bing_app.command("pages")
+def bing_pages_command(
+    site: Annotated[
+        str,
+        typer.Option("--site", help="Bing site URL (default: providers.bing.site)."),
+    ] = "",
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """List Bing page-level traffic statistics (read-only).
+
+    ``GetPageStats`` returns weekly ``QueryStats`` rows whose ``Query`` field is the page URL.
+    An empty result carries ``no_rows_for_window`` and is not a zero-impression result.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_pages(site=site),
+        strict=strict,
+    )
+    emit(
+        payload,
+        as_json=as_json,
+        lines=_bing_rows_lines(
+            payload,
+            ("page", "clicks", "impressions", "click_position", "impression_position", "date"),
+        ),
+    )
+
+
+@bing_app.command("traffic")
+def bing_traffic_command(
+    site: Annotated[
+        str,
+        typer.Option("--site", help="Bing site URL (default: providers.bing.site)."),
+    ] = "",
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Show daily Bing site clicks and impressions (read-only).
+
+    ``GetRankAndTrafficStats`` covers every Bing vertical since 2023-03-24, not only web
+    search. An empty result carries ``no_rows_for_window``.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_traffic(site=site),
+        strict=strict,
+    )
+    emit(
+        payload,
+        as_json=as_json,
+        lines=_bing_rows_lines(payload, ("date", "clicks", "impressions")),
+    )
+
+
+@bing_app.command("crawl")
+def bing_crawl_command(
+    site: Annotated[
+        str,
+        typer.Option("--site", help="Bing site URL (default: providers.bing.site)."),
+    ] = "",
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Show daily Bing crawl statistics for the last six months (read-only).
+
+    ``GetCrawlStats`` reports response-code buckets and index/link totals. The provider caps
+    the window at six months, so every result carries ``crawl_stats_six_month_window``.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_crawl(site=site),
+        strict=strict,
+    )
+    emit(
+        payload,
+        as_json=as_json,
+        lines=_bing_rows_lines(
+            payload,
+            (
+                "date",
+                "code_2xx",
+                "code_301",
+                "code_302",
+                "code_4xx",
+                "code_5xx",
+                "crawl_errors",
+                "in_index",
+                "in_links",
+            ),
+        ),
+    )
+
+
+@bing_app.command("urlinfo")
+def bing_urlinfo_command(
+    url: Annotated[
+        str,
+        typer.Option(
+            "--url", help="Absolute URL or domain:<host>, for example domain:example.com."
+        ),
+    ] = "",
+    site: Annotated[
+        str,
+        typer.Option("--site", help="Bing site URL (default: providers.bing.site)."),
+    ] = "",
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Show Bing index details for one URL, directory or domain (read-only).
+
+    ``GetUrlInfo`` maps ``DiscoveryDate`` / ``LastCrawledDate`` and turns the WCF
+    ``Date(-62135596800000)`` sentinel into ``null``; a never-crawled row carries
+    ``never_crawled``.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_url_info(url, site=site),
+        strict=strict,
+    )
+    emit(
+        payload,
+        as_json=as_json,
+        lines=_bing_rows_lines(
+            payload,
+            (
+                "url",
+                "http_status",
+                "is_page",
+                "last_crawled_date",
+                "discovery_date",
+                "total_child_url_count",
+                "anchor_count",
+                "document_size",
+            ),
+        ),
+    )
+
+
+@bing_app.command("children")
+def bing_children_command(
+    url: Annotated[
+        str,
+        typer.Option(
+            "--url", help="Absolute URL or domain:<host>, for example domain:example.com."
+        ),
+    ] = "",
+    page: Annotated[
+        int,
+        typer.Option("--page", help="Zero-based provider page (default 0)."),
+    ] = 0,
+    pages: Annotated[
+        int,
+        typer.Option("--pages", help="Pages to read, starting at --page (default 1, max 10)."),
+    ] = 1,
+    site: Annotated[
+        str,
+        typer.Option("--site", help="Bing site URL (default: providers.bing.site)."),
+    ] = "",
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """List a bounded walk of Bing directory children (read-only).
+
+    ``GetChildrenUrlInfo`` is a read POST. A full final page means more children may exist,
+    so the result is ``truncated`` with ``children_page_cap`` instead of looking complete.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_children(url, page=page, pages=pages, site=site),
+        strict=strict,
+    )
+    emit(payload, as_json=as_json, lines=_bing_children_lines(payload))
+
+
+@bing_app.command("users")
+def bing_users_command(
+    site: Annotated[
+        str,
+        typer.Option("--site", help="Bing site URL (default: providers.bing.site)."),
+    ] = "",
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """List users and roles that can access the Bing site (read-only).
+
+    ``GetSiteRoles`` is read-only. Delegated verification codes are secrets and are not
+    echoed; the JSON role enum is exposed as both ``role`` and ``role_code``.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_users(site=site),
+        strict=strict,
+    )
+    emit(
+        payload,
+        as_json=as_json,
+        lines=_bing_rows_lines(
+            payload,
+            ("email", "role", "site", "verification_site", "expired", "date"),
+        ),
+    )
+
+
+@bing_app.command("sites")
+def bing_sites_command(
+    site: Annotated[
+        str,
+        typer.Option("--site", help="Echo this configured site in the result (optional)."),
+    ] = "",
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """List every site the Bing API key can see (read-only, account-scoped).
+
+    ``GetUserSites`` needs no ``siteUrl``, so this works before ``providers.bing.site`` is
+    configured. Verification codes are secrets and are not echoed.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_sites(site=site),
+        strict=strict,
+    )
+    emit(
+        payload,
+        as_json=as_json,
+        lines=_bing_rows_lines(payload, ("url", "is_verified")),
+    )
+
+
+@bing_app.command("joins")
+def bing_joins_command(
+    query: Annotated[
+        str,
+        typer.Option("--query", help="Search query; lists the pages that received impressions."),
+    ] = "",
+    page: Annotated[
+        str,
+        typer.Option("--page", help="Page URL or domain:<host>; lists the queries it received."),
+    ] = "",
+    site: Annotated[
+        str,
+        typer.Option("--site", help="Bing site URL (default: providers.bing.site)."),
+    ] = "",
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Read Bing's query/page joins (read-only).
+
+    ``--query`` alone lists pages for that query, ``--page`` alone lists queries for that
+    page, and both select daily detail rows for the pair. Every row carries explicit
+    ``query`` and ``page`` keys; ``mode`` says which join was used.
+    """
+    payload = _run(
+        config_path,
+        lambda service, config: service.bing_joins(query=query, page=page, site=site),
+        strict=strict,
+    )
+    emit(payload, as_json=as_json, lines=_bing_joins_lines(payload))
+
+
 @bing_app.command("quota")
 def bing_quota_command(
     strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
@@ -1582,6 +1885,106 @@ def _bing_quota_row(envelope: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(quota, Mapping):
             return dict(quota)
     return {}
+
+
+def _bing_rows_lines(
+    payload: Mapping[str, Any],
+    columns: Sequence[str],
+) -> list[str]:
+    """Render one Bing read table and state an empty window instead of showing zero."""
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    lines: list[str] = []
+    site = data.get("site_url")
+    if site:
+        lines.append(f"site: {site}")
+    lines.extend(_rows_table(data.get("rows"), columns))
+    lines.extend(_bing_limitation_notes(payload))
+    return lines
+
+
+def _bing_children_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    lines = [
+        f"site: {data.get('site_url') or '-'}",
+        f"url: {data.get('url') or '-'}",
+        (
+            f"page: {data.get('page')} "
+            f"(read {data.get('pages_read')} of {data.get('pages')} requested)"
+        ),
+    ]
+    lines.extend(
+        _rows_table(
+            data.get("rows"),
+            (
+                "url",
+                "http_status",
+                "is_page",
+                "last_crawled_date",
+                "total_child_url_count",
+                "anchor_count",
+            ),
+        )
+    )
+    lines.extend(_bing_limitation_notes(payload))
+    return lines
+
+
+def _bing_joins_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    lines = [
+        f"site: {data.get('site_url') or '-'}",
+        f"mode: {data.get('mode') or '-'}",
+        f"query: {data.get('query') or '-'}",
+        f"page: {data.get('page') or '-'}",
+    ]
+    lines.extend(
+        _rows_table(
+            data.get("rows"),
+            (
+                "query",
+                "page",
+                "clicks",
+                "impressions",
+                "click_position",
+                "impression_position",
+                "position",
+                "date",
+            ),
+        )
+    )
+    lines.extend(_bing_limitation_notes(payload))
+    return lines
+
+
+def _bing_limitation_notes(payload: Mapping[str, Any]) -> list[str]:
+    """Explain the two empty-data codes so ``rows: 0`` is not read as zero traffic."""
+    meta = payload.get("meta") or {}
+    limitations = meta.get("limitations") if isinstance(meta, Mapping) else None
+    codes = {str(item) for item in limitations or []}
+    notes: list[str] = []
+    if "no_rows_for_window" in codes:
+        notes.append("note: no rows for the reported window; this is not a zero-impression result")
+    if "provider_returned_no_rows" in codes:
+        notes.append("note: Bing returned no rows for this lookup")
+    if "never_crawled" in codes:
+        notes.append("note: Bing reports no crawl date for this URL (never crawled)")
+    if "crawl_stats_six_month_window" in codes:
+        notes.append("note: Bing crawl stats cover the last six months")
+    if "children_page_cap" in codes:
+        notes.append("note: stopped at the page cap; more children may exist")
+    return notes
 
 
 def _bing_sitemaps_lines(payload: Mapping[str, Any]) -> list[str]:

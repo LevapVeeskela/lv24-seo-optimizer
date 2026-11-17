@@ -628,3 +628,351 @@ def test_crawl_issues_flags_unknown_bits_instead_of_guessing() -> None:
     assert result.rows[0]["issues"] == []
     assert result.rows[0]["issues_bits"] == 512
     assert result.limitations == ("unknown_crawl_issue_bits",)
+
+
+def test_page_stats_maps_pages_positions_and_marks_empty_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetched_at = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(bing_client_module, "now_utc", lambda: fetched_at)
+    newest = datetime(2026, 11, 10, tzinfo=UTC)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "d": [
+                    {
+                        "Query": "https://example.com/pricing",
+                        "Clicks": 15,
+                        "Impressions": 100,
+                        "AvgClickPosition": 18,
+                        "AvgImpressionPosition": 17,
+                        "Date": _wcf_date(newest),
+                    }
+                ]
+            },
+        )
+
+    result = _bing(handler).page_stats()
+
+    assert result.rows == [
+        {
+            "page": "https://example.com/pricing",
+            "clicks": 15,
+            "impressions": 100,
+            "click_position": 18.0,
+            "impression_position": 17.0,
+            "date": newest.isoformat(),
+        }
+    ]
+    assert result.data_age_days == 5
+    assert result.limitations == ()
+
+    empty = _bing(lambda _request: httpx.Response(200, json={"d": []})).page_stats()
+
+    assert empty.rows == []
+    assert empty.total == 0
+    assert empty.data_age_days == 0
+    assert empty.limitations == ("no_rows_for_window",)
+
+
+def test_query_stats_empty_is_missing_data_not_zero_impressions() -> None:
+    result = _bing(lambda _request: httpx.Response(200, json={"d": []})).query_stats()
+
+    assert result.rows == []
+    assert result.total == 0
+    assert result.limitations == ("no_rows_for_window",)
+
+
+def test_rank_and_traffic_maps_daily_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    fetched_at = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(bing_client_module, "now_utc", lambda: fetched_at)
+    day = datetime(2026, 11, 14, tzinfo=UTC)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"d": [{"Date": _wcf_date(day), "Clicks": 3, "Impressions": 40}]},
+        )
+
+    result = _bing(handler).rank_and_traffic()
+
+    assert result.rows == [{"date": day.isoformat(), "clicks": 3, "impressions": 40}]
+    assert result.data_age_days == 1
+    assert result.limitations == ()
+
+
+def test_crawl_stats_maps_every_bucket_and_states_the_six_month_window() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "d": [
+                    {
+                        "AllOtherCodes": 1,
+                        "BlockedByRobotsTxt": 2,
+                        "Code2xx": 9998,
+                        "Code301": 3,
+                        "Code302": 4,
+                        "Code4xx": 5,
+                        "Code5xx": 6,
+                        "ContainsMalware": 0,
+                        "CrawlErrors": 11,
+                        "CrawledPages": 12,
+                        "Date": _wcf_date(datetime(2026, 11, 14, tzinfo=UTC)),
+                        "InIndex": 1000,
+                        "InLinks": 2048,
+                    }
+                ]
+            },
+        )
+
+    result = _bing(handler).crawl_stats()
+
+    assert result.rows == [
+        {
+            "date": "2026-11-14T00:00:00+00:00",
+            "code_2xx": 9998,
+            "code_301": 3,
+            "code_302": 4,
+            "code_4xx": 5,
+            "code_5xx": 6,
+            "blocked_by_robots_txt": 2,
+            "contains_malware": 0,
+            "crawl_errors": 11,
+            "crawled_pages": 12,
+            "in_index": 1000,
+            "in_links": 2048,
+            "all_other_codes": 1,
+        }
+    ]
+    assert result.limitations == ("crawl_stats_six_month_window",)
+
+
+def test_url_info_maps_fields_and_turns_the_never_sentinel_into_null() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "d": {
+                    "Url": "domain:example.com",
+                    "AnchorCount": 50,
+                    "DiscoveryDate": _wcf_date(datetime(2026, 11, 1, tzinfo=UTC)),
+                    "DocumentSize": 0,
+                    "HttpStatus": 0,
+                    "IsPage": False,
+                    "LastCrawledDate": "/Date(-62135596800000)/",
+                    "TotalChildUrlCount": 8380,
+                }
+            },
+        )
+
+    result = _bing(handler).url_info("domain:example.com")
+
+    assert result.rows == [
+        {
+            "url": "domain:example.com",
+            "anchor_count": 50,
+            "discovery_date": "2026-11-01T00:00:00+00:00",
+            "document_size": 0,
+            "http_status": 0,
+            "is_page": False,
+            "last_crawled_date": None,
+            "total_child_url_count": 8380,
+        }
+    ]
+    assert result.limitations == ("never_crawled",)
+    assert result.data_age_days == 0
+    assert seen[0].url.params["url"] == "domain:example.com"
+
+
+def test_url_info_empty_d_is_provider_returned_no_rows() -> None:
+    result = _bing(lambda _request: httpx.Response(200, json={"d": None})).url_info(
+        "https://example.com/missing"
+    )
+
+    assert result.rows == []
+    assert result.total == 0
+    assert result.limitations == ("provider_returned_no_rows",)
+
+
+def test_children_url_info_posts_the_documented_body_and_page() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "d": [
+                    {
+                        "Url": "https://example.com/a",
+                        "AnchorCount": 1,
+                        "DiscoveryDate": "/Date(-62135596800000)/",
+                        "DocumentSize": 120,
+                        "HttpStatus": 200,
+                        "IsPage": True,
+                        "LastCrawledDate": _wcf_date(datetime(2026, 11, 10, tzinfo=UTC)),
+                        "TotalChildUrlCount": 0,
+                    }
+                ]
+            },
+        )
+
+    result = _bing(handler).children_url_info("domain:example.com", page=2)
+
+    assert len(seen) == 1
+    assert seen[0].method == "POST"
+    assert seen[0].url.path.endswith("/GetChildrenUrlInfo")
+    assert seen[0].url.params["apikey"] == API_KEY
+    assert json.loads(seen[0].content) == {
+        "siteUrl": SITE,
+        "url": "domain:example.com",
+        "page": 2,
+        "filterProperties": {
+            "__type": "FilterProperties:#Microsoft.Bing.Webmaster.Api",
+            "CrawlDateFilter": 0,
+            "DiscoveredDateFilter": 0,
+            "DocFlagsFilters": 0,
+            "HttpCodeFilters": 0,
+        },
+    }
+    assert result.rows[0]["url"] == "https://example.com/a"
+    assert result.rows[0]["discovery_date"] is None
+    assert result.limitations == ()
+
+
+@pytest.mark.parametrize("bad_page", [-1, 65_536, True])
+def test_children_url_info_rejects_an_out_of_range_page_without_a_request(
+    bad_page: int,
+) -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"d": []})
+
+    with pytest.raises(SeoError) as caught:
+        _bing(handler).children_url_info("https://example.com", page=bad_page)
+
+    assert caught.value.code == INVALID_INPUT
+    assert calls == []
+
+
+def test_site_roles_maps_the_enum_and_hides_the_delegated_code() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "d": [
+                    {
+                        "Date": _wcf_date(datetime(2026, 11, 1, tzinfo=UTC)),
+                        "DelegatedCode": "must-not-be-echoed",
+                        "DelegatedCodeOwnerEmail": "owner@example.com",
+                        "DelegatorEmail": "delegator@example.com",
+                        "Email": "user@example.com",
+                        "Expired": False,
+                        "Role": 2,
+                        "Site": "https://example.com",
+                        "VerificationSite": "https://example.com",
+                    }
+                ]
+            },
+        )
+
+    result = _bing(handler).site_roles(include_all_subdomains=True)
+
+    assert seen[0].url.params["includeAllSubdomains"] == "true"
+    assert result.rows == [
+        {
+            "email": "user@example.com",
+            "role": "ReadWrite",
+            "role_code": 2,
+            "site": "https://example.com",
+            "verification_site": "https://example.com",
+            "delegator_email": "delegator@example.com",
+            "delegated_code_owner_email": "owner@example.com",
+            "expired": False,
+            "date": "2026-11-01T00:00:00+00:00",
+        }
+    ]
+    assert "must-not-be-echoed" not in json.dumps(result.to_dict())
+
+
+def test_user_sites_needs_no_site_and_hides_verification_codes() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "d": [
+                    {
+                        "AuthenticationCode": "must-not-be-echoed",
+                        "DnsVerificationCode": "also-not-echoed",
+                        "IsVerified": True,
+                        "Url": "https://example.com/",
+                    }
+                ]
+            },
+        )
+
+    result = BingClient(api_key=API_KEY, site_url="", http=_http(handler)).user_sites()
+
+    assert result.property_id == ""
+    assert result.rows == [{"url": "https://example.com/", "is_verified": True}]
+    payload = json.dumps(result.to_dict())
+    assert "must-not-be-echoed" not in payload
+    assert "also-not-echoed" not in payload
+
+
+def test_joins_attach_the_requested_dimension_and_the_varying_one() -> None:
+    page = "https://example.com/pricing"
+    query = "seo tools"
+
+    def query_pages(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"d": [{"Query": page, "Clicks": 7, "Impressions": 120}]},
+        )
+
+    query_result = _bing(query_pages).query_page_stats(query)
+    assert query_result.rows[0]["query"] == query
+    assert query_result.rows[0]["page"] == page
+
+    def page_queries(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"d": [{"Query": query, "Clicks": 7, "Impressions": 120}]},
+        )
+
+    page_result = _bing(page_queries).page_query_stats(page)
+    assert page_result.rows[0]["query"] == query
+    assert page_result.rows[0]["page"] == page
+
+    def detail(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "d": [
+                    {
+                        "Clicks": 7,
+                        "Impressions": 120,
+                        "Position": 4.5,
+                        "Date": _wcf_date(datetime(2026, 11, 10, tzinfo=UTC)),
+                    }
+                ]
+            },
+        )
+
+    detail_result = _bing(detail).query_page_detail_stats(query, page)
+    assert detail_result.rows[0]["query"] == query
+    assert detail_result.rows[0]["page"] == page
+    assert detail_result.rows[0]["position"] == 4.5
+    assert detail_result.rows[0]["click_position"] is None
+    assert detail_result.rows[0]["impression_position"] is None

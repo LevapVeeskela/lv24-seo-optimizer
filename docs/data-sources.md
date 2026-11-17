@@ -118,10 +118,10 @@ notification settings, Yandex Business card/reviews.
 
 | | |
 |---|---|
-| Bing API | `https://ssl.bing.com/webmaster/api.svc/json/` — `GetQueryStats`, `GetRankAndTrafficStats`, `GetCrawlIssues`, `GetUrlSubmissionQuota`, `GetFeeds`, `GetFeedDetails`, `SubmitUrlbatch`, `SubmitFeed` |
+| Bing API | `https://ssl.bing.com/webmaster/api.svc/json/` — reads: `GetQueryStats`, `GetPageStats`, `GetQueryPageStats`, `GetPageQueryStats`, `GetQueryPageDetailStats`, `GetRankAndTrafficStats`, `GetCrawlStats`, `GetCrawlIssues`, `GetUrlInfo`, `GetChildrenUrlInfo`, `GetSiteRoles`, `GetUserSites`, `GetFeeds`, `GetFeedDetails`, `GetUrlSubmissionQuota`; writes: `SubmitUrlbatch`, `SubmitFeed` |
 | Auth | one API key per user (Bing Webmaster → Settings → API access) |
 | Free quota | free; remaining daily/monthly submission quota is reported by `GetUrlSubmissionQuota`, 500 URLs per `SubmitUrlbatch` |
-| Freshness | `data_age_days` is the age of the newest dated row in that feed: `Date` for `GetQueryStats`, `LastCrawled` (falling back to `Submitted`) for `GetFeeds`. `GetCrawlIssues` has no date and reports `0`, which is not proof of freshness. |
+| Freshness | `data_age_days` is the age of the newest dated row in that feed: `Date` for query/page/traffic/crawl/join stats, `LastCrawled` (falling back to `Submitted`) for `GetFeeds`, `LastCrawledDate` for `GetUrlInfo`/`GetChildrenUrlInfo`. `GetCrawlIssues` and `GetUserSites` have no date and report `0`, which is not proof of freshness. |
 | IndexNow | `https://api.indexnow.org/indexnow` (also `yandex.com/indexnow`), key file `https://host/<key>.txt` (8–128 hex) |
 | Limits | 10k URLs per IndexNow POST; engines apply their own daily caps; **Google does not participate** |
 
@@ -154,6 +154,47 @@ integer bitmask, not a type/severity/date. The engine decodes `1=301`, `2=302`, 
 `8=5xx`, `16=robots`, `32=malware`, `64=important_robots`, `128=dns`, `256=timeout` into
 `issues` labels, keeps `issues_bits`, and reports unknown bits as `unknown_crawl_issue_bits`
 instead of guessing. The feed has no date, so `data_age_days` is `0`.
+
+**Stats and URL diagnostics.** `GetQueryStats` and `GetPageStats` return weekly `QueryStats`
+rows (`Clicks`, `Impressions`, `AvgClickPosition`, `AvgImpressionPosition`, `Date`);
+`GetPageStats` puts the **page URL** in `Query`, so the CLI exposes it as `page`. The three
+joins are the only query/page links Bing provides: `GetQueryPageStats(siteUrl,query)` lists
+pages for a query, `GetPageQueryStats(siteUrl,page)` lists queries for a page, and
+`GetQueryPageDetailStats(siteUrl,query,page)` returns daily `Clicks`/`Impressions`/`Position`
+rows without the dimensions, so the requested pair is attached to each row. `bing joins`
+returns one compact row shape: `query`, `page`, `clicks`, `impressions`, `click_position`,
+`impression_position`, `position`, `date`.
+
+`GetRankAndTrafficStats` is wired as `bing traffic`: daily `Date`, `Clicks`, `Impressions`
+covering every Bing vertical since 2023-03-24. It was listed in this table before the adapter
+existed; that gap is now closed. `GetCrawlStats` is the daily six-month window
+(`Code2xx`, `Code301`, `Code302`, `Code4xx`, `Code5xx`, `BlockedByRobotsTxt`,
+`ContainsMalware`, `CrawlErrors`, `CrawledPages`, `InIndex`, `InLinks`, `AllOtherCodes`), so
+`bing crawl` always carries `crawl_stats_six_month_window`.
+
+`GetUrlInfo(siteUrl,url)` accepts an absolute URL or `domain:<host>` and returns `Url`,
+`AnchorCount`, `DiscoveryDate`, `DocumentSize`, `HttpStatus`, `IsPage`, `LastCrawledDate` and
+`TotalChildUrlCount`. The WCF `Date(-62135596800000)` value is DateTime.MinValue, Bing's
+"never" sentinel; it maps to `null` (and `never_crawled` when the last crawl is null), never
+to a year-1 date or a huge age. `GetChildrenUrlInfo` is a read-only `POST`
+(`{siteUrl,url,page,filterProperties}`) returning the same `UrlInfo` rows; `page` is
+zero-based and the JSON `filterProperties` object is sent with all-zero (Any) filters. The
+CLI walks at most 10 pages; a full final page marks the result `truncated` with
+`children_page_cap`. Live check (lv24.by, 2026-11-17): `GetUrlInfo("domain:lv24.by")` reports
+`TotalChildUrlCount: 8380` but `GetChildrenUrlInfo` returned 0 rows for the same target and
+page 0/1, so `bing children` reports `provider_returned_no_rows` instead of pretending the
+directory is empty.
+
+`GetSiteRoles(siteUrl,includeAllSubdomains)` returns `Email`, `Role` (JSON enum:
+0 Administrator, 1 ReadOnly, 2 ReadWrite), `Site`, `VerificationSite`, `DelegatorEmail`,
+`DelegatedCodeOwnerEmail`, `Expired` and `Date`. `GetUserSites` is account-scoped and returns
+`Url` and `IsVerified`. Delegated codes, authentication codes and DNS verification codes are
+not echoed.
+
+**Empty stats are missing data, not zero.** Live checks against lv24.by return 0 rows for the
+stats endpoints. A 0-row stats response carries `no_rows_for_window`; a lookup/list that
+returns no object or rows carries `provider_returned_no_rows`. Neither invents a date or a
+zero-impression row, so an agent cannot mistake an empty window for a traffic drop.
 
 **Errors.** Bing sends auth failures as **HTTP 400** with `{"ErrorCode": N, "Message": ...}`.
 The adapter parses `ErrorCode` first: `3 -> AUTH_INVALID`, `14 -> PROPERTY_NOT_FOUND`,

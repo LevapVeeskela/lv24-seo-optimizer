@@ -18,7 +18,9 @@ Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` 
 stdout; no ANSI colours.
 
 `--strict` is available on the read commands (`stats`, `gsc query`, `yandex queries`,
-`yandex indexing`, `bing quota`, `bing sitemaps`, `bing issues`, `crawl`, `report weekly`,
+`yandex indexing`, `bing pages`, `bing traffic`, `bing crawl`, `bing urlinfo`, `bing children`,
+`bing users`, `bing sites`, `bing joins`, `bing quota`, `bing sitemaps`, `bing issues`, `crawl`,
+`report weekly`,
 `report diff`). It always sets `meta.strict: true`;
 when the payload is also truncated, the command exits `5` and `meta.limitations` explains what is
 missing (a generic `truncated: …` note is added when the provider did not name a limitation).
@@ -468,7 +470,7 @@ prevents accidental or stale applies; it is not access control, because anyone w
 can restore. Prefer `--to` when you want to inspect an archive or compare it with the current
 workspace before replacing anything.
 
-## Sitemap submission, Bing URL submission and IndexNow
+## Bing reads, sitemap/URL submission and IndexNow
 
 ```bash
 lv24-seo sitemap submit --provider gsc --property sc-domain:example.com --url https://example.com/sitemap.xml [--allow-write] [--confirm TOKEN] [--json]
@@ -477,6 +479,14 @@ lv24-seo bing submit [--url https://example.com/a ...] [--from-sitemap] [--sitem
 lv24-seo bing quota [--config ABS] [--json]
 lv24-seo bing sitemaps [--details https://example.com/sitemap.xml] [--config ABS] [--json]
 lv24-seo bing issues [--config ABS] [--json]
+lv24-seo bing pages [--site https://example.com] [--config ABS] [--json]
+lv24-seo bing traffic [--site https://example.com] [--config ABS] [--json]
+lv24-seo bing crawl [--site https://example.com] [--config ABS] [--json]
+lv24-seo bing urlinfo --url https://example.com/page|domain:example.com [--site https://example.com] [--config ABS] [--json]
+lv24-seo bing children --url https://example.com|domain:example.com [--page 0] [--pages 1] [--site https://example.com] [--config ABS] [--json]
+lv24-seo bing users [--site https://example.com] [--config ABS] [--json]
+lv24-seo bing sites [--site https://example.com] [--config ABS] [--json]
+lv24-seo bing joins [--query "seo tools"] [--page https://example.com/page] [--site https://example.com] [--config ABS] [--json]
 lv24-seo indexnow submit --host example.com --key KEY --url https://example.com/a [--allow-write] [--confirm TOKEN] [--json]
 lv24-seo indexnow submit --from-sitemap [--sitemap-url https://example.com/sitemap.xml] [--url ...] [--allow-write] [--confirm TOKEN] [--json]
 ```
@@ -513,6 +523,38 @@ a crawl/index status, and per-URL errors are not exposed. `--details FEED_URL` r
 `1=301`, `2=302`, `4=4xx`, `8=5xx`, `16=robots`, `32=malware`, `64=important_robots`,
 `128=dns`, `256=timeout`; rows expose `issues` labels, `issues_bits`, `url`, `http_code` and
 `in_links`. The feed has no date, so `data_age_days` is `0`.
+
+`bing pages`, `bing traffic`, `bing crawl` and `bing joins` are read-only stats views. All of
+them return `{site_url, rows}` (joins add `mode`, `query`, `page`), sorted as Bing returns them,
+with `meta.data_age_days` from the newest provider `Date` and ISO-8601 UTC dates in rows. An
+empty stats response carries `no_rows_for_window` and prints an explicit note: `rows: 0` is
+missing data for the window, **not** zero impressions. `bing pages` reads `GetPageStats` rows
+(`page`, `clicks`, `impressions`, `click_position`, `impression_position`, `date`); `bing
+traffic` reads daily `GetRankAndTrafficStats` rows (`date`, `clicks`, `impressions`) covering
+all Bing verticals since 2023-03-24; `bing crawl` reads the six-month `GetCrawlStats` window
+(`date`, `code_2xx`, `code_301`, `code_302`, `code_4xx`, `code_5xx`, `blocked_by_robots_txt`,
+`contains_malware`, `crawl_errors`, `crawled_pages`, `in_index`, `in_links`, `all_other_codes`)
+and always reports `crawl_stats_six_month_window`.
+
+`bing urlinfo --url URL|domain:HOST` reads `GetUrlInfo` (`url`, `anchor_count`,
+`discovery_date`, `document_size`, `http_status`, `is_page`, `last_crawled_date`,
+`total_child_url_count`). The WCF `Date(-62135596800000)` sentinel maps to `null`; a never-crawled
+row carries `never_crawled`. `bing children --url URL|domain:HOST` reads one page per
+`GetChildrenUrlInfo` POST; `--page` is zero-based, `--pages` walks up to 10 pages. A full final
+page means more children may exist, so `meta.truncated` is `true` with `children_page_cap`
+instead of looking complete. `bing users` reads `GetSiteRoles` (`email`, `role`, `role_code`,
+`site`, `verification_site`, `delegator_email`, `delegated_code_owner_email`, `expired`, `date`)
+and never echoes the delegated verification code. `bing sites` reads account-scoped
+`GetUserSites` (`url`, `is_verified`) and works without `providers.bing.site`; verification codes
+are not echoed.
+
+`bing joins` selects one of Bing's three query/page joins. `--query Q` calls
+`GetQueryPageStats` and lists pages for that query (`mode: query_pages`); `--page P` calls
+`GetPageQueryStats` and lists queries for that page (`mode: page_queries`); both call
+`GetQueryPageDetailStats` for daily detail rows (`mode: query_page_detail`). Every row has the
+same compact shape: `query`, `page`, `clicks`, `impressions`, `click_position`,
+`impression_position`, `position`, `date` (null when the endpoint does not return that field).
+The requested dimension is attached explicitly, so the join is never implied by the call.
 
 `indexnow submit` resolves defaults from config: `providers.bing.site` supplies the host,
 `providers.bing.indexnow_key` the key, and `providers.bing.indexnow_key_location` the public

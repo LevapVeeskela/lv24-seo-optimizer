@@ -21,6 +21,14 @@
   undocumented); `bing sitemaps [--details FEED_URL]` lists feed fields and states that per-URL
   errors/crawl status are not exposed; `bing issues` decodes the `Issues` bitmask
   (`1=301, 2=302, 4=4xx, 8=5xx, 16=robots, 32=malware, 64=important_robots, 128=dns, 256=timeout`).
+- Bing diagnostics: `bing pages`, `bing traffic` and `bing crawl` return dated stats rows and add
+  `no_rows_for_window` when Bing returns 0 rows (missing data, not zero impressions; `crawl` also
+  states its six-month window). `bing urlinfo --url URL|domain:HOST` maps the
+  `Date(-62135596800000)` sentinel to null and flags `never_crawled`; `bing children --url ...
+  [--page] [--pages]` is a read POST bounded to 10 pages and marks `children_page_cap`; `bing
+  users` lists roles without delegated codes; `bing sites` is account-scoped and works without a
+  configured site; `bing joins --query|--page` exposes the three query/page joins with explicit
+  `query`/`page` columns.
 - Core Web Vitals writer: `lv24-seo cwv collect --url URL [--url URL ...] --device all --source crux`
   persists CrUX URL+device p75 rows (`metric_daily`: `source=crux`, `scope=<device>`, `key=<url>`)
   for the weekly `cwv` section; PSI lab rows are returned but never persisted.
@@ -88,6 +96,15 @@ lv24-seo bing submit --from-sitemap --allow-write --config ./seo.toml --json    
 lv24-seo bing quota --config ./seo.toml --json                                    # remaining daily/monthly quota
 lv24-seo bing sitemaps --config ./seo.toml --json                                 # feed status; no per-URL errors
 lv24-seo bing issues --config ./seo.toml --json                                   # decoded Issues bitmask
+lv24-seo bing pages --config ./seo.toml --json                                    # page stats; no_rows_for_window
+lv24-seo bing traffic --config ./seo.toml --json                                  # daily clicks/impressions
+lv24-seo bing crawl --config ./seo.toml --json                                    # six-month crawl buckets
+lv24-seo bing urlinfo --url domain:example.com --config ./seo.toml --json         # index details; sentinel -> null
+lv24-seo bing children --url domain:example.com --page 0 --config ./seo.toml --json  # bounded read POST
+lv24-seo bing users --config ./seo.toml --json                                    # site roles; no delegated code
+lv24-seo bing sites --config ./seo.toml --json                                    # account sites; no site needed
+lv24-seo bing joins --query "seo tools" --config ./seo.toml --json                # pages for a query
+lv24-seo bing joins --page https://example.com/page --config ./seo.toml --json    # queries for a page
 lv24-seo indexnow submit --from-sitemap --allow-write --config ./seo.toml --json  # plan; host/key from [providers.bing]
 lv24-seo indexnow submit --from-sitemap --allow-write --confirm TOKEN             # re-fetches; changed sitemap aborts
 lv24-seo schedule install --kind weekly --config ./seo.toml              # plan only: dry_run=true, installed=false

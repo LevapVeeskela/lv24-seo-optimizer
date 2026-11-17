@@ -25,10 +25,13 @@ ships 12 MCP tools (10 read-class: 7 pure read-only plus the 3 local-state
 writers annotated `readOnlyHint: false`), 3 resources, 3 prompts, 3 skills, the 23-command CLI,
 scheduler generators and a product-grade weekly email. Recent additions:
 
-* **Bing URL submission, quota, sitemap feeds and crawl issues** — `bing submit` calls
-  `SubmitUrlbatch` in 500-URL batches with a remaining-quota pre-check and `accepted` results;
-  `bing quota`, `bing sitemaps [--details]` and `bing issues` are read-only. Bing reports
-  remaining quota, not totals, and crawl issues are an integer bitmask. No new MCP tool.
+* **Bing URL submission, quota, sitemap feeds, crawl issues and read diagnostics** — `bing submit`
+  calls `SubmitUrlbatch` in 500-URL batches with a remaining-quota pre-check and `accepted`
+  results; `bing quota`, `bing sitemaps [--details]` and `bing issues` are read-only. New
+  read-only `bing pages`, `bing traffic`, `bing crawl`, `bing urlinfo`, `bing children`,
+  `bing users`, `bing sites` and `bing joins` expose page/traffic/crawl stats, URL index
+  details, bounded directory children, site roles and query/page joins. An empty stats window
+  is reported as `no_rows_for_window`, never as zero impressions. No new MCP tool.
 * **Bing sitemap submit and one-click IndexNow** — `sitemap submit --provider bing` calls the
   current JSON `SubmitFeed` endpoint through the two-phase write gate. `indexnow submit
   --from-sitemap` reads a bounded urlset/sitemapindex (root plus five children, 10k URLs), merges
