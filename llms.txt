@@ -40,6 +40,13 @@
   `--filter`, `--filter-list`, `--data-state`, `--aggregation`, `--search-appearance` and `--branded`,
   and returns `responseAggregationType` plus incomplete-data `metadata`. Sitemap submit/delete stay
   `WRITE_DISABLED` (full `webmasters` scope; the engine signs `webmasters.readonly`).
+- Yandex reads/writes: `yandex indexing --date-from/--date-to` merges the `appeared`/`removed`
+  event series and indexing HTTP series per date; `yandex samples --kind indexing|events` pages
+  the 100-row sample endpoints with `total`/`truncated`; `yandex sitemaps [--id]` reads sitemap
+  lists/details; `yandex history --kind sqi|in-search|queries|query` reads SQI, pages-in-search and
+  query series; `yandex queue [--id]` reads recrawl tasks. `yandex recrawl` is wired: plan with
+  `--allow-write`, then apply one POST per URL, capped to the remaining daily quota, reporting
+  `task_id`/`quota_remainder`, `already_queued` (409) and a partial `not_attempted` list on 429.
 - Core Web Vitals writer: `lv24-seo cwv collect --url URL [--url URL ...] --device all --source crux`
   persists CrUX URL+device p75 rows (`metric_daily`: `source=crux`, `scope=<device>`, `key=<url>`)
   for the weekly `cwv` section; PSI lab rows are returned but never persisted. `--category` selects
@@ -52,8 +59,9 @@
   overwrites; an existing directory is refused) and `--config ABS` replaces the current workspace
   only with `--allow-write --confirm TOKEN`.
 - MCP: 12 tools (10 read-class, including 3 local-state writers with `readOnlyHint: false`; 2 gated
-  provider writes — `seo_sitemap_submit` is wired for Bing submit, `seo_recrawl_request` and the
-  GSC/delete sitemap paths return `WRITE_DISABLED`), 3 resources, 3 prompts.
+  provider writes — `seo_sitemap_submit` is wired for Bing submit, `seo_recrawl_request` is wired
+  for Yandex recrawl, and the GSC/delete sitemap paths return `WRITE_DISABLED`), 3 resources,
+  3 prompts.
 - New in 0.10.0: Bing URL submit (`bing submit`) with quota pre-check, 500-URL batching and
   accepted-not-indexed results; read-only `bing quota`, `bing sitemaps [--details]` and
   `bing issues`; HTTP 400 `ErrorCode` mapping (3 auth, 14 property, 7 bad request, 4/5 quota).

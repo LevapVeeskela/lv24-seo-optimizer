@@ -255,16 +255,53 @@ def test_sitemap_apply_reports_that_the_write_is_not_wired(
     assert "not wired yet" in payload["error"]["message"]
 
 
-def test_recrawl_apply_reports_that_the_write_is_not_wired(
+def test_recrawl_apply_posts_one_url_per_request_and_reports_tasks(
     monkeypatch: pytest.MonkeyPatch,
     workspace: Path,
 ) -> None:
     monkeypatch.setenv("LV24_SEO_WRITE_SECRET", SECRET)
+    calls: list[dict[str, Any]] = []
+
+    class FakeService:
+        def __init__(self, config: Any, store: Any = None) -> None:
+            self.config = config
+
+        def recrawl_request(self, *, host_id: str, urls: list[str]) -> dict[str, Any]:
+            calls.append({"host_id": host_id, "urls": list(urls)})
+            rows = [
+                {
+                    "url": url,
+                    "status": "queued",
+                    "task_id": f"task-{index}",
+                    "quota_remainder": 150 - index - 1,
+                }
+                for index, url in enumerate(urls)
+            ]
+            return {
+                "ok": True,
+                "data": {
+                    "host_id": host_id,
+                    "rows": rows,
+                    "queued": len(rows),
+                    "already_queued": 0,
+                    "not_attempted": [],
+                },
+                "meta": {
+                    "source": "yandex_webmaster",
+                    "queued": len(rows),
+                    "truncated": False,
+                },
+                "warnings": [],
+            }
+
+    monkeypatch.setattr(cli_main, "SeoService", FakeService)
     args = (
         "yandex",
         "recrawl",
         "--url",
         URL_A,
+        "--url",
+        URL_B,
         "--config",
         str(workspace),
         "--json",
@@ -273,10 +310,15 @@ def test_recrawl_apply_reports_that_the_write_is_not_wired(
 
     result = _invoke(*args, "--allow-write", "--confirm", token)
 
-    assert result.exit_code == 2
+    assert result.exit_code == 0
     payload = _payload(result)
-    assert payload["error"]["code"] == "WRITE_DISABLED"
-    assert "not wired yet" in payload["error"]["message"]
+    assert payload["data"]["status"] == "applied"
+    assert payload["data"]["result"]["queued"] == 2
+    assert [row["task_id"] for row in payload["data"]["result"]["rows"]] == [
+        "task-0",
+        "task-1",
+    ]
+    assert calls == [{"host_id": HOST_ID, "urls": [URL_A, URL_B]}]
 
 
 # -- IndexNow: the only wired write ----------------------------------------------------------

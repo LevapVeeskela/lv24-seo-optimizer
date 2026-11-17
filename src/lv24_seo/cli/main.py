@@ -57,7 +57,6 @@ from lv24_seo.core.errors import (
     INVALID_INPUT,
     QUOTA_EXCEEDED,
     UPSTREAM_UNAVAILABLE,
-    WRITE_DISABLED,
     SeoError,
 )
 from lv24_seo.core.logging import configure_logging_from_env
@@ -709,6 +708,14 @@ def yandex_queries(
 
 @yandex_app.command("indexing")
 def yandex_indexing(
+    date_from: Annotated[
+        date | None,
+        typer.Option("--date-from", help="First day of the history window, YYYY-MM-DD."),
+    ] = None,
+    date_to: Annotated[
+        date | None,
+        typer.Option("--date-to", help="Last day of the history window, YYYY-MM-DD."),
+    ] = None,
     strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
@@ -720,11 +727,174 @@ def yandex_indexing(
     """Indexing history, search events, problems and counters for the host."""
     payload = _run(
         config_path,
-        lambda service, config: service.yandex_indexing(),
+        lambda service, config: service.yandex_indexing(
+            date_from=date_from,
+            date_to=date_to,
+        ),
         persist=True,
         strict=strict,
     )
     emit(payload, as_json=as_json, lines=_yandex_indexing_lines(payload))
+
+
+@yandex_app.command("samples")
+def yandex_samples(
+    kind: Annotated[
+        str,
+        typer.Option("--kind", help="Sample kind: indexing or events (default indexing)."),
+    ] = "indexing",
+    limit: Annotated[
+        int,
+        typer.Option("--limit", min=1, max=1000, help="Maximum rows to return (1..1000)."),
+    ] = 100,
+    offset: Annotated[
+        int,
+        typer.Option("--offset", min=0, help="First provider row."),
+    ] = 0,
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Read indexing or search-event samples (bounded pages of 100 rows)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.yandex_samples(
+            kind=kind,
+            limit=limit,
+            offset=offset,
+        ),
+        strict=strict,
+    )
+    emit(payload, as_json=as_json, lines=_yandex_samples_lines(payload))
+
+
+@yandex_app.command("sitemaps")
+def yandex_sitemaps(
+    sitemap_id: Annotated[
+        str,
+        typer.Option("--id", help="Read one sitemap by its provider id."),
+    ] = "",
+    parent_id: Annotated[
+        str,
+        typer.Option("--parent-id", help="List the children of one sitemap index."),
+    ] = "",
+    limit: Annotated[
+        int,
+        typer.Option("--limit", min=1, max=500, help="Maximum rows (1..500)."),
+    ] = 100,
+    from_: Annotated[
+        str,
+        typer.Option("--from", help="Provider paging cursor (a sitemap id)."),
+    ] = "",
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """List Yandex sitemaps or read one by id (read-only)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.yandex_sitemaps(
+            sitemap_id=sitemap_id,
+            parent_id=parent_id,
+            limit=limit,
+            from_=from_,
+        ),
+        strict=strict,
+    )
+    emit(payload, as_json=as_json, lines=_yandex_sitemaps_lines(payload))
+
+
+@yandex_app.command("history")
+def yandex_history(
+    kind: Annotated[
+        str,
+        typer.Option("--kind", help="sqi, in-search, queries or query (default sqi)."),
+    ] = "sqi",
+    query_id: Annotated[
+        str,
+        typer.Option("--query-id", help="Query id for --kind query."),
+    ] = "",
+    date_from: Annotated[
+        date | None,
+        typer.Option("--date-from", help="First day of the window, YYYY-MM-DD."),
+    ] = None,
+    date_to: Annotated[
+        date | None,
+        typer.Option("--date-to", help="Last day of the window, YYYY-MM-DD."),
+    ] = None,
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Read one Yandex history series (SQI, in-search, all queries or one query)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.yandex_history(
+            kind=kind,
+            query_id=query_id,
+            date_from=date_from,
+            date_to=date_to,
+        ),
+        strict=strict,
+    )
+    emit(payload, as_json=as_json, lines=_yandex_history_lines(payload))
+
+
+@yandex_app.command("queue")
+def yandex_queue(
+    task_id: Annotated[
+        str,
+        typer.Option("--id", help="Read one recrawl task by id."),
+    ] = "",
+    limit: Annotated[
+        int,
+        typer.Option("--limit", min=1, max=500, help="Maximum rows (1..500)."),
+    ] = 100,
+    offset: Annotated[
+        int,
+        typer.Option("--offset", min=0, help="First provider row."),
+    ] = 0,
+    date_from: Annotated[
+        date | None,
+        typer.Option("--date-from", help="First day of the window, YYYY-MM-DD."),
+    ] = None,
+    date_to: Annotated[
+        date | None,
+        typer.Option("--date-to", help="Last day of the window, YYYY-MM-DD."),
+    ] = None,
+    strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Read the Yandex recrawl queue or one task by id (read-only)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.yandex_queue(
+            task_id=task_id,
+            limit=limit,
+            offset=offset,
+            date_from=date_from,
+            date_to=date_to,
+        ),
+        strict=strict,
+    )
+    emit(payload, as_json=as_json, lines=_yandex_queue_lines(payload))
 
 
 # -- writes (ADR-0003: plan -> confirm token -> apply) ---------------------------------------
@@ -837,8 +1007,8 @@ def yandex_recrawl(
     """Queue URLs for Yandex recrawl.
 
     Pass ``--allow-write`` (and have ``LV24_SEO_WRITE_SECRET`` set) to plan; apply with
-    ``--allow-write --confirm TOKEN``. The adapter is not wired yet and returns
-    ``WRITE_DISABLED`` on apply.
+    ``--allow-write --confirm TOKEN``. Yandex has no batch endpoint: apply sends one request
+    per URL, reports each ``task_id`` and stops honestly when the daily quota is exhausted.
     """
 
     def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
@@ -858,7 +1028,19 @@ def yandex_recrawl(
             summary=f"queue {len(target_urls)} URL(s) for recrawl on {host_id}",
             payload={"host_id": host_id, "urls": target_urls},
         )
-        return plan, _recrawl_execute
+
+        def execute(plan: WritePlan) -> Any:
+            current = load_config(config_path)
+            payload = plan.payload
+            urls = [str(value) for value in payload.get("urls") or []]
+            return _service_write_result(
+                SeoService(current).recrawl_request(
+                    host_id=str(payload.get("host_id") or host_id),
+                    urls=urls,
+                )
+            )
+
+        return plan, execute
 
     payload = _write_command(
         prepare, allow_write=allow_write, confirm=confirm, config_path=config_path
@@ -1813,19 +1995,6 @@ def _json_result(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
-
-
-def _recrawl_execute(_plan: WritePlan) -> Any:
-    """The Yandex adapter has no recrawl queue yet; never pretend it was queued."""
-    raise SeoError(
-        code=WRITE_DISABLED,
-        message="yandex recrawl is not wired yet",
-        next_action=(
-            "queue recrawls in Yandex Webmaster until the adapter exposes recrawl_queue; "
-            "the CLI never pretends a write happened"
-        ),
-        retryable=False,
-    )
 
 
 def _absolute_url(value: str, *, name: str) -> str:
@@ -3724,6 +3893,102 @@ def _yandex_indexing_lines(payload: Mapping[str, Any]) -> list[str]:
     if limitations:
         lines.append("limitations: " + "; ".join(str(item) for item in limitations))
     lines.extend(_rows_table(data.get("summary"), ("search_urls", "urls", "indexed", "excluded")))
+    return lines
+
+
+def _yandex_samples_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    meta = payload.get("meta") or {}
+    if not isinstance(data, Mapping):
+        return ["yandex samples: no data"]
+    rows = data.get("rows")
+    kind = str(data.get("kind") or "indexing")
+    lines = [f"yandex samples ({kind}): {_count(rows)} rows"]
+    if isinstance(meta, Mapping) and meta.get("total") is not None:
+        lines.append(f"total: {meta.get('total')}  truncated: {_yes_no(meta.get('truncated'))}")
+    preferred = (
+        ("event", "event_date", "url", "title", "target_url")
+        if kind == "events"
+        else ("status", "http_code", "url", "access_date")
+    )
+    lines.extend(_rows_table(rows, preferred))
+    return lines
+
+
+def _yandex_sitemaps_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    meta = payload.get("meta") or {}
+    if not isinstance(data, Mapping):
+        return ["yandex sitemaps: no data"]
+    rows = data.get("rows")
+    lines = [f"yandex sitemaps: {_count(rows)} rows"]
+    if isinstance(meta, Mapping) and meta.get("total") is not None:
+        lines.append(f"total: {meta.get('total')}  truncated: {_yes_no(meta.get('truncated'))}")
+    lines.extend(
+        _rows_table(
+            rows,
+            (
+                "sitemap_id",
+                "sitemap_url",
+                "urls_count",
+                "errors_count",
+                "children_count",
+                "sitemap_type",
+                "last_access_date",
+            ),
+        )
+    )
+    return lines
+
+
+def _yandex_history_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    meta = payload.get("meta") or {}
+    if not isinstance(data, Mapping):
+        return ["yandex history: no data"]
+    rows = data.get("rows")
+    kind = str(data.get("kind") or "sqi")
+    lines = [f"yandex history ({kind}): {_count(rows)} points"]
+    if isinstance(meta, Mapping) and meta.get("truncated"):
+        lines.append("truncated: yes")
+    lines.extend(
+        _rows_table(
+            rows,
+            (
+                "date",
+                "value",
+                "appeared",
+                "removed",
+                "searchable",
+                "excluded",
+                "shows",
+                "clicks",
+                "position",
+                "avg_click_position",
+            ),
+        )
+    )
+    return lines
+
+
+def _yandex_queue_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    meta = payload.get("meta") or {}
+    if not isinstance(data, Mapping):
+        return ["yandex queue: no data"]
+    rows = data.get("rows")
+    lines = [f"yandex queue: {_count(rows)} tasks"]
+    if isinstance(meta, Mapping) and meta.get("total") is not None:
+        lines.append(f"total: {meta.get('total')}  truncated: {_yes_no(meta.get('truncated'))}")
+    lines.extend(_rows_table(rows, ("task_id", "state", "url", "added_time")))
     return lines
 
 

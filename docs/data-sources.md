@@ -77,8 +77,8 @@ engine (full `webmasters` scope, disabled).
 | Base | `https://api.webmaster.yandex.net/v4/` |
 | Free quota | free; no published global RPD/RPS; `query-analytics/list` is fragile (>10k req/h → 429) |
 | Identity | `GET /user/` → `user_id`; hosts via `GET /user/{uid}/hosts/`; `host_id` format `https:example.com:443` (never guess it) |
-| Read | `summary`, `sqi-history`, `indexing/history`, `indexing/samples`, `search-urls/in-search/history`, `search-urls/events/history`, `search-queries/popular`, `search-queries/all/history`, `diagnostics`, `links/internal/broken`, `sitemaps` |
-| Write | `POST /user/{uid}/hosts/{host}/recrawl/queue` (**W**, hard daily quota), `POST /sitemaps/{id}/recrawl` (**W**), `POST /user-added-sitemaps/` (**W**) |
+| Read | `summary`, `sqi-history`, `indexing/history`, `indexing/samples`, `search-urls/in-search/history`, `search-urls/events/history`, `search-urls/events/samples`, `search-queries/popular`, `search-queries/all/history`, `search-queries/{query_id}/history`, `diagnostics`, `links/internal/broken`, `sitemaps`, `sitemaps/{id}`, `recrawl/quota`, `recrawl/queue`, `recrawl/queue/{task_id}` |
+| Write | `POST /user/{uid}/hosts/{host}/recrawl/queue` (**W**, one URL per request, hard daily quota), `POST /sitemaps/{id}/recrawl` (**W**, not implemented), `POST /user-added-sitemaps/` (**W**, not implemented) |
 | Query data | top **3,000** queries per period, ≤500 per page; **no query × page join** |
 | Latency | ~4 days; the service can return `HOST_NOT_LOADED` during maintenance |
 
@@ -88,6 +88,9 @@ engine (full `webmasters` scope, disabled).
 2. Repeated query params, not comma lists (`?query_indicator=TOTAL_SHOWS&query_indicator=TOTAL_CLICKS`).
 3. `401` = token dead, `403` = host not verified for this account. Never re-auth on 403.
 4. Recrawl: read `GET /recrawl/quota` first, queue only up to the remaining quota, store task ids.
+   There is no batch endpoint: one `POST /recrawl/queue {"url": ...}` per URL. `202` returns
+   `{task_id, quota_remainder}`, `409 URL_ALREADY_ADDED` is a benign duplicate and `429
+   QUOTA_EXCEEDED {daily_quota, exceeded_until}` stops the loop; earlier task ids stay reported.
 5. Percent-encode Cyrillic URLs; send a descriptive `User-Agent` and `Accept: application/json`.
 6. An **empty** indexing or search-URL history is a real answer, not an outage: the host replied,
    there are simply no buckets or events in the window. It returns `rows: []`, `total: 0` and
@@ -115,6 +118,32 @@ engine (full `webmasters` scope, disabled).
   (`date`, `http_2xx`, `http_3xx`, `http_4xx`, `http_5xx`, `other`); an omitted series stays
   absent. Unknown status series are kept under `extra_indicators`. Dates are returned as the
   provider sends them, and the legacy `history` list form is still accepted unchanged.
+- `search-urls/events/history` → the documented `indicators` object with `APPEARED_IN_SEARCH` and
+  `REMOVED_FROM_SEARCH` series. Series are merged into one row per date (`date`, `appeared`,
+  `removed`); an omitted series stays absent and an unknown event series is kept under
+  `extra_indicators`. The legacy `events` list form is still accepted. A real live window on
+  2026-10-02 returned `appeared: 57, removed: 0`; an empty answer is `empty_history`, not
+  `degraded_host`. Live 2026-11-17: the endpoint closed the connection when `date_from/date_to`
+  were present, so the client retries once without the window, filters the full series locally and
+  reports `client_side_date_filter` in `warnings` and `limitations`.
+- `indexing/samples` and `search-urls/events/samples` → `{count, samples[]}`. Indexing samples
+  carry `status`, `http_code`, `url`, `access_date`; event samples carry `url`, `title`,
+  `event_date`, `last_access`, `event`, `excluded_url_status`, `bad_http_status`, `target_url`.
+  Both page at 100 rows and report `count` as the grand total, so `meta.total` and
+  `meta.truncated` are honest even when the caller capped the rows. A live check on 2026-11-17
+  found `indexing/samples` closing the connection without a response for one host (surfaced as
+  `UPSTREAM_UNAVAILABLE`, never as an empty list) while `search-urls/events/samples` answered
+  normally.
+- `sitemaps` and `sitemaps/{id}` → `sitemap_id`, `sitemap_url`, `last_access_date`, `errors_count`,
+  `urls_count`, `children_count`, `sources[]`, `sitemap_type`. `parent_id` lists the children of a
+  sitemap index; `from` is a sitemap-id cursor. Add/delete are not implemented.
+- `sqi-history` → `points[{date, value}]`; `search-urls/in-search/history` → `history[{date,
+  value}]` (pages in search); `search-queries/all/history` and
+  `search-queries/{query_id}/history` → `indicators` series. The query history calls must send the
+  four repeated `query_indicator` parameters, otherwise Yandex returns an empty `indicators`
+  object. Per-query history uses the same series keys as `all/history`.
+- `recrawl/queue` and `recrawl/queue/{task_id}` → `task_id`, `url`, `added_time`, `state`; the
+  list reports the provider's `count` as `meta.total`. The queue read is read-only.
 
 **Not available via API:** per-URL sitemap error detail, diagnostic recommendation text, Webmaster
 notification settings, Yandex Business card/reviews.

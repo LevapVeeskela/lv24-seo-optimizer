@@ -7,8 +7,9 @@ the caller must see:
 * reporting lags about four days and can return ``HOST_NOT_LOADED`` during maintenance;
 * per-URL sitemap error detail is not exposed by the API at all.
 
-This module is read-only. Recrawl queueing is a write and stays behind ``core/write_gate.py``;
-:meth:`YandexWebmasterClient.recrawl_quota` only reads the remaining daily quota.
+This module is read-only except for :meth:`YandexWebmasterClient.recrawl_enqueue`, which is a
+provider write and must stay behind ``core/write_gate.py``. The queue read methods
+(:meth:`recrawl_queue`, :meth:`recrawl_task`, :meth:`recrawl_quota`) are safe reads.
 
 Degradation policy
 ------------------
@@ -28,21 +29,27 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
+
+import httpx
 
 from lv24_seo.core.errors import (
+    AUTH_INVALID,
     AUTH_REQUIRED,
     INVALID_INPUT,
     PROPERTY_NOT_FOUND,
+    QUOTA_EXCEEDED,
     UPSTREAM_UNAVAILABLE,
     SeoError,
 )
 from lv24_seo.core.http import HttpClient
 from lv24_seo.providers.base import (
+    CLIENT_SIDE_DATE_FILTER,
     DEGRADED_HOST,
     EMPTY_HISTORY,
     NO_PER_URL_SITEMAP_ERRORS,
     NO_QUERY_PAGE_JOIN,
+    ONE_URL_PER_CALL,
     TOP_3000_QUERIES,
     ProviderResult,
     Row,
@@ -87,6 +94,30 @@ _INDEXING_INDICATOR_KEYS = {
     "HTTP_5XX": "http_5xx",
     "OTHER": "other",
 }
+#: ``search-urls/events/history`` series: pages entering or leaving the Yandex index.
+_EVENT_INDICATOR_KEYS = {
+    "APPEARED_IN_SEARCH": "appeared",
+    "REMOVED_FROM_SEARCH": "removed",
+}
+#: ``search-urls/in-search/history`` series.
+_IN_SEARCH_INDICATOR_KEYS = {
+    "SEARCHABLE": "searchable",
+    "EXCLUDED": "excluded",
+    "SEARCHABLE_PAGES": "searchable",
+    "EXCLUDED_PAGES": "excluded",
+}
+#: ``search-queries/all/history`` and ``search-queries/{query_id}/history`` series.
+_QUERY_HISTORY_INDICATOR_KEYS = {
+    "TOTAL_SHOWS": "shows",
+    "TOTAL_CLICKS": "clicks",
+    "AVG_SHOW_POSITION": "position",
+    "AVG_CLICK_POSITION": "avg_click_position",
+}
+#: ``indexing/samples`` and ``search-urls/events/samples`` page at most 100 rows.
+_SAMPLE_PAGE_LIMIT = 100
+_SAMPLE_MAX_ROWS = 1000
+_SITEMAP_MAX_LIMIT = 500
+_QUEUE_MAX_LIMIT = 500
 _REPORT_DATE_KEYS = ("date_to", "end_date", "date", "last_update", "updated_at")
 _HOST_NOT_LOADED = "HOST_NOT_LOADED"
 
@@ -164,7 +195,13 @@ class YandexWebmasterClient:
             return _degraded(scope, fetched_at)
         return _result(property_id=scope, rows=[row], fetched_at=fetched_at)
 
-    def indexing_history(self, host_id: str) -> ProviderResult[Row]:
+    def indexing_history(
+        self,
+        host_id: str,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> ProviderResult[Row]:
         """Daily indexing buckets (date plus HTTP status counters).
 
         The documented payload is ``{"indicators": {"HTTP_2XX": [{"date", "value"}], ...}}``
@@ -173,14 +210,18 @@ class YandexWebmasterClient:
         provider omitted stays absent instead of being zero-filled. The older
         ``history``/``indexing_history`` list form is still accepted unchanged.
 
+        ``date_from``/``date_to`` are forwarded as the documented ``YYYY-MM-DD`` window.
+
         An empty history means the host is loaded but has no daily buckets yet; that is an
         empty answer with the :data:`~lv24_seo.providers.base.EMPTY_HISTORY` limitation, not a
         degraded host. Only a ``404`` or an explicit ``HOST_NOT_LOADED`` payload is degraded.
         """
         scope = _require_host_id(host_id)
+        params = _date_params(date_from, date_to)
         fetched_at = now_utc()
         payload, missing = self._get_host_scoped(
-            _host_path(self._ensure_user_id(), scope, "indexing/history/")
+            _host_path(self._ensure_user_id(), scope, "indexing/history/"),
+            params=params or None,
         )
         if missing or _is_host_not_loaded(payload):
             return _degraded(scope, fetched_at)
@@ -188,27 +229,422 @@ class YandexWebmasterClient:
         rows = _indexing_rows(payload)
         if not rows:
             return _empty_history(scope, fetched_at)
-        return _result(property_id=scope, rows=rows, fetched_at=fetched_at)
+        return _result(property_id=scope, rows=rows, fetched_at=fetched_at, total=len(rows))
 
-    def search_urls_events(self, host_id: str) -> ProviderResult[Row]:
+    def search_urls_events(
+        self,
+        host_id: str,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> ProviderResult[Row]:
         """History of search-URL events (pages entering or leaving the index).
 
-        An empty event list is a real answer: the host is loaded and nothing was recorded in
+        The current v4 payload is ``{"indicators": {"APPEARED_IN_SEARCH": [{"date", "value"}],
+        "REMOVED_FROM_SEARCH": [...]}}``. The series are merged into one row per date
+        (``date``, ``appeared``, ``removed``); an omitted series stays absent and an unknown
+        indicator is kept under ``extra_indicators``. The legacy ``events`` list form is still
+        accepted unchanged.
+
+        An empty event history is a real answer: the host is loaded and nothing was recorded in
         the window. It is reported with the ``EMPTY_HISTORY`` limitation, never as a degraded
         host.
         """
         scope = _require_host_id(host_id)
+        params = _date_params(date_from, date_to)
+        fetched_at = now_utc()
+        filtered_client_side = False
+        try:
+            payload, missing = self._get_host_scoped(
+                _host_path(self._ensure_user_id(), scope, "search-urls/events/history/"),
+                params=params or None,
+            )
+        except SeoError as exc:
+            # Live 2026-11-17: this endpoint closes the connection when date_from/date_to are
+            # present, although the documented contract lists them. Retry once without the
+            # window and filter the returned series locally; the warning says so.
+            if not params or exc.code != UPSTREAM_UNAVAILABLE:
+                raise
+            payload, missing = self._get_host_scoped(
+                _host_path(self._ensure_user_id(), scope, "search-urls/events/history/")
+            )
+            filtered_client_side = True
+        if missing or _is_host_not_loaded(payload):
+            return _degraded(scope, fetched_at)
+
+        rows = _events_rows(payload)
+        if filtered_client_side:
+            rows = _filter_rows_by_date(rows, date_from, date_to)
+        if not rows:
+            return _empty_history(scope, fetched_at)
+        return _result(
+            property_id=scope,
+            rows=rows,
+            fetched_at=fetched_at,
+            total=len(rows),
+            limitations=(CLIENT_SIDE_DATE_FILTER,) if filtered_client_side else (),
+            warnings=(CLIENT_SIDE_DATE_FILTER,) if filtered_client_side else (),
+        )
+
+    def indexing_samples(
+        self,
+        host_id: str,
+        *,
+        limit: int = _SAMPLE_PAGE_LIMIT,
+        offset: int = 0,
+    ) -> ProviderResult[Row]:
+        """Indexing samples (``status``, ``http_code``, ``url``, ``access_date``).
+
+        The endpoint pages at 100 rows; ``limit`` caps the returned rows and ``offset`` is the
+        first provider row. The payload's ``count`` is the grand total, so the result reports
+        an honest ``total``/``truncated`` pair instead of pretending the page is complete.
+        """
+        return self._sample_rows(
+            host_id,
+            "indexing/samples",
+            limit=limit,
+            offset=offset,
+        )
+
+    def search_event_samples(
+        self,
+        host_id: str,
+        *,
+        limit: int = _SAMPLE_PAGE_LIMIT,
+        offset: int = 0,
+    ) -> ProviderResult[Row]:
+        """Per-URL search event samples (the endpoint behind ``events/history``).
+
+        Rows carry ``url``, ``title``, ``event_date``, ``last_access``, ``event``,
+        ``excluded_url_status``, ``bad_http_status`` and ``target_url``. The provider caps a
+        page at 100 rows; ``count`` is the grand total.
+        """
+        return self._sample_rows(
+            host_id,
+            "search-urls/events/samples",
+            limit=limit,
+            offset=offset,
+        )
+
+    def sitemaps(
+        self,
+        host_id: str,
+        *,
+        parent_id: str | None = None,
+        limit: int | None = None,
+        from_: str | None = None,
+    ) -> ProviderResult[Row]:
+        """List the host's sitemaps (or the children of one sitemap index).
+
+        ``parent_id`` selects the children of a sitemap index, ``limit`` bounds the page and
+        ``from_`` is the provider's ``from`` cursor (a sitemap id). This is a read: adding or
+        deleting sitemaps is not implemented.
+        """
+        scope = _require_host_id(host_id)
+        params: dict[str, Any] = {}
+        if parent_id is not None and parent_id.strip():
+            params["parent_id"] = parent_id.strip()
+        if limit is not None:
+            params["limit"] = _require_bounded_limit(
+                limit,
+                name="limit",
+                maximum=_SITEMAP_MAX_LIMIT,
+            )
+        if from_ is not None and from_.strip():
+            params["from"] = from_.strip()
+
         fetched_at = now_utc()
         payload, missing = self._get_host_scoped(
-            _host_path(self._ensure_user_id(), scope, "search-urls/events/history/")
+            _host_path(self._ensure_user_id(), scope, "sitemaps/"),
+            params=params or None,
         )
         if missing or _is_host_not_loaded(payload):
             return _degraded(scope, fetched_at)
 
-        rows = _copy_rows(_rows_from(payload, "events", "history", "search_urls_events"))
+        rows = [_sitemap_row(item) for item in _rows_from(payload, "sitemaps")]
+        reported = _count_total(payload)
+        return _result(
+            property_id=scope,
+            rows=rows,
+            fetched_at=fetched_at,
+            total=reported if reported is not None else len(rows),
+            truncated=(reported is not None and reported > len(rows)),
+        )
+
+    def sitemap(self, host_id: str, sitemap_id: str) -> ProviderResult[Row]:
+        """Read one sitemap by its provider id (read-only)."""
+        scope = _require_host_id(host_id)
+        target = _require_non_empty(sitemap_id, name="sitemap_id")
+        fetched_at = now_utc()
+        payload = self._get(
+            _host_path(
+                self._ensure_user_id(),
+                scope,
+                f"sitemaps/{quote(target, safe='')}",
+            )
+        )
+        if _is_host_not_loaded(payload):
+            return _degraded(scope, fetched_at)
+        body = _mapping(payload)
+        item = _mapping(body.get("sitemap")) or body
+        if not item:
+            raise _unexpected_payload("sitemaps/{id}")
+        return _result(
+            property_id=scope,
+            rows=[_sitemap_row(item)],
+            fetched_at=fetched_at,
+            total=1,
+        )
+
+    def sqi_history(
+        self,
+        host_id: str,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> ProviderResult[Row]:
+        """SQI points as ``{date, value}`` rows (the documented ``points`` list)."""
+        return self._series_history(
+            host_id,
+            "sqi-history/",
+            key_map={},
+            date_from=date_from,
+            date_to=date_to,
+            points=True,
+        )
+
+    def in_search_history(
+        self,
+        host_id: str,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> ProviderResult[Row]:
+        """Daily pages-in-search series (searchable/excluded) from ``search-urls/in-search``."""
+        return self._series_history(
+            host_id,
+            "search-urls/in-search/history/",
+            key_map=_IN_SEARCH_INDICATOR_KEYS,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+    def all_queries_history(
+        self,
+        host_id: str,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> ProviderResult[Row]:
+        """Daily totals across all queries (shows, clicks and average positions)."""
+        return self._series_history(
+            host_id,
+            "search-queries/all/history/",
+            key_map=_QUERY_HISTORY_INDICATOR_KEYS,
+            date_from=date_from,
+            date_to=date_to,
+            extra_params={"query_indicator": list(_QUERY_INDICATORS)},
+        )
+
+    def query_history(
+        self,
+        host_id: str,
+        query_id: str,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> ProviderResult[Row]:
+        """Daily indicators for one query id (the same series as ``all/history``)."""
+        target = _require_non_empty(query_id, name="query_id")
+        return self._series_history(
+            host_id,
+            f"search-queries/{quote(target, safe='')}/history/",
+            key_map=_QUERY_HISTORY_INDICATOR_KEYS,
+            date_from=date_from,
+            date_to=date_to,
+            extra_params={"query_indicator": list(_QUERY_INDICATORS)},
+        )
+
+    def recrawl_queue(
+        self,
+        host_id: str,
+        *,
+        offset: int = 0,
+        limit: int = _SAMPLE_PAGE_LIMIT,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> ProviderResult[Row]:
+        """Read one page of the recrawl queue (``tasks`` plus the reported ``count``)."""
+        scope = _require_host_id(host_id)
+        start = _require_offset(offset)
+        size = _require_bounded_limit(limit, name="limit", maximum=_QUEUE_MAX_LIMIT)
+        params: dict[str, Any] = {"offset": start, "limit": size}
+        params.update(_date_params(date_from, date_to))
+        fetched_at = now_utc()
+        payload, missing = self._get_host_scoped(
+            _host_path(self._ensure_user_id(), scope, "recrawl/queue"),
+            params=params,
+        )
+        if missing or _is_host_not_loaded(payload):
+            return _degraded(scope, fetched_at)
+
+        rows = [_queue_row(item) for item in _rows_from(payload, "tasks")]
+        reported = _count_total(payload)
+        return _result(
+            property_id=scope,
+            rows=rows,
+            fetched_at=fetched_at,
+            total=reported if reported is not None else len(rows),
+            truncated=(reported is not None and reported > len(rows)),
+        )
+
+    def recrawl_task(self, host_id: str, task_id: str) -> ProviderResult[Row]:
+        """Read one recrawl task by id (read-only)."""
+        scope = _require_host_id(host_id)
+        target = _require_non_empty(task_id, name="task_id")
+        fetched_at = now_utc()
+        payload = self._get(
+            _host_path(
+                self._ensure_user_id(),
+                scope,
+                f"recrawl/queue/{quote(target, safe='')}",
+            )
+        )
+        if _is_host_not_loaded(payload):
+            return _degraded(scope, fetched_at)
+        body = _mapping(payload)
+        item = _mapping(body.get("task")) or body
+        if not item:
+            raise _unexpected_payload("recrawl/queue/{id}")
+        return _result(property_id=scope, rows=[_queue_row(item)], fetched_at=fetched_at, total=1)
+
+    def recrawl_enqueue(self, host_id: str, url: str) -> ProviderResult[Row]:
+        """Queue one URL for recrawl (provider write; the caller owns the write gate).
+
+        Yandex has no batch endpoint: one request queues one URL. ``202`` returns the
+        ``task_id`` and the remaining daily quota, ``409`` means the URL is already queued and
+        ``429`` is a quota rejection. The 429 error carries ``daily_quota`` and
+        ``exceeded_until`` so the caller can stop the loop honestly.
+        """
+        scope = _require_host_id(host_id)
+        target = _require_http_url(url)
+        path = _host_path(self._ensure_user_id(), scope, "recrawl/queue")
+        response = self._http.request(
+            "POST",
+            f"{self._base_url}{path}",
+            json={"url": target},
+            headers=self._headers,
+            rate_limit_key="yandex_webmaster",
+            raise_for_status=False,
+        )
+        try:
+            body = _response_json(response, path="recrawl/queue")
+            status = response.status_code
+            if status in (200, 202):
+                task_id = _text(body.get("task_id"))
+                if task_id is None:
+                    raise _unexpected_payload("recrawl/queue")
+                row: Row = {
+                    "url": target,
+                    "status": "queued",
+                    "task_id": task_id,
+                    "quota_remainder": _first_number(body, ("quota_remainder", "quota")),
+                }
+                return _result(
+                    property_id=scope,
+                    rows=[row],
+                    fetched_at=now_utc(),
+                    limitations=(ONE_URL_PER_CALL,),
+                )
+            if status == 409:
+                row = {
+                    "url": target,
+                    "status": "already_queued",
+                    "error_code": _error_code(body),
+                }
+                return _result(
+                    property_id=scope,
+                    rows=[row],
+                    fetched_at=now_utc(),
+                    limitations=(ONE_URL_PER_CALL,),
+                )
+            raise _enqueue_error(status, body, target)
+        finally:
+            response.close()
+
+    def _sample_rows(
+        self,
+        host_id: str,
+        suffix: str,
+        *,
+        limit: int,
+        offset: int,
+    ) -> ProviderResult[Row]:
+        """Walk the documented 100-row sample pages up to ``limit`` rows."""
+        scope = _require_host_id(host_id)
+        max_rows = _require_bounded_limit(limit, name="limit", maximum=_SAMPLE_MAX_ROWS)
+        position = _require_offset(offset)
+        fetched_at = now_utc()
+        rows: list[Row] = []
+        total: int | None = None
+
+        while len(rows) < max_rows:
+            request_limit = min(_SAMPLE_PAGE_LIMIT, max_rows - len(rows))
+            payload, missing = self._get_host_scoped(
+                _host_path(self._ensure_user_id(), scope, suffix),
+                params={"offset": position, "limit": request_limit},
+            )
+            if missing or _is_host_not_loaded(payload):
+                return _degraded(scope, fetched_at)
+            if total is None:
+                total = _count_total(payload)
+            batch = _copy_rows(_rows_from(payload, "samples"))
+            if not batch:
+                break
+            rows.extend(batch[:request_limit])
+            if len(batch) < request_limit:
+                break
+            position += request_limit
+            if total is not None and position >= total:
+                break
+
+        truncated = (total is not None and len(rows) < total) or (
+            total is None and len(rows) >= max_rows
+        )
+        return _result(
+            property_id=scope,
+            rows=rows,
+            fetched_at=fetched_at,
+            total=total if total is not None else len(rows),
+            truncated=truncated,
+        )
+
+    def _series_history(
+        self,
+        host_id: str,
+        suffix: str,
+        *,
+        key_map: Mapping[str, str],
+        date_from: date | None,
+        date_to: date | None,
+        points: bool = False,
+        extra_params: Mapping[str, Any] | None = None,
+    ) -> ProviderResult[Row]:
+        scope = _require_host_id(host_id)
+        params = _date_params(date_from, date_to)
+        if extra_params:
+            params.update(extra_params)
+        fetched_at = now_utc()
+        payload, missing = self._get_host_scoped(
+            _host_path(self._ensure_user_id(), scope, suffix),
+            params=params or None,
+        )
+        if missing or _is_host_not_loaded(payload):
+            return _degraded(scope, fetched_at)
+        rows = _points_rows(payload) if points else _indicator_rows(payload, key_map)
         if not rows:
             return _empty_history(scope, fetched_at)
-        return _result(property_id=scope, rows=rows, fetched_at=fetched_at)
+        return _result(property_id=scope, rows=rows, fetched_at=fetched_at, total=len(rows))
 
     def diagnostics(self, host_id: str) -> ProviderResult[Row]:
         """Flattened host problems: severity, code, state and last state update.
@@ -378,6 +814,7 @@ def _result(
     total: int | None = None,
     truncated: bool = False,
     limitations: tuple[str, ...] = (),
+    warnings: tuple[str, ...] = (),
 ) -> ProviderResult[Row]:
     return ProviderResult(
         source=SOURCE,
@@ -388,6 +825,7 @@ def _result(
         total=total,
         truncated=truncated,
         limitations=limitations,
+        warnings=warnings,
     )
 
 
@@ -423,6 +861,79 @@ def _unexpected_payload(path: str) -> SeoError:
     )
 
 
+def _response_json(response: httpx.Response, *, path: str) -> Mapping[str, Any]:
+    """Decode a write response body, keeping only object payloads."""
+    try:
+        payload: object = response.json()
+    except ValueError as exc:
+        raise SeoError(
+            code=UPSTREAM_UNAVAILABLE,
+            message=f"invalid JSON response from {path}",
+            retryable=False,
+            detail={"status_code": response.status_code},
+        ) from exc
+    return _mapping(payload)
+
+
+def _error_code(body: Mapping[str, Any]) -> str | None:
+    """Provider error code from the top level or a nested ``error`` object."""
+    for source in (body, _mapping(body.get("error"))):
+        for key in ("error_code", "code"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _enqueue_error(status: int, body: Mapping[str, Any], url: str) -> SeoError:
+    """Map a recrawl enqueue failure; 429 keeps the documented quota fields."""
+    code = _error_code(body)
+    if status == 429:
+        quota = _mapping(body.get("error")) or body
+        return SeoError(
+            code=QUOTA_EXCEEDED,
+            message=f"Yandex recrawl quota exceeded for {url}",
+            next_action="wait for the daily quota to reset or queue fewer URLs",
+            retryable=False,
+            detail={
+                "status_code": status,
+                "error_code": code,
+                "daily_quota": _first_number(quota, ("daily_quota", "quota")),
+                "exceeded_until": _text(quota.get("exceeded_until")),
+                "url": url,
+            },
+        )
+    if status in (401, 403):
+        return SeoError(
+            code=AUTH_INVALID,
+            message=f"Yandex Webmaster rejected the recrawl request (HTTP {status})",
+            next_action=LOGIN_NEXT_ACTION,
+            retryable=False,
+            detail={"status_code": status, "error_code": code},
+        )
+    if status == 404:
+        return SeoError(
+            code=PROPERTY_NOT_FOUND,
+            message="Yandex Webmaster host was not found for recrawl",
+            retryable=False,
+            detail={"status_code": status, "error_code": code},
+        )
+    if status >= 500:
+        return SeoError(
+            code=UPSTREAM_UNAVAILABLE,
+            message=f"Yandex Webmaster is unavailable (HTTP {status})",
+            retryable=True,
+            detail={"status_code": status, "error_code": code},
+        )
+    return SeoError(
+        code=INVALID_INPUT,
+        message=f"Yandex Webmaster rejected the recrawl URL (HTTP {status})",
+        next_action="check that the URL belongs to the configured host",
+        retryable=False,
+        detail={"status_code": status, "error_code": code, "url": url},
+    )
+
+
 def _require_host_id(host_id: object) -> str:
     if not isinstance(host_id, str) or not host_id.strip():
         raise SeoError(
@@ -441,6 +952,65 @@ def _require_limit(limit: object) -> int:
             next_action="use a limit between 1 and 500",
         )
     return limit
+
+
+def _require_bounded_limit(limit: object, *, name: str, maximum: int) -> int:
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= maximum:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must be an integer between 1 and {maximum}",
+            next_action=f"use {name} between 1 and {maximum}",
+        )
+    return limit
+
+
+def _require_offset(offset: object) -> int:
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="offset must be a non-negative integer",
+            next_action="use an offset of 0 or more",
+        )
+    return offset
+
+
+def _require_non_empty(value: object, *, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must be a non-empty string",
+            next_action=f"pass a provider {name}",
+        )
+    return value.strip()
+
+
+def _require_http_url(value: object) -> str:
+    url = value.strip() if isinstance(value, str) else ""
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="url must be an absolute http(s) URL",
+            next_action="pass a URL such as https://example.com/page",
+            detail={"value": url},
+        )
+    return url
+
+
+def _date_params(date_from: date | None, date_to: date | None) -> dict[str, str]:
+    """Validate the documented ``date_from``/``date_to`` window and render query params."""
+    if date_from is not None and not isinstance(date_from, date):
+        raise SeoError(code=INVALID_INPUT, message="date_from must be a date")
+    if date_to is not None and not isinstance(date_to, date):
+        raise SeoError(code=INVALID_INPUT, message="date_to must be a date")
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise SeoError(code=INVALID_INPUT, message="date_from must not be after date_to")
+    params: dict[str, str] = {}
+    if date_from is not None:
+        params["date_from"] = date_from.isoformat()
+    if date_to is not None:
+        params["date_to"] = date_to.isoformat()
+    return params
 
 
 def _require_order_by(order_by: object) -> str:
@@ -594,11 +1164,41 @@ def _indexing_rows_from_indicators(indicators: Mapping[str, Any]) -> list[Row]:
     Only returned indicators are written: a missing series leaves its key absent, and a
     status the enum does not document is preserved under ``extra_indicators``.
     """
+    return _indicator_rows_from_series(indicators, _INDEXING_INDICATOR_KEYS)
+
+
+def _events_rows(payload: object) -> list[Row]:
+    """Rows from the documented event indicator series, or the legacy list form unchanged."""
+    body = _mapping(payload)
+    indicators = body.get("indicators")
+    if isinstance(indicators, Mapping):
+        return _indicator_rows_from_series(indicators, _EVENT_INDICATOR_KEYS)
+    return _copy_rows(_rows_from(payload, "events", "history", "search_urls_events"))
+
+
+def _indicator_rows(payload: object, key_map: Mapping[str, str]) -> list[Row]:
+    """Rows from ``indicators`` series, or the legacy list form unchanged."""
+    body = _mapping(payload)
+    indicators = body.get("indicators")
+    if isinstance(indicators, Mapping):
+        return _indicator_rows_from_series(indicators, key_map)
+    return _copy_rows(_rows_from(payload, "history", "indicators"))
+
+
+def _indicator_rows_from_series(
+    indicators: Mapping[str, Any],
+    key_map: Mapping[str, str],
+) -> list[Row]:
+    """Merge indicator series into one row per date, preserving unknown indicators.
+
+    A missing series leaves its key absent (never zero-filled). Indicators the caller does
+    not know are kept under ``extra_indicators`` so a new provider series is not dropped.
+    """
     rows: dict[str, Row] = {}
     extra: dict[str, dict[str, int | float]] = {}
     for raw_name, series in indicators.items():
         name = str(raw_name)
-        row_key = _INDEXING_INDICATOR_KEYS.get(name.upper())
+        row_key = key_map.get(name.upper())
         if not isinstance(series, list):
             continue
         for entry in series:
@@ -616,6 +1216,73 @@ def _indexing_rows_from_indicators(indicators: Mapping[str, Any]) -> list[Row]:
     for date_text, values in extra.items():
         rows[date_text]["extra_indicators"] = dict(sorted(values.items()))
     return [rows[date_text] for date_text in sorted(rows)]
+
+
+def _points_rows(payload: object) -> list[Row]:
+    """``{"points": [{"date", "value"}]}`` → one row per date."""
+    rows: list[Row] = []
+    for item in _rows_from(payload, "points", "history", "sqi_history"):
+        date_text = _text(item.get("date"))
+        value = _number(item.get("value"))
+        if date_text is None or value is None:
+            continue
+        rows.append({"date": date_text, "value": value})
+    return sorted(rows, key=lambda row: str(row.get("date", "")))
+
+
+def _filter_rows_by_date(
+    rows: list[Row],
+    date_from: date | None,
+    date_to: date | None,
+) -> list[Row]:
+    """Filter rows by the ``YYYY-MM-DD`` prefix of their provider date string."""
+    if date_from is None and date_to is None:
+        return rows
+    start = date_from.isoformat() if date_from is not None else ""
+    end = date_to.isoformat() if date_to is not None else ""
+    kept: list[Row] = []
+    for row in rows:
+        raw = row.get("date") or row.get("event_date")
+        if not isinstance(raw, str) or len(raw) < 10:
+            kept.append(row)
+            continue
+        day = raw[:10]
+        if start and day < start:
+            continue
+        if end and day > end:
+            continue
+        kept.append(row)
+    return kept
+
+
+def _sitemap_row(item: Mapping[str, Any]) -> Row:
+    row: Row = {
+        "sitemap_id": _text(item.get("sitemap_id")),
+        "sitemap_url": _text(item.get("sitemap_url")),
+        "last_access_date": _text(item.get("last_access_date")),
+        "errors_count": _as_int(item.get("errors_count")),
+        "urls_count": _as_int(item.get("urls_count")),
+        "children_count": _as_int(item.get("children_count")),
+        "sitemap_type": _text(item.get("sitemap_type")),
+    }
+    sources = item.get("sources")
+    if isinstance(sources, list):
+        row["sources"] = [str(value) for value in sources if isinstance(value, str)]
+    return row
+
+
+def _queue_row(item: Mapping[str, Any]) -> Row:
+    return {
+        "task_id": _text(item.get("task_id")),
+        "url": _text(item.get("url")),
+        "added_time": _text(item.get("added_time")),
+        "state": _text(item.get("state")),
+    }
+
+
+def _count_total(payload: object) -> int | None:
+    """Grand total reported by list endpoints that document ``count`` as the total."""
+    return _as_int(_mapping(payload).get("count"))
 
 
 def _diagnostic_row(item: Mapping[str, Any]) -> Row:

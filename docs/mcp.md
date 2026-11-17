@@ -153,14 +153,17 @@ the call claims the idempotency slot, so replaying the token returns `status: sk
 `reason: duplicate` and the provider is called once; without a store the envelope warns that replay
 protection is off. A provider failure releases the claim so a genuine retry is allowed.
 
-**Current build:** `seo_recrawl_request` still returns `WRITE_DISABLED` because the Yandex
-adapter has no recrawl queue. `seo_sitemap_submit` is wired for Bing submit; GSC submit and Bing
-delete return `WRITE_DISABLED` instead of pretending.
+**Current build:** `seo_recrawl_request` is wired to the Yandex recrawl queue (one POST per URL,
+capped to the remaining daily quota). `seo_sitemap_submit` is wired for Bing submit; GSC submit and
+Bing delete return `WRITE_DISABLED` instead of pretending.
 
 ### `seo_recrawl_request`
 
-Yandex recrawl queue. Reads the remaining quota first, refuses when `urls > quota_left`. Inputs:
-`host_id` (defaults to the configured host), `urls`, `allow_write`, `plan_hash`, `confirm_token`.
+Yandex recrawl queue. Reads the remaining quota first and caps the list to `quota_left` (the extra
+URLs are returned in `not_attempted` instead of being sent). Inputs: `host_id` (defaults to the
+configured host), `urls`, `allow_write`, `plan_hash`, `confirm_token`. Apply returns one row per
+URL (`status: queued`, `task_id`, `quota_remainder`, or `status: already_queued` on 409); a 429
+stops the loop and reports `quota` plus `not_attempted`.
 
 ### `seo_sitemap_submit`
 
