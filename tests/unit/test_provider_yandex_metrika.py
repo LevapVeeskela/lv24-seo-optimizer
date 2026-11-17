@@ -11,8 +11,12 @@ import pytest
 
 from lv24_seo.core.errors import AUTH_INVALID, AUTH_REQUIRED, INVALID_INPUT, SeoError
 from lv24_seo.core.http import HttpClient
-from lv24_seo.providers.base import SAMPLED
-from lv24_seo.providers.yandex_metrika import YandexMetrikaClient
+from lv24_seo.providers.base import (
+    SAMPLED,
+    SENSITIVE_DATA_HIDDEN,
+    TOTAL_ROWS_ROUNDED,
+)
+from lv24_seo.providers.yandex_metrika import ORGANIC_FILTER, YandexMetrikaClient
 from lv24_seo.providers.yandex_metrika import client as metrika_client_module
 
 Handler = Callable[[httpx.Request], httpx.Response]
@@ -147,6 +151,11 @@ def test_stat_data_maps_rows_and_reports_sampling() -> None:
                 "total_rows": 250,
                 "sampled": True,
                 "sample_share": 0.5,
+                "sample_size": 1_000,
+                "sample_space": 2_000,
+                "data_lag": 90,
+                "contains_sensitive_data": True,
+                "total_rows_rounded": True,
             },
         )
 
@@ -156,7 +165,8 @@ def test_stat_data_maps_rows_and_reports_sampling() -> None:
         dimensions=["ym:s:startURLPath"],
         date1=date(2026, 11, 1),
         date2=date(2026, 11, 7),
-        filters="ym:s:lastTrafficSource=='organic'",
+        filters=ORGANIC_FILTER,
+        sort="-ym:s:visits",
         limit=100,
     )
 
@@ -174,9 +184,17 @@ def test_stat_data_maps_rows_and_reports_sampling() -> None:
     )
     assert result.total == 250
     assert result.truncated is True
-    assert result.limitations == (SAMPLED,)
-    assert result.warnings == ("sampled",)
+    assert result.limitations == (SAMPLED, TOTAL_ROWS_ROUNDED, SENSITIVE_DATA_HIDDEN)
+    assert result.warnings == ("sampled", "sensitive_data_hidden")
     assert result.property_id == "123456"
+    meta = result.to_meta()
+    assert meta["sampled"] is True
+    assert meta["sample_share"] == 0.5
+    assert meta["sample_size"] == 1_000
+    assert meta["sample_space"] == 2_000
+    assert meta["data_lag"] == 90
+    assert meta["contains_sensitive_data"] is True
+    assert meta["total_rows_rounded"] is True
 
     request = seen[0]
     assert request.method == "GET"
@@ -193,6 +211,7 @@ def test_stat_data_maps_rows_and_reports_sampling() -> None:
     assert form["accuracy"] == ["medium"]
     assert form["limit"] == ["100"]
     assert form["filters"] == ["ym:s:lastTrafficSource=='organic'"]
+    assert form["sort"] == ["-ym:s:visits"]
 
 
 def test_stat_data_without_total_rows_is_not_truncated() -> None:
@@ -389,6 +408,80 @@ def test_data_age_is_never_negative_for_a_future_date2(monkeypatch: pytest.Monke
     )
 
     assert result.data_age_days == 0
+
+
+def test_stat_bytime_flattens_intervals_and_sends_group() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "dimensions": [],
+                        "metrics": [[4, 6], [3, 5]],
+                    }
+                ],
+                "time_intervals": [
+                    ["2026-11-09", "2026-11-09"],
+                    ["2026-11-10", "2026-11-10"],
+                ],
+                "total_rows": 1,
+                "sampled": False,
+                "data_lag": 120,
+            },
+        )
+
+    result = _metrika(handler).stat_bytime(
+        counter=123456,
+        metrics=["ym:s:visits", "ym:s:users"],
+        date1=date(2026, 11, 9),
+        date2=date(2026, 11, 10),
+        group="day",
+        filters=ORGANIC_FILTER,
+    )
+
+    assert result.rows == [
+        {"date": "2026-11-09", "visits": 4.0, "users": 3.0},
+        {"date": "2026-11-10", "visits": 6.0, "users": 5.0},
+    ]
+    assert result.data_lag == 120
+    assert result.truncated is False
+    request = seen[0]
+    assert request.url.path == "/stat/v1/data/bytime"
+    form = parse_qs(request.url.query.decode())
+    assert form["group"] == ["day"]
+    assert form["filters"] == [ORGANIC_FILTER]
+    assert form["metrics"] == ["ym:s:visits,ym:s:users"]
+    assert "dimensions" not in form
+
+
+def test_stat_data_rejects_unknown_accuracy_and_empty_group() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call expected for invalid input")
+
+    client = _metrika(handler)
+    with pytest.raises(SeoError) as excinfo:
+        client.stat_data(
+            counter=123456,
+            metrics=["ym:s:visits"],
+            date1=date(2026, 11, 1),
+            date2=date(2026, 11, 7),
+            accuracy="exact",
+        )
+    assert excinfo.value.code == INVALID_INPUT
+
+    with pytest.raises(SeoError) as excinfo:
+        client.stat_bytime(
+            counter=123456,
+            metrics=["ym:s:visits"],
+            date1=date(2026, 11, 1),
+            date2=date(2026, 11, 7),
+            group="year",
+        )
+    assert excinfo.value.code == INVALID_INPUT
 
 
 def test_forbidden_maps_to_auth_invalid() -> None:

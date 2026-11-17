@@ -205,6 +205,7 @@ class FakeMetrika:
         date2: date,
         dimensions: Sequence[str] = (),
         filters: str | None = None,
+        sort: str | None = None,
         accuracy: str = "medium",
         limit: int = 100,
     ) -> ProviderResult[dict[str, Any]]:
@@ -215,13 +216,21 @@ class FakeMetrika:
                 "date1": date1,
                 "date2": date2,
                 "dimensions": tuple(dimensions),
+                "filters": filters,
+                "sort": sort,
                 "limit": limit,
             }
         )
         if self.error is not None:
             raise self.error
-        rows = self.current if len(self.calls) == 1 else self.previous
-        return _result("yandex_metrika", rows, property_id=str(counter), data_age_days=1)
+        current = len(self.calls) % 2 == 1
+        rows = self.current if current else self.previous
+        return _result(
+            "yandex_metrika",
+            rows,
+            property_id=str(counter),
+            data_age_days=1 if current else 8,
+        )
 
 
 class FakeBing:
@@ -444,9 +453,26 @@ def test_stats_happy_path_all_six_providers() -> None:
 
     metrika_entry = services["yandex_metrika"]
     assert metrika_entry["rows"] == 1
-    assert metrika_entry["metrics"] == {"visits": 120.0, "users": 100.0}
-    assert metrika_entry["previous"] == {"visits": 90.0, "users": 80.0}
+    assert metrika_entry["metrics"] == {
+        "organic_visits": 120.0,
+        "organic_users": 100.0,
+        "all_visits": 120.0,
+        "all_users": 100.0,
+    }
+    assert metrika_entry["previous"] == {
+        "organic_visits": 90.0,
+        "organic_users": 80.0,
+        "all_visits": 90.0,
+        "all_users": 80.0,
+    }
+    # The current window is one day old; the previous window's 8-day age must not win.
     assert metrika_entry["data_age_days"] == 1
+    assert [call["filters"] for call in metrika.calls] == [
+        "ym:s:lastTrafficSource=='organic'",
+        "ym:s:lastTrafficSource=='organic'",
+        None,
+        None,
+    ]
 
     bing_entry = services["bing"]
     assert bing_entry["rows"] == 2
@@ -481,7 +507,8 @@ def test_stats_happy_path_all_six_providers() -> None:
         "missing": 0,
         "complete": True,
     }
-    assert data["limitations"] == [NO_QUERY_PAGE_JOIN]
+    assert NO_QUERY_PAGE_JOIN in data["limitations"]
+    assert any("organic_*" in item for item in data["limitations"])
     assert payload["meta"]["complete"] is True
     assert payload["meta"]["truncated"] is False
     assert payload["meta"]["days"] == 7

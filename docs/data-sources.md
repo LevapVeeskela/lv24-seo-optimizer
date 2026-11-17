@@ -155,22 +155,47 @@ notification settings, Yandex Business card/reviews.
 | Auth | `Authorization: OAuth <token>`, scope `metrika:read` |
 | Base | `https://api-metrika.yandex.net/stat/v1/` |
 | Free quota | 5,000 requests/day/user; 30 rps/IP; 3 parallel; `/stat/v1/data` 200 req / 5 min; ≤100k rows, ≤20 metrics, ≤10 dimensions per request |
-| Useful dimensions | `ym:s:lastTrafficSource`, `ym:s:lastSearchEngineRoot`, `ym:s:lastSearchPhrase`, `ym:s:startURLPath`, `ym:s:deviceCategory` |
-| Useful metrics | `ym:s:visits`, `ym:s:users`, `ym:s:bounceRate`, `ym:s:avgVisitDurationSeconds`, `ym:s:goal<id>reaches`, `ym:s:goal<id>conversionRate` |
+| Useful dimensions | `ym:s:lastTrafficSource`, `ym:s:lastSearchEngineRoot`, `ym:s:lastSearchPhrase`, `ym:s:startURLPath`, `ym:s:deviceCategory`, `ym:s:regionCountry` |
+| Useful metrics | `ym:s:visits`, `ym:s:users`, `ym:s:bounceRate`, `ym:s:avgVisitDurationSeconds`, `ym:s:pageDepth`, `ym:s:pageviews`, `ym:s:goal<id>reaches`, `ym:s:goal<id>conversionRate` |
 | Sampling | `accuracy=medium` by default; `full` is slower and eats the 5-min quota |
 
 **Hard rules**
 
 1. Two dimensions max for daily reports (`date` + one), otherwise rows explode.
 2. Check `sampled` / `sample_share` before publishing a number; store the accuracy flag with the value.
-3. Organic only: `filters=ym:s:lastTrafficSource=='organic'`.
+3. Organic only: `filters=ym:s:lastTrafficSource=='organic'`. `stats` and the weekly digest read
+   organic and all-traffic aggregates separately (`organic_visits`/`organic_users` vs
+   `all_visits`/`all_users`); all-traffic is never labelled SEO traffic.
 4. Goal ids come from `GET /management/v1/counters/{id}/goals` once and are stored in config.
-5. The client uses documented `GET /stat/v1/data` with query parameters. Offline contract
-   tests check the method and parameters; live property acceptance still needs owner credentials.
+   `metrika goals` reads them from `providers.yandex_metrika.goals`; an empty list warns and makes
+   no call instead of inventing metrics. Metrika caps a request at 20 metrics, so one call queries
+   at most five goals (four metrics each); a longer list is reported as truncated.
+5. The client uses documented `GET /stat/v1/data` and `GET /stat/v1/data/bytime` with query
+   parameters. Offline contract tests check the method and parameters; live property acceptance
+   still needs owner credentials.
 6. `limit` is the page size, not the result size. The table is walked with `offset` until
    `total_rows` is reached, a short page arrives, or a cap stops the walk: at most **10,000 rows**
    and **100 pages** per call. A full page with no `total_rows` is reported as `truncated: true`
    instead of looking complete; a request without dimensions is treated as a single row.
+7. Sampling fields are passed through, not flattened away: `sampled`, `sample_share`,
+   `sample_size`, `sample_space`, `data_lag`, `contains_sensitive_data` and `total_rows_rounded`
+   appear in `meta`; `sampled`, `total_rows_rounded` and `sensitive_data_hidden` become
+   `limitations`, and a sampled table is never described as exact.
+8. `data_age_days` is computed from the current window's `date2`; the previous window in the same
+   comparison is older by design and never inflates the headline age.
+9. Search phrases are partial by contract: Google withholds them, and Metrika hides phrases with
+   fewer than 10 users. `metrika queries` states both limitations every time; the provider's
+   `contains_sensitive_data` flag is carried when it appears.
+
+**Exposed by `lv24-seo metrika`:** `pages` (`ym:s:startURLPath`), `queries`
+(`ym:s:lastSearchPhrase` + `ym:s:lastSearchEngineRoot`), `devices` (`ym:s:deviceCategory`),
+`countries` (`ym:s:regionCountry`), `engagement` (totals), `goals` (config ids) and `bytime`
+(`group=day|week|month`). All are read-only, organic-filtered, bounded by `--limit` and expose
+`data_age_days`, `truncated` and `limitations`.
+
+**GA4 is a separate provider gap.** Google Analytics 4 data (sessions, conversions, channel
+grouping) is not part of the Metrika adapter and is not queried by any command or MCP tool today; a
+GA4 adapter would need its own OAuth/service-account path and provider contract.
 
 ## 4. Bing Webmaster + IndexNow
 

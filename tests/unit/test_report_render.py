@@ -852,6 +852,30 @@ def test_metrica_sessions_are_not_clicks() -> None:
     assert "会话数 2,690" in zh
 
 
+def test_metrica_organic_and_all_sessions_stay_labelled() -> None:
+    report = _weekly_full()
+    report.sections.append(
+        ReportSection(
+            key="yandex_metrika",
+            title="Yandex Metrica",
+            summary="",
+            rows=[
+                {"metric": "organic_visits", "current": 4.0},
+                {"metric": "all_visits", "current": 40.0},
+                {"metric": "organic_users", "current": 4.0},
+                {"metric": "all_users", "current": 12.0},
+            ],
+        )
+    )
+
+    text = " ".join(render_email_text(report).split())
+
+    assert "organic sessions 4" in text
+    assert "all sessions 40" in text
+    assert "organic users 4" in text
+    assert "all users 12" in text
+
+
 def test_chinese_source_units_precede_values() -> None:
     text = render_email_text(_weekly_full(), locale="zh")
 

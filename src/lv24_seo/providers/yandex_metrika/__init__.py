@@ -1,5 +1,5 @@
 """Yandex Metrika provider adapter."""
 
-from lv24_seo.providers.yandex_metrika.client import YandexMetrikaClient
+from lv24_seo.providers.yandex_metrika.client import ORGANIC_FILTER, YandexMetrikaClient
 
-__all__ = ["YandexMetrikaClient"]
+__all__ = ["ORGANIC_FILTER", "YandexMetrikaClient"]

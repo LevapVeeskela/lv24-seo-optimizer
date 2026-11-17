@@ -580,17 +580,84 @@ def test_cwv_collect_emits_the_standard_envelope(
     assert payload["data"]["written"] == {"crux": 0, "psi": 0}
 
 
-def test_root_command_tree_exposes_twenty_three_top_level_entries() -> None:
+def test_root_command_tree_exposes_twenty_four_top_level_entries() -> None:
     groups = {info.name for info in cli_main.app.registered_groups}
     commands = {getattr(info.callback, "__name__", "") for info in cli_main.app.registered_commands}
 
-    assert {"logs", "tasks", "backup", "portfolio", "cwv", "bing"} <= groups
-    assert len(groups) == 16
+    assert {"logs", "tasks", "backup", "portfolio", "cwv", "bing", "metrika"} <= groups
+    assert len(groups) == 17
     assert commands == {"version", "doctor", "init", "properties", "stats", "crawl", "install"}
-    assert len(groups) + len(commands) == 23
+    assert len(groups) + len(commands) == 24
     help_text = _stdout(_invoke("--help"))
-    for name in ("logs", "tasks", "backup", "portfolio", "cwv", "bing"):
+    for name in ("logs", "tasks", "backup", "portfolio", "cwv", "bing", "metrika"):
         assert name in help_text
+
+
+def test_metrika_pages_reads_organic_rows(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_pages(
+        self: Any, *, days: int = 7, lag_days: int = 2, limit: int = 100
+    ) -> dict[str, Any]:
+        del self
+        captured.update(days=days, lag_days=lag_days, limit=limit)
+        return ok(
+            {
+                "counter": "111384866",
+                "rows": [
+                    {
+                        "startURLPath": "/catalog",
+                        "visits": 4.0,
+                        "users": 4.0,
+                        "bounceRate": 25.0,
+                        "avgVisitDurationSeconds": 61.0,
+                        "pageDepth": 2.0,
+                        "pageviews": 8.0,
+                    }
+                ],
+            },
+            meta={
+                "source": "yandex_metrika",
+                "start": "2026-11-09",
+                "end": "2026-11-15",
+                "data_age_days": 1,
+                "organic_only": True,
+                "sampled": True,
+                "sample_share": 0.5,
+                "limitations": ["sampled"],
+            },
+            warnings=["sampled"],
+        )
+
+    monkeypatch.setattr(cli_main.SeoService, "metrika_pages", fake_pages)
+    payload = _json(
+        _invoke(
+            "metrika",
+            "pages",
+            "--days",
+            "7",
+            "--lag-days",
+            "2",
+            "--limit",
+            "5",
+            "--config",
+            str(workspace),
+            "--json",
+        )
+    )
+
+    assert captured == {"days": 7, "lag_days": 2, "limit": 5}
+    assert payload["ok"] is True
+    assert payload["meta"]["organic_only"] is True
+    assert payload["data"]["rows"][0]["startURLPath"] == "/catalog"
+
+
+def test_metrika_group_exposes_every_read_command() -> None:
+    result = _invoke("metrika", "--help")
+    output = _stdout(result)
+
+    for name in ("pages", "goals", "queries", "devices", "countries", "engagement", "bytime"):
+        assert name in output
 
 
 def test_portfolio_list_is_registered_and_scans_local_projects(workspace: Path) -> None:

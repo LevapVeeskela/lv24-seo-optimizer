@@ -182,6 +182,7 @@ _METRIC_LABEL_KEYS: dict[str, str] = {
     "position": "kpi.position",
     "visits": "unit.sessions",
     "sessions": "unit.sessions",
+    "users": "unit.users",
 }
 _LIMITATION_KEYS: dict[str, str] = {
     "top_3000_queries": "notes.limitation.top_3000_queries",
@@ -1542,12 +1543,17 @@ def _fallback_metric_metrics(
         value = _number(row.get("current"))
         if not metric or value is None:
             continue
-        if sessions_only and metric not in {"visits", "users", "sessions"}:
+        base = metric.removeprefix("organic_").removeprefix("all_")
+        if sessions_only and base not in {"visits", "users", "sessions"}:
             continue
         totals[metric] = totals.get(metric, 0.0) + value
     metrics: list[str] = []
     for metric, value in totals.items():
-        label = msgs.t(_METRIC_LABEL_KEYS[metric]) if metric in _METRIC_LABEL_KEYS else metric
+        base = metric.removeprefix("organic_").removeprefix("all_")
+        label_key = _METRIC_LABEL_KEYS.get(metric) or _METRIC_LABEL_KEYS.get(base)
+        label = msgs.t(label_key) if label_key else metric
+        if metric != base:
+            label = f"{metric.split('_', 1)[0]} {label}"
         if metric == "ctr" and 0 <= value <= 1:
             formatted = msgs.percent(value, digits=2, scale="ratio")
         elif metric == "position":

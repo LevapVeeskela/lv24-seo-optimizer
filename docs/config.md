@@ -82,6 +82,11 @@ identifiers, not secrets: the key file is served openly at the location (default
 `seo.toml` and are not redacted by `config show`. The Bing Webmaster API key stays a secret:
 store it with `lv24-seo auth set --provider bing` or set `LV24_SEO_BING_API_KEY`.
 
+`providers.yandex_metrika.counter` selects the counter read by `stats` and every `metrika`
+command. `goals` lists numeric goal ids used by `lv24-seo metrika goals`; an empty list is valid and
+produces a warning instead of a provider call. At most five goal ids are queried per request
+(Metrika's 20-metric cap), and a longer list is reported as truncated.
+
 > Telemetry is not configurable: the tool sends nothing anywhere. There is no `[privacy]` section and
 > One `seo.toml` describes one project; a multi-site block is not implemented.
 

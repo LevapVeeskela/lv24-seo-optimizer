@@ -255,6 +255,7 @@ class FakeMetrikaClient:
         date2: date,
         dimensions: Sequence[str] = (),
         filters: str | None = None,
+        sort: str | None = None,
         accuracy: str = "medium",
         limit: int = 100,
     ) -> ProviderResult[dict[str, Any]]:
@@ -264,12 +265,15 @@ class FakeMetrikaClient:
                 "metrics": tuple(metrics),
                 "date1": date1,
                 "date2": date2,
+                "dimensions": tuple(dimensions),
+                "filters": filters,
+                "sort": sort,
                 "accuracy": accuracy,
                 "limit": limit,
             }
         )
         index = len(self.calls) - 1
-        visits = 120.0 if index == 0 else 90.0
+        visits = 120.0 if index % 2 == 0 else 90.0
         return _result(
             "yandex_metrika",
             [{"visits": visits, "users": visits - 20.0}],
@@ -1132,7 +1136,13 @@ def test_weekly_report_calls_builder_and_saves_snapshot(
     start = builder_capture["period_start"]
     end = builder_capture["period_end"]
     assert (end - start) == timedelta(days=6)
-    assert len(metrika.calls) == 2
+    assert len(metrika.calls) == 4
+    assert [call["filters"] for call in metrika.calls] == [
+        "ym:s:lastTrafficSource=='organic'",
+        "ym:s:lastTrafficSource=='organic'",
+        None,
+        None,
+    ]
 
     period = response["meta"]["period"]
     stored = store.load_snapshot("weekly", PROPERTY, f"{period['start']}..{period['end']}")
