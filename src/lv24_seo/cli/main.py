@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from string import Template
@@ -48,10 +49,22 @@ from lv24_seo.core.config import (
     resolve_config_path,
 )
 from lv24_seo.core.envelope import envelope_exit_code, fail, ok, partial
-from lv24_seo.core.errors import CONFIG_INVALID, INTERNAL, INVALID_INPUT, WRITE_DISABLED, SeoError
+from lv24_seo.core.errors import (
+    AUTH_REQUIRED,
+    CONFIG_INVALID,
+    CONFIRM_REQUIRED,
+    INTERNAL,
+    INVALID_INPUT,
+    UPSTREAM_UNAVAILABLE,
+    WRITE_DISABLED,
+    SeoError,
+)
 from lv24_seo.core.logging import configure_logging_from_env
 from lv24_seo.core.secrets import SecretStore
 from lv24_seo.core.write_gate import WRITE_SECRET_ENV, WriteGate, WritePlan
+from lv24_seo.crawl.fetcher import Fetcher
+from lv24_seo.crawl.sitemap import MAX_BYTES as SITEMAP_MAX_BYTES
+from lv24_seo.crawl.sitemap import SitemapReader
 from lv24_seo.mcp.registry import tools_as_json
 from lv24_seo.providers.bing import indexnow_submit
 from lv24_seo.providers.gsc.auth import service_account_file_problem
@@ -128,6 +141,10 @@ _DB_FILENAME = "seo.sqlite3"  # canonical: lv24_seo.composition.DB_FILENAME
 _MAX_HUMAN_ROWS = 20
 _MAX_CELL = 100
 _STRICT_HELP = "Exit 5 when the response is truncated (CI gate); meta.strict is always set."
+# IndexNow protocol caps: 10k URLs per POST; at most five child sitemaps are followed so one
+# command cannot fan out into an unbounded crawl of a sitemap tree.
+_INDEXNOW_URL_LIMIT = 10_000
+_INDEXNOW_SITEMAP_DOCS = 6
 
 _SCHEDULE_CRONS: dict[str, str] = {
     "weekly": "0 6 * * 1",
@@ -174,8 +191,13 @@ host_id = $yandex_host_id
 counter = ""
 goals = []
 
+# Bing Webmaster. The API key is a secret (`lv24-seo auth set --provider bing`).
+# indexnow_key and indexnow_key_location are public identifiers: the key is served openly
+# at the key location (default https://<host>/<key>.txt) and sent in each IndexNow request.
 [providers.bing]
 site = $bing_site
+indexnow_key = ""
+indexnow_key_location = ""
 
 [providers.crux]
 origin = $crux_origin
@@ -577,11 +599,24 @@ def yandex_indexing(
 
 @sitemap_app.command("submit")
 def sitemap_submit(
+    provider: Annotated[
+        str,
+        typer.Option("--provider", help="Sitemap provider: gsc or bing (default gsc)."),
+    ] = "gsc",
     property_id: Annotated[
         str,
-        typer.Option("--property", help="GSC property id, for example sc-domain:example.com."),
-    ],
-    url: Annotated[str, typer.Option("--url", help="Absolute sitemap URL.")],
+        typer.Option(
+            "--property",
+            help="GSC property id (required for gsc) or the Bing site URL.",
+        ),
+    ] = "",
+    url: Annotated[
+        str,
+        typer.Option(
+            "--url",
+            help="Absolute sitemap URL; bing defaults to <project.base_url>/sitemap.xml.",
+        ),
+    ] = "",
     allow_write: Annotated[
         bool,
         typer.Option("--allow-write", help="Opt in to the write; without it the command refuses."),
@@ -598,18 +633,45 @@ def sitemap_submit(
         bool, typer.Option("--json", help="Machine-readable envelope output.")
     ] = False,
 ) -> None:
-    """Submit a sitemap to Google Search Console (dry run without --allow-write)."""
+    """Submit a sitemap to Google Search Console or Bing (dry run without --allow-write)."""
 
     def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
-        site = _required_text(property_id, name="--property", example="sc-domain:example.com")
-        sitemap_url = _absolute_url(url, name="--url")
+        config = load_config(config_path)
+        target = SeoService(config).sitemap_target(
+            provider=provider, property=property_id, sitemap_url=url
+        )
+        name = target["provider"]
+        site = target["site_url"]
+        sitemap_url = target["sitemap_url"]
+        payload: dict[str, Any] = {
+            "property": site,
+            "url": sitemap_url,
+            "action": "submit",
+        }
+        if name == "bing":
+            payload["provider"] = "bing"
+            summary = f"submit sitemap {sitemap_url} to {site} via bing"
+        else:
+            summary = f"submit sitemap {sitemap_url} to {site}"
         plan = WritePlan(
             action="sitemap_submit",
             target=site,
-            summary=f"submit sitemap {sitemap_url} to {site}",
-            payload={"property": site, "url": sitemap_url, "action": "submit"},
+            summary=summary,
+            payload=payload,
         )
-        return plan, _sitemap_execute
+
+        def execute(_plan: WritePlan) -> Any:
+            current = load_config(config_path)
+            return _service_write_result(
+                SeoService(current).submit_sitemap(
+                    provider=name,
+                    property=site,
+                    sitemap_url=sitemap_url,
+                    action="submit",
+                )
+            )
+
+        return plan, execute
 
     payload = _write_command(
         prepare, allow_write=allow_write, confirm=confirm, config_path=config_path
@@ -664,12 +726,41 @@ def yandex_recrawl(
 
 @indexnow_app.command("submit")
 def indexnow_submit_command(
-    host: Annotated[str, typer.Option("--host", help="Bare hostname, for example example.com.")],
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host",
+            help="Bare hostname, for example example.com (default: providers.bing.site host).",
+        ),
+    ] = "",
     key: Annotated[
         str,
-        typer.Option("--key", help="IndexNow key published at https://<host>/<key>.txt."),
-    ],
-    url: Annotated[list[str], typer.Option("--url", help="URL to submit; repeat the flag.")],
+        typer.Option(
+            "--key",
+            help=(
+                "IndexNow key published at https://<host>/<key>.txt "
+                "(default: providers.bing.indexnow_key)."
+            ),
+        ),
+    ] = "",
+    url: Annotated[
+        list[str] | None,
+        typer.Option("--url", help="URL to submit; repeat the flag. Merged with --from-sitemap."),
+    ] = None,
+    from_sitemap: Annotated[
+        bool,
+        typer.Option("--from-sitemap", help="Read the URL list from the project sitemap."),
+    ] = False,
+    sitemap_url: Annotated[
+        str,
+        typer.Option(
+            "--sitemap-url",
+            help=(
+                "Absolute sitemap URL (default: <project.base_url>/sitemap.xml); "
+                "implies --from-sitemap."
+            ),
+        ),
+    ] = "",
     allow_write: Annotated[
         bool,
         typer.Option("--allow-write", help="Opt in to the write; without it the command refuses."),
@@ -686,26 +777,146 @@ def indexnow_submit_command(
         bool, typer.Option("--json", help="Machine-readable envelope output.")
     ] = False,
 ) -> None:
-    """Submit URLs to IndexNow (dry run without --allow-write)."""
+    """Submit URLs to IndexNow (dry run without --allow-write).
+
+    --from-sitemap reads the URL list from the project sitemap during the plan and
+    re-fetches it on apply; a changed sitemap invalidates the plan token.
+    """
+    context: dict[str, Any] = {}
 
     def prepare() -> tuple[WritePlan, Callable[[WritePlan], Any] | None]:
-        host_value = _bare_host(host)
-        key_value = _indexnow_key(key)
-        target_urls = _absolute_urls(url, name="--url")
+        config = load_config(config_path)
+        bing = config.providers.bing
+        configured_site = bing.site.strip() if bing is not None else ""
+        host_value = _bare_host(host) if host.strip() else _host_from_site(configured_site)
+        if not host_value:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="IndexNow host is required",
+                next_action=("pass --host example.com or set providers.bing.site in seo.toml"),
+            )
+        key_value = key.strip() or (bing.indexnow_key.strip() if bing is not None else "")
+        if not key_value:
+            raise SeoError(
+                code=AUTH_REQUIRED,
+                message="IndexNow key is missing",
+                next_action=(
+                    f"host the key file at https://{host_value}/<key>.txt and set "
+                    "providers.bing.indexnow_key in seo.toml (or pass --key)"
+                ),
+            )
+        key_value = _indexnow_key(key_value)
+        configured_location = bing.indexnow_key_location.strip() if bing is not None else ""
+        key_location = _absolute_url(
+            configured_location or f"https://{host_value}/{key_value}.txt",
+            name="providers.bing.indexnow_key_location",
+        )
+        explicit_urls = _url_list(url or [], name="--url")
+        use_sitemap = from_sitemap or bool(sitemap_url.strip())
+        if not use_sitemap and not explicit_urls:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="at least one URL is required",
+                next_action="pass --url https://example.com/page or --from-sitemap",
+            )
+
+        sitemap_target = ""
+        sitemap_urls: list[str] = []
+        sitemap_errors: list[str] = []
+        sitemap_truncated = False
+        off_host = 0
+        if use_sitemap:
+            sitemap_target = _indexnow_sitemap_url(sitemap_url, config)
+            inventory = _read_sitemap_inventory(sitemap_target, host_value)
+            sitemap_errors = inventory.errors
+            sitemap_truncated = inventory.truncated
+            sitemap_urls, off_host = _filter_host_urls(inventory.urls, host_value)
+            if not sitemap_urls and not explicit_urls:
+                if sitemap_errors:
+                    raise SeoError(
+                        code=UPSTREAM_UNAVAILABLE,
+                        message=(
+                            "could not read the sitemap: " + ", ".join(sorted(set(sitemap_errors)))
+                        ),
+                        next_action=(
+                            "check the sitemap URL, or pass explicit --url values instead"
+                        ),
+                        retryable=True,
+                    )
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message=f"the sitemap has no URLs for {host_value}",
+                    next_action="check the sitemap or pass explicit --url values",
+                )
+
+        discovered = _dedupe([*explicit_urls, *sitemap_urls])
+        total = len(discovered)
+        targets = discovered[:_INDEXNOW_URL_LIMIT]
+        truncated = sitemap_truncated or len(discovered) > len(targets)
+        limitations = _indexnow_limitations(
+            sitemap_target=sitemap_target,
+            sitemap_errors=sitemap_errors,
+            sitemap_truncated=sitemap_truncated,
+            off_host=off_host,
+            host=host_value,
+            dropped=total - len(targets),
+        )
+        context.update({"truncated": truncated, "total": total, "limitations": limitations})
         plan = WritePlan(
             action="indexnow",
             target=host_value,
-            summary=f"submit {len(target_urls)} URL(s) to IndexNow for {host_value}",
-            payload={"host": host_value, "key": key_value, "urls": target_urls},
+            summary=f"submit {len(targets)} URL(s) to IndexNow for {host_value}",
+            payload={
+                "host": host_value,
+                "key": key_value,
+                "key_location": key_location,
+                "urls": targets,
+                **({"sitemap_url": sitemap_target} if sitemap_target else {}),
+            },
         )
 
         def execute(_plan: WritePlan) -> Any:
-            return indexnow_submit(host=host_value, key=key_value, urls=target_urls)
+            final_urls = targets
+            if sitemap_target:
+                current = _read_sitemap_inventory(sitemap_target, host_value)
+                current_urls, _ = _filter_host_urls(current.urls, host_value)
+                if current_urls != sitemap_urls:
+                    raise SeoError(
+                        code=CONFIRM_REQUIRED,
+                        message="the sitemap changed since the dry run; the plan token is stale",
+                        next_action=(
+                            "rerun the dry run to review the new URL set, then apply the "
+                            "fresh confirm_token"
+                        ),
+                        retryable=False,
+                    )
+                refreshed = _dedupe([*explicit_urls, *current_urls])
+                final_urls = refreshed[:_INDEXNOW_URL_LIMIT]
+                context["truncated"] = sitemap_truncated or len(refreshed) > len(final_urls)
+                context["total"] = len(refreshed)
+                context["limitations"] = _indexnow_limitations(
+                    sitemap_target=sitemap_target,
+                    sitemap_errors=current.errors,
+                    sitemap_truncated=current.truncated,
+                    off_host=off_host,
+                    host=host_value,
+                    dropped=len(refreshed) - len(final_urls),
+                )
+            return indexnow_submit(
+                host=host_value,
+                key=key_value,
+                urls=final_urls,
+                key_location=key_location,
+            )
 
         return plan, execute
 
     payload = _write_command(
-        prepare, allow_write=allow_write, confirm=confirm, config_path=config_path
+        prepare,
+        allow_write=allow_write,
+        confirm=confirm,
+        config_path=config_path,
+        context=context,
     )
     emit(payload, as_json=as_json, lines=_write_lines(payload))
 
@@ -716,6 +927,7 @@ def _write_command(
     allow_write: bool,
     confirm: str | None,
     config_path: Path | None = None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one gated write: plan/validate, dry run without ``--confirm``, apply with it."""
 
@@ -744,20 +956,55 @@ def _write_command(
 
             result = gate.apply(plan, confirm, execute=execute)
             data: dict[str, Any] = {"plan": plan.to_dict(), "status": result.status}
+            meta: dict[str, Any] = {
+                "dry_run": False,
+                "action": plan.action,
+                "target": plan.target,
+            }
+            warnings = list(ledger_warnings)
             if result.status == "skipped":
                 data["reason"] = result.reason or "duplicate"
             if "result" in result.detail:
-                data["result"] = _json_result(result.detail["result"])
-            return ok(
-                data,
-                meta={"dry_run": False, "action": plan.action, "target": plan.target},
-                warnings=ledger_warnings,
-            )
+                raw = result.detail["result"]
+                if (
+                    isinstance(raw, Mapping)
+                    and raw.get("ok") is True
+                    and isinstance(raw.get("data"), Mapping)
+                ):
+                    # A service write returns the standard envelope. Keep the CLI shape flat:
+                    # its data becomes data.result and its meta/warnings join the envelope.
+                    data["result"] = dict(raw["data"])
+                    service_meta = raw.get("meta")
+                    if isinstance(service_meta, Mapping):
+                        meta.update({str(key): item for key, item in service_meta.items()})
+                    service_warnings = raw.get("warnings")
+                    if isinstance(service_warnings, Sequence) and not isinstance(
+                        service_warnings, str
+                    ):
+                        warnings.extend(str(item) for item in service_warnings)
+                else:
+                    data["result"] = _json_result(raw)
+            return ok(data, meta=meta, warnings=warnings)
         finally:
             if store is not None:
                 store.close()
 
-    return run_envelope(action)
+    payload = run_envelope(action)
+    return _with_write_context(payload, context)
+
+
+def _with_write_context(
+    payload: dict[str, Any], context: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Attach plan-time coverage facts (truncation, totals, limitations) to a write envelope."""
+    if not context or not payload.get("ok"):
+        return payload
+    meta = dict(payload.get("meta") or {})
+    for key in ("truncated", "total", "limitations"):
+        if key in context:
+            meta[key] = context[key]
+    payload["meta"] = meta
+    return payload
 
 
 def _write_ledger(config_path: Path | None = None) -> tuple[Store | None, list[str]]:
@@ -786,6 +1033,26 @@ def _write_ledger(config_path: Path | None = None) -> tuple[Store | None, list[s
     return store, []
 
 
+def _service_write_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Turn a failed service write envelope into an exception.
+
+    The service returns envelopes for every public method, but ``WriteGate.apply`` treats any
+    returned value as a completed write: it marks the ledger claim ``sent``. A failed envelope
+    must therefore be raised so the gate releases the claim and the CLI exits non-zero.
+    """
+    if not result.get("ok", False):
+        error = result.get("error")
+        details = error if isinstance(error, Mapping) else {}
+        next_action = details.get("next_action")
+        raise SeoError(
+            code=str(details.get("code") or INTERNAL),
+            message=str(details.get("message") or "the provider write failed"),
+            next_action=next_action if isinstance(next_action, str) else None,
+            retryable=bool(details.get("retryable")),
+        )
+    return dict(result)
+
+
 def _json_result(value: Any) -> Any:
     """Render an adapter result without assuming it is already JSON-safe.
 
@@ -803,19 +1070,6 @@ def _json_result(value: Any) -> Any:
     return str(value)
 
 
-def _sitemap_execute(_plan: WritePlan) -> Any:
-    """The GSC adapter has no sitemap write yet; never pretend it was submitted."""
-    raise SeoError(
-        code=WRITE_DISABLED,
-        message="gsc sitemap submit is not wired yet",
-        next_action=(
-            "submit the sitemap in Search Console until the GSC write adapter lands; "
-            "the CLI never pretends a write happened"
-        ),
-        retryable=False,
-    )
-
-
 def _recrawl_execute(_plan: WritePlan) -> Any:
     """The Yandex adapter has no recrawl queue yet; never pretend it was queued."""
     raise SeoError(
@@ -827,17 +1081,6 @@ def _recrawl_execute(_plan: WritePlan) -> Any:
         ),
         retryable=False,
     )
-
-
-def _required_text(value: str, *, name: str, example: str) -> str:
-    text = value.strip()
-    if not text:
-        raise SeoError(
-            code=INVALID_INPUT,
-            message=f"{name} is required",
-            next_action=f"pass {name} {example}",
-        )
-    return text
 
 
 def _absolute_url(value: str, *, name: str) -> str:
@@ -860,11 +1103,7 @@ def _absolute_url(value: str, *, name: str) -> str:
 
 
 def _absolute_urls(values: Sequence[str], *, name: str) -> list[str]:
-    cleaned: list[str] = []
-    for value in values:
-        url = _absolute_url(value, name=name)
-        if url not in cleaned:
-            cleaned.append(url)
+    cleaned = _url_list(values, name=name)
     if not cleaned:
         raise SeoError(
             code=INVALID_INPUT,
@@ -872,6 +1111,20 @@ def _absolute_urls(values: Sequence[str], *, name: str) -> list[str]:
             next_action=f"pass {name} at least once",
         )
     return cleaned
+
+
+def _url_list(values: Sequence[str], *, name: str) -> list[str]:
+    """Validate and deduplicate absolute URLs; an empty input stays empty."""
+    cleaned: list[str] = []
+    for value in values:
+        url = _absolute_url(value, name=name)
+        if url not in cleaned:
+            cleaned.append(url)
+    return cleaned
+
+
+def _dedupe(values: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(values))
 
 
 def _bare_host(value: str) -> str:
@@ -886,6 +1139,24 @@ def _bare_host(value: str) -> str:
     return host
 
 
+def _host_from_site(site: str) -> str:
+    """Derive the IndexNow host from ``providers.bing.site`` (URL or bare hostname)."""
+    value = site.strip()
+    if not value:
+        return ""
+    if "://" in value:  # noqa: SIM108 - a ternary would exceed the 100-column limit
+        host = (urlsplit(value).hostname or "").lower()
+    else:
+        host = value.rstrip("/").lower()
+    if not host or "/" in host:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="providers.bing.site does not contain a hostname",
+            next_action="set providers.bing.site to https://example.com",
+        )
+    return _bare_host(host)
+
+
 def _indexnow_key(value: str) -> str:
     key = value.strip()
     if not key or "://" in key or "/" in key:
@@ -895,6 +1166,107 @@ def _indexnow_key(value: str) -> str:
             next_action="publish the key at https://<host>/<key>.txt and pass the same key",
         )
     return key
+
+
+def _indexnow_sitemap_url(value: str, config: SeoConfig) -> str:
+    """Explicit ``--sitemap-url`` or ``<project.base_url>/sitemap.xml``."""
+    explicit = value.strip()
+    if explicit:
+        return _absolute_url(explicit, name="--sitemap-url")
+    base_url = config.project.base_url.strip().rstrip("/")
+    if not base_url:
+        raise SeoError(
+            code=CONFIG_INVALID,
+            message="project.base_url is not configured; the default sitemap URL is unknown",
+            next_action="set project.base_url in seo.toml or pass --sitemap-url",
+        )
+    return _absolute_url(f"{base_url}/sitemap.xml", name="--sitemap-url")
+
+
+@dataclass(slots=True)
+class _SitemapInventory:
+    """URLs and honest coverage facts from one bounded sitemap read."""
+
+    urls: list[str]
+    errors: list[str]
+    truncated: bool
+
+
+def _read_sitemap_inventory(sitemap_url: str, host: str) -> _SitemapInventory:
+    """Fetch and parse a sitemap read-only: one root plus at most five child sitemaps.
+
+    ``allow_url`` keeps the IndexNow host in scope even when the sitemap itself is served from
+    a CDN, while the seed origin stays in scope so its child sitemaps can be fetched. The
+    caller still filters page URLs to exactly ``host`` before submitting.
+    """
+    seed = urlsplit(sitemap_url)
+    seed_origin = (seed.scheme.lower(), seed.netloc.lower())
+    wanted = host.lower()
+
+    def in_scope(url: str) -> bool:
+        parts = urlsplit(url)
+        if (parts.hostname or "").lower() == wanted:
+            return True
+        return (parts.scheme.lower(), parts.netloc.lower()) == seed_origin
+
+    fetcher = Fetcher()
+    try:
+        reader = SitemapReader(
+            lambda url: fetcher.fetch(url, max_bytes=SITEMAP_MAX_BYTES),
+            allow_url=in_scope,
+            max_urls=_INDEXNOW_URL_LIMIT,
+            max_depth=1,
+            max_docs=_INDEXNOW_SITEMAP_DOCS,
+        )
+        doc = reader.read(sitemap_url)
+    finally:
+        fetcher.close()
+    return _SitemapInventory(
+        urls=list(doc.urls),
+        errors=list(doc.errors),
+        truncated=doc.truncated,
+    )
+
+
+def _filter_host_urls(urls: Sequence[str], host: str) -> tuple[list[str], int]:
+    """Keep URLs on ``host``; IndexNow rejects a URL list that crosses hosts."""
+    wanted = host.lower()
+    kept: list[str] = []
+    off_host = 0
+    for url in urls:
+        if (urlsplit(url).hostname or "").lower() != wanted:
+            off_host += 1
+            continue
+        if url not in kept:
+            kept.append(url)
+    return kept, off_host
+
+
+def _indexnow_limitations(
+    *,
+    sitemap_target: str,
+    sitemap_errors: Sequence[str],
+    sitemap_truncated: bool,
+    off_host: int,
+    host: str,
+    dropped: int,
+) -> list[str]:
+    """Human-readable coverage notes for the plan and apply envelopes."""
+    notes: list[str] = []
+    if sitemap_target and sitemap_truncated:
+        notes.append(
+            f"sitemap: inventory truncated by the {_INDEXNOW_URL_LIMIT}-URL or "
+            f"{_INDEXNOW_SITEMAP_DOCS - 1}-child cap"
+        )
+    if sitemap_target and sitemap_errors:
+        notes.append("sitemap: " + ", ".join(sorted(set(sitemap_errors))))
+    if off_host:
+        notes.append(f"indexnow: {off_host} sitemap URL(s) outside {host} were skipped")
+    if dropped:
+        notes.append(
+            f"indexnow: capped at {_INDEXNOW_URL_LIMIT} URLs; {dropped} were not submitted"
+        )
+    return notes
 
 
 def _write_lines(payload: Mapping[str, Any]) -> list[str]:

@@ -183,21 +183,23 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="seo_sitemap_submit",
         title="Submit sitemap (write)",
-        summary="Submit or delete a sitemap in GSC/Bing.",
+        summary="Submit a sitemap to GSC or Bing; Bing defaults to <base_url>/sitemap.xml.",
         kind="write",
         providers=("gsc", "bing"),
         inputs={
-            "property": "property id",
-            "sitemap_url": "absolute URL",
+            "provider": "gsc|bing (default gsc)",
+            "property": "GSC property id; Bing site URL (default: providers.bing.site)",
+            "sitemap_url": "absolute URL; Bing defaults to <project.base_url>/sitemap.xml",
             "action": "submit|delete",
             "allow_write": "explicit opt-in (default false)",
             "plan_hash": "plan_hash returned by the dry run (apply only)",
             "confirm_token": "confirm_token returned by the dry run (apply only)",
         },
-        returns="{ok, provider, status}",
+        returns="{provider, status, site_url, sitemap_url}",
         limitations=(
             "requires allow_write=true",
             "apply needs the confirm_token from a dry run; a replay is skipped",
+            "GSC submit and Bing delete stay WRITE_DISABLED until the provider adapter lands",
         ),
     ),
 )

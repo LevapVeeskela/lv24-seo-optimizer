@@ -46,6 +46,7 @@ from lv24_seo.core.errors import (
     INTERNAL,
     INVALID_INPUT,
     UPSTREAM_UNAVAILABLE,
+    WRITE_DISABLED,
     SeoError,
 )
 from lv24_seo.core.secrets import SecretStore
@@ -184,6 +185,8 @@ _INDEXING_EVENT_DETAIL_KEYS: tuple[str, ...] = (
 )
 
 _HTTP_SCHEMES = frozenset({"http", "https"})
+_SITEMAP_PROVIDERS = frozenset({"gsc", "bing"})
+_BING_KEY_NEXT_ACTION = "run `lv24-seo auth login --provider bing` or set LV24_SEO_BING_API_KEY"
 # PSI works keyless; a key only raises the quota, so it never blocks client construction.
 _KEYLESS_CLIENTS = frozenset({"psi"})
 _HEADLINE_METRICS: tuple[str, ...] = ("clicks", "impressions", "ctr", "position")
@@ -990,6 +993,173 @@ class SeoService:
                 f"indexing events: {skipped} provider row(s) without url/event/date were not stored"
             )
         return counts
+
+    # -- sitemap writes ----------------------------------------------------------------------
+
+    def sitemap_target(
+        self,
+        *,
+        provider: str = "gsc",
+        property: str = "",
+        sitemap_url: str = "",
+    ) -> dict[str, str]:
+        """Resolve the site and sitemap URL a sitemap write would target.
+
+        Shared by the CLI and the MCP tool so both surfaces print the same plan target. It is
+        read-only: no provider is contacted and no secret value is returned. For Bing it also
+        checks that the API key is present, so a dry run fails with ``AUTH_REQUIRED`` instead
+        of handing out a token that cannot be applied. ``property`` overrides
+        ``providers.bing.site`` when given; otherwise the configured site is used.
+        """
+        name = _sitemap_provider(provider)
+        site = property.strip()
+        url = sitemap_url.strip()
+
+        if name == "gsc":
+            if not site:
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message="property is required for gsc",
+                    next_action="pass --property sc-domain:example.com",
+                )
+            if not url:
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message="sitemap_url is required for gsc",
+                    next_action="pass --url https://example.com/sitemap.xml",
+                )
+            return {
+                "provider": "gsc",
+                "site_url": site,
+                "sitemap_url": _absolute_http_url(url, name="sitemap_url"),
+            }
+
+        bing = self._config.providers.bing
+        configured_site = bing.site.strip() if bing is not None else ""
+        site = site or configured_site
+        if not site:
+            raise SeoError(
+                code=CONFIG_INVALID,
+                message="Bing Webmaster site is not configured",
+                next_action=(
+                    "set providers.bing.site in seo.toml or pass --property https://example.com"
+                ),
+            )
+        if not url:
+            base_url = self._config.project.base_url.strip().rstrip("/")
+            if not base_url:
+                raise SeoError(
+                    code=CONFIG_INVALID,
+                    message=(
+                        "project.base_url is not configured; the default sitemap URL is unknown"
+                    ),
+                    next_action=(
+                        "set project.base_url in seo.toml or pass --url "
+                        "https://example.com/sitemap.xml"
+                    ),
+                )
+            url = f"{base_url}/sitemap.xml"
+        if not self._bing_key_present():
+            raise SeoError(
+                code=AUTH_REQUIRED,
+                message="Bing Webmaster API key is missing",
+                next_action=_BING_KEY_NEXT_ACTION,
+            )
+        return {
+            "provider": "bing",
+            "site_url": site,
+            "sitemap_url": _absolute_http_url(url, name="sitemap_url"),
+        }
+
+    def submit_sitemap(
+        self,
+        *,
+        provider: str = "gsc",
+        property: str = "",
+        sitemap_url: str = "",
+        action: str = "submit",
+    ) -> dict[str, Any]:
+        """Submit one sitemap through the provider write path shared by CLI and MCP.
+
+        Only Bing is wired: the JSON ``SubmitFeed`` endpoint is current, while GSC has no
+        sitemap write adapter yet and Bing ``delete`` is not implemented. Those cases raise
+        ``WRITE_DISABLED`` with a next action instead of pretending the write happened.
+        """
+        warnings: list[str] = []
+        return self._respond(
+            "submit_sitemap",
+            warnings,
+            lambda: self._submit_sitemap(provider, property, sitemap_url, action, warnings),
+        )
+
+    def _submit_sitemap(
+        self,
+        provider: str,
+        property: str,
+        sitemap_url: str,
+        action: str,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        verb = action.strip().lower()
+        if verb not in {"submit", "delete"}:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=f"unknown sitemap action {action!r}",
+                next_action="pass submit or delete",
+            )
+        target = self.sitemap_target(
+            provider=provider,
+            property=property,
+            sitemap_url=sitemap_url,
+        )
+        if target["provider"] == "gsc":
+            raise SeoError(
+                code=WRITE_DISABLED,
+                message="gsc sitemap submit is not wired yet",
+                next_action=(
+                    "submit the sitemap in Search Console until the GSC write adapter lands; "
+                    "the engine never pretends a write happened"
+                ),
+                retryable=False,
+            )
+        if verb == "delete":
+            raise SeoError(
+                code=WRITE_DISABLED,
+                message="bing sitemap delete is not wired yet",
+                next_action=(
+                    "delete the sitemap in Bing Webmaster Tools until the delete adapter lands; "
+                    "the engine never pretends a write happened"
+                ),
+                retryable=False,
+            )
+
+        client = self._bing_submit_client(target["site_url"])
+        try:
+            result = client.submit_feed(target["sitemap_url"])
+        finally:
+            if "bing" not in self._overrides:
+                client.close()
+        warnings.extend(result.warnings)
+        return ok(
+            {
+                "provider": "bing",
+                "status": "submitted",
+                "site_url": target["site_url"],
+                "sitemap_url": target["sitemap_url"],
+            },
+            meta={"source": "bing", "submitted": 1, "data_age_days": 0},
+            warnings=_unique(warnings),
+        )
+
+    def _bing_key_present(self) -> bool:
+        """Whether a Bing API key is available, including a test-injected client."""
+        return "bing" in self._overrides or self._secret_present("bing_api_key")
+
+    def _bing_submit_client(self, site_url: str) -> BingClient:
+        override = self._overrides.get("bing")
+        if override is not None:
+            return cast(BingClient, override)
+        return BingClient(api_key=self._require_secret("bing"), site_url=site_url)
 
     def cwv_collect(
         self,
@@ -3059,6 +3229,41 @@ def _report_payload(report: object) -> dict[str, Any]:
             message="report builder returned an unsupported payload",
         )
     return dict(payload)
+
+
+# -- sitemap write helpers --------------------------------------------------------------------
+
+
+def _sitemap_provider(value: str) -> str:
+    """Normalise a sitemap provider name; an unknown name is a caller error."""
+    name = value.strip().lower()
+    if name not in _SITEMAP_PROVIDERS:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"unknown sitemap provider {value!r}",
+            next_action=f"use one of: {', '.join(sorted(_SITEMAP_PROVIDERS))}",
+        )
+    return name
+
+
+def _absolute_http_url(value: str, *, name: str) -> str:
+    """Return a trimmed absolute http(s) URL or raise ``INVALID_INPUT``."""
+    url = value.strip()
+    if not url:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must not be empty",
+            next_action=f"pass an absolute http(s) URL to {name}",
+        )
+    parts = urlsplit(url)
+    if parts.scheme not in _HTTP_SCHEMES or not parts.hostname:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must be an absolute http(s) URL",
+            next_action=f"pass a URL such as https://example.com/sitemap.xml to {name}",
+            detail={"value": url},
+        )
+    return url
 
 
 # -- crawl helpers ---------------------------------------------------------------------------

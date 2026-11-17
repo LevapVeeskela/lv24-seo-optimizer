@@ -287,7 +287,9 @@ def test_indexnow_is_not_called_during_the_dry_run(
 ) -> None:
     calls: list[dict[str, Any]] = []
 
-    def fake_indexnow(*, host: str, key: str, urls: list[str]) -> dict[str, Any]:
+    def fake_indexnow(
+        *, host: str, key: str, urls: list[str], key_location: str | None = None
+    ) -> dict[str, Any]:
         calls.append({"host": host, "key": key, "urls": list(urls)})
         return {"submitted": len(urls), "host": host}
 
@@ -317,7 +319,9 @@ def test_indexnow_apply_calls_submit_with_the_confirmed_plan(
 ) -> None:
     calls: list[dict[str, Any]] = []
 
-    def fake_indexnow(*, host: str, key: str, urls: list[str]) -> ProviderResult[dict[str, Any]]:
+    def fake_indexnow(
+        *, host: str, key: str, urls: list[str], key_location: str | None = None
+    ) -> ProviderResult[dict[str, Any]]:
         calls.append({"host": host, "key": key, "urls": list(urls)})
         return ProviderResult(
             source="indexnow",

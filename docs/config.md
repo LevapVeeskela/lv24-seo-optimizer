@@ -32,6 +32,10 @@ goals = [1, 2]
 
 [providers.bing]
 site = "https://example.com"
+# Public IndexNow identifiers, safe in this file: the key is served openly at
+# key_location (default https://<host>/<key>.txt). The Bing API key stays a secret.
+indexnow_key = "abc12345"
+indexnow_key_location = "https://example.com/abc12345.txt"
 
 [providers.crux]
 origin = "https://example.com"
@@ -71,6 +75,12 @@ user_agent = "lv24-seo/0.1 (+https://example.com/bot)"
 data_dir = "./data"      # relative to this file; absolute values and LV24_SEO_DATA_DIR are used as-is
 raw_retention_days = 90   # reserved: no raw archives are written yet, pruning is a logged no-op
 ```
+
+`providers.bing.indexnow_key` and `providers.bing.indexnow_key_location` are **public**
+identifiers, not secrets: the key file is served openly at the location (default
+`https://<host>/<key>.txt`), and the same key is sent in every IndexNow request. They are safe in
+`seo.toml` and are not redacted by `config show`. The Bing Webmaster API key stays a secret:
+store it with `lv24-seo auth set --provider bing` or set `LV24_SEO_BING_API_KEY`.
 
 > Telemetry is not configurable: the tool sends nothing anywhere. There is no `[privacy]` section and
 > One `seo.toml` describes one project; a multi-site block is not implemented.
@@ -179,7 +189,8 @@ It does not verify permissions or perform an API call.
 
 See [`.env.example`](../.env.example). All are prefixed `LV24_SEO_`; the mapping is
 `report.email.to` ↔ `LV24_SEO_MAIL_TO`. `LV24_SEO_REPORT_LOCALE` sets `report.locale` and accepts
-`ru`, `en` or `zh`.
+`ru`, `en` or `zh`. `LV24_SEO_INDEXNOW_KEY` and `LV24_SEO_INDEXNOW_KEY_LOCATION` override the
+public `[providers.bing]` IndexNow fields.
 
 `LV24_SEO_DATA_DIR` overrides `storage.data_dir` and is **process-scoped**: a relative value resolves
 against the working directory, not the config file. Use it for container/CI runs where the data

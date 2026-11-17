@@ -467,6 +467,33 @@ prevents accidental or stale applies; it is not access control, because anyone w
 can restore. Prefer `--to` when you want to inspect an archive or compare it with the current
 workspace before replacing anything.
 
+## Sitemap submission and IndexNow
+
+```bash
+lv24-seo sitemap submit --provider gsc --property sc-domain:example.com --url https://example.com/sitemap.xml [--allow-write] [--confirm TOKEN] [--json]
+lv24-seo sitemap submit --provider bing [--property https://example.com] [--url https://example.com/sitemap.xml] [--allow-write] [--confirm TOKEN] [--json]
+lv24-seo indexnow submit --host example.com --key KEY --url https://example.com/a [--allow-write] [--confirm TOKEN] [--json]
+lv24-seo indexnow submit --from-sitemap [--sitemap-url https://example.com/sitemap.xml] [--url ...] [--allow-write] [--confirm TOKEN] [--json]
+```
+
+`sitemap submit --provider bing` is a real gated write. The site comes from
+`providers.bing.site` or `--property`, and the sitemap from `--url` or
+`<project.base_url>/sitemap.xml`. The `bing_api_key` secret is required; a missing key is
+`AUTH_REQUIRED` and the dry run also checks it. The apply calls the current JSON `SubmitFeed`
+endpoint (SOAP/POX are retired) and returns `{provider, status, site_url, sitemap_url}`.
+GSC keeps `--property`/`--url` required and still returns `WRITE_DISABLED` on apply; Bing
+`action=delete` is also `WRITE_DISABLED`.
+
+`indexnow submit` resolves defaults from config: `providers.bing.site` supplies the host,
+`providers.bing.indexnow_key` the key, and `providers.bing.indexnow_key_location` the public
+key file (default `https://<host>/<key>.txt`). `--host`, `--key` and `--url` still work.
+`--from-sitemap` reads a `<urlset>` or a bounded `<sitemapindex>` (root plus five child
+sitemaps, 10,000 URLs) during the plan, merges explicit `--url` values, deduplicates and
+skips URLs outside the host. `meta.truncated`, `meta.total` and `meta.limitations` report any
+cap or skipped URL. The apply re-fetches the sitemap; if its URL set changed, the plan token
+is invalidated with `CONFIRM_REQUIRED` and nothing is sent. A missing key is `AUTH_REQUIRED`;
+an HTTP 422 key-file mismatch is `INVALID_INPUT` with the exact key-file location.
+
 ## Scheduling
 
 ```bash
@@ -521,9 +548,10 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
   `backup restore --config` uses the same two-phase shape for a local destructive write: the
   plan's token is bound to the archive and target state, expires in 5 minutes and is not
   replayable. `backup restore --to` is not gated because it only creates a new directory that
-  must not already exist; it never modifies the current workspace. IndexNow
-  actually submits; GSC sitemap submit and Yandex recrawl refuse with `WRITE_DISABLED`
-  when the provider path is not wired, instead of pretending. With an initialised workspace the
+  must not already exist; it never modifies the current workspace. Bing sitemap submit and
+  IndexNow actually submit; GSC sitemap submit, Bing sitemap delete and Yandex recrawl refuse
+  with `WRITE_DISABLED` when the provider path is not wired, instead of pretending. With an
+  initialised workspace the
   apply uses the SQLite idempotency ledger, so replaying the same token returns
   `status: skipped` / `reason: duplicate` and the provider is called once. The ledger lives in the
   workspace selected by `--config`, so `--config /srv/site/seo.toml` opens `/srv/site/data` even

@@ -120,9 +120,17 @@ class YandexMetrikaConfig(_StrictModel):
 
 
 class BingConfig(_StrictModel):
-    """Bing Webmaster Tools site."""
+    """Bing Webmaster Tools site and the public IndexNow identifiers.
+
+    ``indexnow_key`` and ``indexnow_key_location`` are public identifiers, not secrets: the
+    key file is served openly at ``key_location`` (or ``https://<host>/<key>.txt``) and the
+    same value is sent in every IndexNow request. They are safe to keep in ``seo.toml``.
+    The Bing Webmaster API key is a secret and stays in the secret store.
+    """
 
     site: str = ""
+    indexnow_key: str = ""
+    indexnow_key_location: str = ""
 
 
 class CruxConfig(_StrictModel):
@@ -233,6 +241,8 @@ _ENV_STRING_PATHS: dict[str, tuple[str, ...]] = {
     "LV24_SEO_GSC_SERVICE_ACCOUNT_FILE": ("providers", "gsc", "service_account_file"),
     "LV24_SEO_YANDEX_HOST_ID": ("providers", "yandex_webmaster", "host_id"),
     "LV24_SEO_YANDEX_METRIKA_COUNTER": ("providers", "yandex_metrika", "counter"),
+    "LV24_SEO_INDEXNOW_KEY": ("providers", "bing", "indexnow_key"),
+    "LV24_SEO_INDEXNOW_KEY_LOCATION": ("providers", "bing", "indexnow_key_location"),
     "LV24_SEO_SMTP_HOST": ("report", "email", "smtp_host"),
     "LV24_SEO_SMTP_USER": ("report", "email", "smtp_user"),
     "LV24_SEO_SMTP_FROM": ("report", "email", "from"),

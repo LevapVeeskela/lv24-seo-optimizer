@@ -3,6 +3,45 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.9.0] - 2026-11-17
+
+Release notes: [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md). Status: **release
+candidate**; not published yet. Minor release: Bing sitemap submission is wired through the
+current JSON `SubmitFeed` endpoint, and IndexNow can read its URL list from the project
+sitemap and its host/key from `seo.toml`. The CLI still has **22 top-level commands**, the
+MCP surface stays at **12 tools**, and the SQLite schema stays at version 4.
+
+### Added
+
+- `sitemap submit --provider gsc|bing` (default `gsc`): Bing resolves the site from
+  `providers.bing.site` or `--property`, the sitemap from `--url` or
+  `<project.base_url>/sitemap.xml`, and the `bing_api_key` secret. The apply calls the JSON
+  `SubmitFeed` endpoint and returns `{provider, status, site_url, sitemap_url}`. The dry run
+  contacts no provider; the two-phase gate and idempotency ledger are shared with the other
+  writes. GSC keeps `--property`/`--url` required and still returns `WRITE_DISABLED` on
+  apply; Bing `delete` is also `WRITE_DISABLED`.
+- `indexnow submit --from-sitemap [--sitemap-url ABS] [--url ...]`: host, key and key
+  location resolve from `providers.bing.site`, `providers.bing.indexnow_key` and
+  `providers.bing.indexnow_key_location` (or `https://<host>/<key>.txt`). A urlset or a
+  bounded sitemapindex (root plus five children, 10,000 URLs) is read during the plan,
+  explicit URLs are merged and deduplicated, off-host URLs are skipped, and
+  `truncated`/`total`/`limitations` report any cap. The apply re-fetches the sitemap and a
+  changed URL set invalidates the confirm token. A missing key is `AUTH_REQUIRED`; the 422
+  key-file mismatch keeps its next action.
+- MCP `seo_sitemap_submit` accepts an optional `provider` (`gsc|bing`, default `gsc`),
+  optional `property` and optional `sitemap_url`; Bing apply uses the same
+  `SeoService.submit_sitemap` path as the CLI. The tool count stays at 12.
+- `providers.bing.indexnow_key` and `providers.bing.indexnow_key_location` are public
+  identifiers and safe in `seo.toml`; the Bing API key remains a secret.
+
+### Changed
+
+- `sitemap submit --property`/`--url` are optional at the parser level for Bing defaults;
+  GSC still requires them and reports `INVALID_INPUT` in the envelope.
+- IndexNow's plan payload adds `key_location` and, in sitemap mode, `sitemap_url`.
+- `schemas/tools.json` is regenerated for the optional `seo_sitemap_submit` inputs. No tool
+  was added, removed or renamed.
+
 ## [0.8.0] - 2026-11-16
 
 Release notes: [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md). Status: released 2026-11-16;

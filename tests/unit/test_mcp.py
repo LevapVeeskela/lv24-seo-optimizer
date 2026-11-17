@@ -266,10 +266,58 @@ class WriteService(ReadService):
         self.recrawl_calls += 1
         return ok({"queued": len(urls), "quota_left": 10, "task_ids": []})
 
+    def sitemap_target(
+        self, *, provider: str = "gsc", property: str = "", sitemap_url: str = ""
+    ) -> dict[str, str]:
+        return {"provider": provider, "site_url": property, "sitemap_url": sitemap_url}
+
     def sitemap_submit(self, *, property: str, sitemap_url: str, action: str) -> dict[str, Any]:
         self.sitemap = (property, sitemap_url, action)
         self.sitemap_calls += 1
         return ok({"provider": "gsc", "status": action})
+
+
+class BingWriteService(WriteService):
+    """Resolve Bing defaults and record the exact service call the MCP tool makes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sitemap_kwargs: dict[str, Any] | None = None
+
+    def sitemap_target(
+        self, *, provider: str = "gsc", property: str = "", sitemap_url: str = ""
+    ) -> dict[str, str]:
+        site = property or "https://example.com"
+        return {
+            "provider": provider,
+            "site_url": site,
+            "sitemap_url": sitemap_url or f"{site}/sitemap.xml",
+        }
+
+    def sitemap_submit(
+        self,
+        *,
+        provider: str = "gsc",
+        property: str = "",
+        sitemap_url: str = "",
+        action: str = "submit",
+    ) -> dict[str, Any]:
+        self.sitemap_kwargs = {
+            "provider": provider,
+            "property": property,
+            "sitemap_url": sitemap_url,
+            "action": action,
+        }
+        self.sitemap = (property, sitemap_url, action)
+        self.sitemap_calls += 1
+        return ok(
+            {
+                "provider": provider,
+                "status": "submitted" if action == "submit" else action,
+                "site_url": property,
+                "sitemap_url": sitemap_url,
+            }
+        )
 
 
 # -- WP7.1: server assembly ------------------------------------------------------------------
@@ -835,6 +883,101 @@ def test_sitemap_write_uses_the_two_phase_contract(
         "https://example.com/sitemap.xml",
         "submit",
     )
+
+
+def test_sitemap_bing_dry_run_uses_the_shared_resolver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
+    service = BingWriteService()
+    service._store = Store(tmp_path / "seo.db")  # type: ignore[attr-defined]
+    try:
+        data = _dry_run(
+            create_server(service),
+            "seo_sitemap_submit",
+            {"provider": "bing", "action": "submit"},
+        )
+    finally:
+        service._store.close()  # type: ignore[attr-defined]
+
+    assert data["plan"]["target"] == "https://example.com"
+    assert data["plan"]["payload"] == {
+        "provider": "bing",
+        "property": "https://example.com",
+        "sitemap_url": "https://example.com/sitemap.xml",
+        "action": "submit",
+    }
+    assert service.sitemap_calls == 0
+
+
+def test_sitemap_bing_apply_calls_the_service_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
+    service = BingWriteService()
+    store = Store(tmp_path / "seo.db")
+    service._store = store  # type: ignore[attr-defined]
+    arguments = {
+        "provider": "bing",
+        "property": "https://other.example",
+        "sitemap_url": "https://other.example/feed.xml",
+        "action": "submit",
+    }
+    try:
+        server = create_server(service)
+        dry = _dry_run(server, "seo_sitemap_submit", arguments)
+        result = _call(
+            server,
+            "seo_sitemap_submit",
+            {
+                **arguments,
+                "allow_write": True,
+                "plan_hash": dry["plan_hash"],
+                "confirm_token": dry["confirm_token"],
+            },
+        )
+    finally:
+        store.close()
+
+    payload = _payload(result)
+    assert result.is_error is False
+    assert payload["data"]["provider"] == "bing"
+    assert payload["data"]["status"] == "submitted"
+    assert service.sitemap_kwargs == {
+        "provider": "bing",
+        "property": "https://other.example",
+        "sitemap_url": "https://other.example/feed.xml",
+        "action": "submit",
+    }
+
+
+def test_sitemap_bing_delete_stays_write_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
+    service = BingWriteService()
+
+    result = _call(
+        create_server(service),
+        "seo_sitemap_submit",
+        {"provider": "bing", "action": "delete", "allow_write": True},
+    )
+
+    assert result.is_error is True
+    assert _payload(result)["error"]["code"] == WRITE_DISABLED
+    assert service.sitemap_calls == 0
+
+
+def test_sitemap_rejects_an_unknown_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LV24_SEO_WRITE_SECRET", WRITE_SECRET)
+    service = BingWriteService()
+
+    result = _call(
+        create_server(service),
+        "seo_sitemap_submit",
+        {"provider": "yandex", "allow_write": True},
+    )
+
+    assert result.is_error is True
+    assert _payload(result)["error"]["code"] == INVALID_INPUT
 
 
 def test_a_failed_provider_write_releases_the_ledger_claim(
