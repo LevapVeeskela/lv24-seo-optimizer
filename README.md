@@ -55,25 +55,26 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.8.0).** Working today: six
+**Beta (v0.9.0).** Working today: six
 provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule
 crawler, SQLite history, analysis (deltas, opportunities, indexing triage, multi-engine fusion,
 nginx log analysis with UA-only bot triage, CWV by template), per-provider `stats`, report builders
 + HTML/text/Markdown renderers with an attributed change digest and a Core Web Vitals section, the
 finding/task lifecycle, portable backup bundles with non-destructive and two-phase restore, a
-read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, the 22-command CLI,
-the MCP server
+read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, Bing sitemap
+submission, one-click IndexNow from the project sitemap, the 22-command CLI, the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
-enforced with regression tests. `0.8.0` is the CWV-writer release (URL+device CrUX collection, safe
-`backup restore --to`, gated scheduling) and the current published build on PyPI, npm and the MCP
-Registry (2026-11-16). See
+enforced with regression tests. `0.9.0` is the release candidate for Bing sitemap submit and
+one-click IndexNow; `0.8.0` remains the latest published build on PyPI, npm and the MCP Registry
+(2026-11-16). See [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md),
 [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md) and
 [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
 
-Still honest gaps before `v1.0`: sitemap submit / Yandex recrawl return an explicit
-`WRITE_DISABLED` (IndexNow really submits), and `raw_retention_days` is reserved (no raw archives
-are written yet). GSC supports both a plain OAuth access token and a service-account JSON key. See
+Still honest gaps before `v1.0`: GSC sitemap submit, Bing sitemap delete and Yandex recrawl return
+an explicit `WRITE_DISABLED` (Bing sitemap submit and IndexNow really submit), and
+`raw_retention_days` is reserved (no raw archives are written yet). GSC supports both a plain OAuth
+access token and a service-account JSON key. See
 [`docs/plans/2026-11-10-implementation-plan.md`](docs/plans/2026-11-10-implementation-plan.md) for
 the wave status.
 
@@ -199,8 +200,8 @@ never change provider or local state, plus `seo_crawl_site`, `seo_weekly_report`
 `yandex_indexing_state`, which persist local snapshots or indexing events and therefore carry
 `readOnlyHint: false` (they are not destructive). The two provider writes require `allow_write=true`,
 are annotated `destructiveHint: true`, and use the same two-phase `plan_hash` / `confirm_token` flow
-and `LV24_SEO_WRITE_SECRET` as the CLI; in this build the engine still has no recrawl/sitemap write
-handler, so every call returns `WRITE_DISABLED` and nothing is sent.
+and `LV24_SEO_WRITE_SECRET` as the CLI; Bing sitemap submit is wired, while GSC submit, Bing delete
+and Yandex recrawl return `WRITE_DISABLED` and nothing is sent.
 
 | Tool | Kind | `readOnlyHint` | `destructiveHint` | What it does |
 |---|---|---|---|---|
@@ -215,7 +216,7 @@ handler, so every call returns `WRITE_DISABLED` and nothing is sent.
 | `seo_indexing_triage` | read | `true` | `false` | Group indexing problems into an action list |
 | `seo_opportunities` | read | `true` | `false` | Striking-distance and decay opportunities |
 | `seo_recrawl_request` | write | `false` | `true` | Queue Yandex recrawl URLs (two-phase gate; `WRITE_DISABLED` in this build) |
-| `seo_sitemap_submit` | write | `false` | `true` | Submit or delete a sitemap (two-phase gate; `WRITE_DISABLED` in this build) |
+| `seo_sitemap_submit` | write | `false` | `true` | Submit a sitemap to Bing or GSC (two-phase gate; Bing submit wired, GSC/delete `WRITE_DISABLED`) |
 
 Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `weekly_seo_review`,
 `indexing_triage`, `content_opportunities`. The full inputs, outputs and limitations are in
@@ -228,7 +229,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 | Google Search Console | yes (OAuth access token or service-account JSON key) | queries, pages, countries, devices; URL Inspection adapter | sitemap submit disabled |
 | Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics | recrawl disabled |
 | Yandex Metrika | yes | sessions and users; filtered reports through adapter; separate `metrika` auth provider (`yandex_metrika_token`) | — |
-| Bing Webmaster + IndexNow | yes | queries, crawl issues, instant URL ping | IndexNow submit |
+| Bing Webmaster + IndexNow | yes | queries, crawl issues, sitemap submit, one-click IndexNow from the sitemap | sitemap submit + IndexNow submit |
 | Chrome UX Report | yes (API key) | origin-level field CWV | — |
 | PageSpeed Insights | yes | lab audits per URL | — |
 | Your site | — | crawl, robots, sitemap, JSON-LD, hreflang, links | — |
@@ -244,6 +245,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
+* [Release notes 0.9.0](docs/releases/0.9.0.md) — Bing sitemap submit, one-click IndexNow (RC)
 * [Release notes 0.8.0](docs/releases/0.8.0.md) — CWV writer, Yandex indicators, safe restore, schedule lifecycle
 * [Release notes 0.7.0](docs/releases/0.7.0.md) — coverage release: portfolio, restore, indexing events, CWV
 * [Release notes 0.6.0](docs/releases/0.6.0.md) — insights release: logs, digest, tasks, backup

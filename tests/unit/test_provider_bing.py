@@ -128,6 +128,65 @@ def test_submit_urls_posts_batch_body() -> None:
     assert result.rows == [{"submitted": 2, "site_url": SITE}]
 
 
+def test_submit_feed_posts_the_current_json_endpoint() -> None:
+    seen: list[httpx.Request] = []
+    feed = "https://example.com/sitemap.xml"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"d": None})
+
+    result = _bing(handler).submit_feed(feed)
+
+    assert len(seen) == 1
+    assert seen[0].method == "POST"
+    assert seen[0].url.path.endswith("/SubmitFeed")
+    assert seen[0].url.params["apikey"] == API_KEY
+    assert json.loads(seen[0].content) == {"siteUrl": SITE, "feedUrl": feed}
+    assert result.source == "bing"
+    assert result.property_id == SITE
+    assert result.data_age_days == 0
+    assert result.rows == [{"submitted": True, "site_url": SITE, "sitemap_url": feed}]
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "not-a-url", "/sitemap.xml", "ftp://example.com/s.xml"])
+def test_submit_feed_rejects_invalid_urls_without_a_request(bad: str) -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"d": None})
+
+    with pytest.raises(SeoError) as caught:
+        _bing(handler).submit_feed(bad)
+
+    assert caught.value.code == INVALID_INPUT
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        (400, INVALID_INPUT),
+        (401, "AUTH_INVALID"),
+        (403, "AUTH_INVALID"),
+        (404, "PROPERTY_NOT_FOUND"),
+        (429, "QUOTA_EXCEEDED"),
+        (500, "UPSTREAM_UNAVAILABLE"),
+    ],
+)
+def test_submit_feed_maps_provider_errors(status: int, code: str) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"d": "rejected"})
+
+    with pytest.raises(SeoError) as caught:
+        _bing(handler).submit_feed("https://example.com/sitemap.xml")
+
+    assert caught.value.code == code
+    payload = json.dumps(caught.value.to_dict())
+    assert API_KEY not in payload
+
+
 def test_submit_urls_rejects_more_than_500_without_calling_network() -> None:
     calls: list[httpx.Request] = []
 

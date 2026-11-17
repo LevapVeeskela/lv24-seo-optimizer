@@ -125,6 +125,24 @@ notification settings, Yandex Business card/reviews.
 | IndexNow | `https://api.indexnow.org/indexnow` (also `yandex.com/indexnow`), key file `https://host/<key>.txt` (8–128 hex) |
 | Limits | 10k URLs per POST; engines apply their own daily caps; **Google does not participate** |
 
+**Sitemap submit.** `SubmitFeed` is the current JSON endpoint:
+`POST .../SubmitFeed?apikey=KEY` with `{"siteUrl": "...", "feedUrl": "https://host/sitemap.xml"}`
+returns `200 {"d": null}`. The retired SOAP/POX endpoints are not used. The write is gated by
+`--allow-write` plus the confirm token (MCP: `allow_write=true`), and the site/sitemap URL are
+resolved before the request. GSC sitemap submit and Bing sitemap delete remain disabled; only
+Bing submit is wired.
+
+**One-click IndexNow.** The CLI can read the URL list from the project sitemap:
+`lv24-seo indexnow submit --from-sitemap`. The host, key and key location resolve from
+`providers.bing.site`, `providers.bing.indexnow_key` and
+`providers.bing.indexnow_key_location` (default `https://<host>/<key>.txt`); both new fields are
+public identifiers, safe in `seo.toml`, unlike the `bing_api_key` secret. A `<urlset>` is read
+directly and a `<sitemapindex>` is bounded to the root plus five child sitemaps and 10,000 URLs.
+Explicit `--url` values are merged, URLs outside the host are skipped, and the envelope reports
+`truncated`, `total` and `limitations`. The apply re-fetches the sitemap; a changed URL set
+invalidates the plan token with `CONFIRM_REQUIRED`. A 422 response means the key file is missing
+or mismatched and is reported with the exact key-file URL.
+
 ## 5. Chrome UX Report (CrUX) and PageSpeed Insights (PSI)
 
 | | |

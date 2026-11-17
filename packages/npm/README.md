@@ -20,11 +20,16 @@ into the unpinned (`latest`) lookup.
 
 ## Status
 
-Beta. `@lv24/seo 0.6.0` launches `lv24-seo 0.6.0` and ships 12 MCP tools (10 read-class: 8 pure
-read-only plus the two local-state writers annotated `readOnlyHint: false`), 3 resources, 3 prompts,
-3 skills, the 20-command CLI, scheduler generators and a product-grade weekly email. Recent
-additions:
+Beta. `@lv24/seo 0.9.0` launches `lv24-seo 0.9.0` (release candidate; `0.8.0` is the
+current published engine) and ships 12 MCP tools (10 read-class: 8 pure read-only plus the two
+local-state writers annotated `readOnlyHint: false`), 3 resources, 3 prompts, 3 skills, the
+22-command CLI, scheduler generators and a product-grade weekly email. Recent additions:
 
+* **Bing sitemap submit and one-click IndexNow** — `sitemap submit --provider bing` calls the
+  current JSON `SubmitFeed` endpoint through the two-phase write gate. `indexnow submit
+  --from-sitemap` reads a bounded urlset/sitemapindex (root plus five children, 10k URLs), merges
+  explicit `--url` values, and resolves host/key from `[providers.bing]`. GSC sitemap submit and
+  Bing delete stay `WRITE_DISABLED`.
 * **Logs, digest, tasks and backup** — `logs analyze` / `seo_log_analysis` triage one local nginx
   JSON access log (UA-only bots, 100 MiB cap, read-only); `report weekly` adds an attributed change
   digest; `tasks` tracks findings through `open`/`in_progress`/`verified`/`dismissed` (schema v3);
@@ -62,11 +67,12 @@ additions:
 | `seo_log_analysis` | read | One local nginx JSON log: bot/day rollups and crawl waste, UA-only |
 | `seo_opportunities` | read | Striking-distance and decay opportunities |
 | `seo_recrawl_request` | write | Yandex recrawl queue, `allow_write=true` |
-| `seo_sitemap_submit` | write | GSC/Bing sitemap, `allow_write=true` |
+| `seo_sitemap_submit` | write | GSC/Bing sitemap, `allow_write=true`; Bing submit wired |
 
 The two local-state tools are not destructive; the two provider writes are
-annotated `destructiveHint: true`, gated by `allow_write=true`, and return `WRITE_DISABLED` in 0.6.0
-because the write adapters are not wired yet. Yandex Metrika has its own auth provider:
+annotated `destructiveHint: true` and gated by `allow_write=true`. Bing sitemap submit is wired;
+GSC sitemap submit, Bing sitemap delete and Yandex recrawl return `WRITE_DISABLED` and nothing is
+sent. IndexNow is CLI/desktop-only. Yandex Metrika has its own auth provider:
 `npx @lv24/seo auth set --provider metrika --stdin` stores `yandex_metrika_token`, separate from the
 Webmaster token. Full inputs and limits:
 [`docs/mcp.md`](https://github.com/LevapVeeskela/lv24-seo-optimizer/blob/main/docs/mcp.md).
@@ -94,6 +100,8 @@ npx @lv24/seo crawl --json                    # issues + sitemap↔crawl coverag
 npx @lv24/seo logs analyze --file /var/log/nginx/access.log --json   # bot rollups + crawl waste
 npx @lv24/seo tasks list --json               # local finding lifecycle
 npx @lv24/seo backup create --out "$PWD/backups" --json   # portable config + SQLite zip
+npx @lv24/seo sitemap submit --provider bing --json       # dry run; site/sitemap from config
+npx @lv24/seo indexnow submit --from-sitemap --json       # one-click; host/key from [providers.bing]
 npx @lv24/seo mcp serve                       # stdio MCP server for Claude/OpenCode/Cursor
 npx @lv24/seo export skills --out ./skills    # packaged agent skills
 ```
@@ -133,16 +141,19 @@ hash includes the language.
 
 ## MCP surface
 
-Eleven tools over stdio (or streamable HTTP via `mcp serve --transport http`): `seo_properties`,
+Twelve tools over stdio (or streamable HTTP via `mcp serve --transport http`): `seo_properties`,
 `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_crawl_site`,
-`seo_weekly_report`, `seo_report_diff`, `seo_indexing_triage`, `seo_opportunities`, plus the
-gated `seo_recrawl_request` and `seo_sitemap_submit`. Read tools never touch a provider unless
+`seo_weekly_report`, `seo_report_diff`, `seo_indexing_triage`, `seo_log_analysis`,
+`seo_opportunities`, plus the gated `seo_recrawl_request` and `seo_sitemap_submit`. Read tools
+never touch a provider unless
 called; write tools require `allow_write=true` and are disabled by default.
 
 ## Configuration
 
 Tokens are read from the keychain (set them with `lv24-seo auth set`) or from `LV24_SEO_*`
-environment variables. Nothing is written by this wrapper.
+environment variables. Nothing is written by this wrapper. `providers.bing.indexnow_key` and
+`providers.bing.indexnow_key_location` are public IndexNow identifiers (the key file is served
+openly), so they belong in `seo.toml`; the Bing API key stays a secret.
 
 The desktop app and the CLI share the same OS keychain entry per provider (and per delivery secret):
 service `lv24-seo`, usernames `gsc_token`, `yandex_webmaster_token`, `yandex_metrika_token`,

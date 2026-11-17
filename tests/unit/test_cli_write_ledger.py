@@ -44,7 +44,9 @@ def sent(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, list[str]]]:
     """Replace the real IndexNow POST with a recorder."""
     calls: list[tuple[str, str, list[str]]] = []
 
-    def fake_submit(*, host: str, key: str, urls: list[str]) -> dict[str, Any]:
+    def fake_submit(
+        *, host: str, key: str, urls: list[str], key_location: str | None = None
+    ) -> dict[str, Any]:
         calls.append((host, key, list(urls)))
         return {"status": 200, "submitted": len(urls)}
 

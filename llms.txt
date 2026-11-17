@@ -6,11 +6,15 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.8.0` (published on PyPI, npm and the MCP Registry, 2026-11-16): 6 provider
-  adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
-  Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
-  token.
+- Engine `lv24-seo 0.9.0` (release candidate; `0.8.0` is the current published build on PyPI,
+  npm and the MCP Registry, 2026-11-16): 6 provider adapters (GSC, Yandex Webmaster, Yandex
+  Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl. Yandex Metrika is a separate `metrika`
+  auth provider (`yandex_metrika_token`), not the Webmaster token.
 - CLI: 22 top-level commands (15 groups + 7 commands), every command with `--json`.
+- Bing writes: `sitemap submit --provider bing` calls the JSON `SubmitFeed` endpoint through the
+  two-phase write gate; `indexnow submit --from-sitemap` reads a bounded sitemap (root + five
+  children, 10k URLs) and resolves host/key from `[providers.bing]`. GSC sitemap submit and Bing
+  sitemap delete stay `WRITE_DISABLED`.
 - Core Web Vitals writer: `lv24-seo cwv collect --url URL [--url URL ...] --device all --source crux`
   persists CrUX URL+device p75 rows (`metric_daily`: `source=crux`, `scope=<device>`, `key=<url>`)
   for the weekly `cwv` section; PSI lab rows are returned but never persisted.
@@ -18,7 +22,12 @@
   overwrites; an existing directory is refused) and `--config ABS` replaces the current workspace
   only with `--allow-write --confirm TOKEN`.
 - MCP: 12 tools (10 read-class, including 3 local-state writers with `readOnlyHint: false`; 2 gated
-  provider writes that return `WRITE_DISABLED` in this build), 3 resources, 3 prompts.
+  provider writes — `seo_sitemap_submit` is wired for Bing submit, `seo_recrawl_request` and the
+  GSC/delete sitemap paths return `WRITE_DISABLED`), 3 resources, 3 prompts.
+- New in 0.9.0: Bing sitemap submit (JSON `SubmitFeed`), one-click IndexNow from the project
+  sitemap with config host/key/keyLocation, optional `provider`/`property`/`sitemap_url` on
+  `seo_sitemap_submit`, and public `providers.bing.indexnow_key` /
+  `providers.bing.indexnow_key_location`. No new MCP tool; schema stays v4.
 - New in 0.8.0: `cwv collect` URL+device CrUX writer (PSI lab rows never persisted), richer Yandex
   Webmaster indicators (`avg_click_position`, `query_id`, `extra_indicators`, `site_problems`,
   `HTTP_2XX`…`OTHER` series), non-destructive `backup restore --to DIR`, and `schedule install`
@@ -49,6 +58,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
+- [Release notes 0.9.0](docs/releases/0.9.0.md): Bing sitemap submit and one-click IndexNow (RC)
 - [Release notes 0.8.0](docs/releases/0.8.0.md): CWV writer, Yandex indicators, safe restore, schedule lifecycle
 - [Release notes 0.7.0](docs/releases/0.7.0.md): coverage release (portfolio, restore, indexing events, CWV)
 - [Release notes 0.6.0](docs/releases/0.6.0.md): insights release (logs, digest, tasks, backup)
@@ -60,6 +70,10 @@
 ## Examples
 
 ```bash
+lv24-seo sitemap submit --provider bing --config ./seo.toml --json   # dry run; site/sitemap from config
+lv24-seo sitemap submit --provider bing --allow-write --confirm TOKEN # JSON SubmitFeed
+lv24-seo indexnow submit --from-sitemap --config ./seo.toml --json    # host/key from [providers.bing]
+lv24-seo indexnow submit --from-sitemap --allow-write --confirm TOKEN # re-fetches; changed sitemap aborts
 lv24-seo schedule install --kind weekly --config ./seo.toml              # plan only: dry_run=true, installed=false
 lv24-seo schedule install --kind weekly --config ./seo.toml --allow-write  # writes the cron block / systemd units / task
 lv24-seo schedule status --kind weekly --config ./seo.toml --json        # read-only: state, paths, matches

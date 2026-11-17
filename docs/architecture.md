@@ -243,8 +243,8 @@ query level (clicks/impressions) separately, and the report labels which engine 
   `allow_write=true` and `confirm_token`, plus a matching `plan_hash` when one is supplied.
   Local-state MCP tools
   (`seo_crawl_site`, `seo_weekly_report`) are not write-gated because they never mutate provider
-  state; they are marked `writes_local_state: true` and `readOnlyHint: false`. In this build the
-  engine service still exposes no recrawl/sitemap provider handler, so those applies return
+  state; they are marked `writes_local_state: true` and `readOnlyHint: false`. The engine
+  exposes `submit_sitemap` for Bing submit; GSC submit, Bing delete and Yandex recrawl return
   `WRITE_DISABLED` and nothing is sent.
 * Logs are redacted at the formatter level, not per call site.
 
@@ -310,4 +310,4 @@ uncheckpointed WAL without `-shm` is reported as `STORE_UNAVAILABLE` instead of 
 read-write. A broken config or unreadable database becomes a per-site `error` object and the rest of
 the portfolio still scans. Rows carry local activity only: crawl runs, report snapshots, open/total/
 critical issues and their latest timestamps. The same core module is intended for the desktop and a
-future MCP tool; 0.8.0 exposes it only through the CLI.
+future MCP tool; 0.9.0 still exposes it only through the CLI.

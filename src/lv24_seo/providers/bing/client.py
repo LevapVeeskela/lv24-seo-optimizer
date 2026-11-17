@@ -28,6 +28,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from types import TracebackType
 from typing import Any
+from urllib.parse import urlsplit
 
 from lv24_seo.core.errors import AUTH_REQUIRED, INVALID_INPUT, SeoError
 from lv24_seo.core.http import HttpClient
@@ -161,6 +162,33 @@ class BingClient:
             rate_limit_key="bing",
         )
         row: Row = {"submitted": len(batch), "site_url": self._site_url}
+        return ProviderResult(
+            source="bing",
+            property_id=self._site_url,
+            fetched_at=now_utc(),
+            data_age_days=0,
+            rows=[row],
+        )
+
+    def submit_feed(self, sitemap_url: str) -> ProviderResult[Row]:
+        """Submit one sitemap through the current JSON ``SubmitFeed`` endpoint.
+
+        Bing retired the SOAP/POX sitemap APIs; the JSON endpoint answers ``{"d": null}`` on
+        success. The sitemap URL is validated before the network call so an empty or relative
+        value is a caller error, never a provider rejection that looks like a Bing outage.
+        HTTP errors keep the shared :class:`~lv24_seo.core.http.HttpClient` mapping: 401/403
+        are ``AUTH_INVALID``, 404 is ``PROPERTY_NOT_FOUND``, 429 is ``QUOTA_EXCEEDED``, 5xx is
+        ``UPSTREAM_UNAVAILABLE`` and the remaining 4xx are ``INVALID_INPUT``. The API key never
+        reaches a message: only ``host + path`` is reported.
+        """
+        feed = _absolute_http_url(sitemap_url, name="sitemap_url")
+        self._http.post_json(
+            f"{self._base_url}/SubmitFeed",
+            json={"siteUrl": self._site_url, "feedUrl": feed},
+            params={"apikey": self._api_key},
+            rate_limit_key="bing",
+        )
+        row: Row = {"submitted": True, "site_url": self._site_url, "sitemap_url": feed}
         return ProviderResult(
             source="bing",
             property_id=self._site_url,
@@ -385,6 +413,26 @@ def _as_float(value: Any) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _absolute_http_url(value: str, *, name: str) -> str:
+    """Return a trimmed absolute http(s) URL or raise ``INVALID_INPUT``."""
+    url = value.strip()
+    if not url:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must not be empty",
+            next_action=f"pass an absolute http(s) URL to {name}",
+        )
+    parts = urlsplit(url)
+    if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must be an absolute http(s) URL",
+            next_action=f"pass a URL such as https://example.com/sitemap.xml to {name}",
+            detail={"value": url},
+        )
+    return url
 
 
 def _clean_host(host: str) -> str:

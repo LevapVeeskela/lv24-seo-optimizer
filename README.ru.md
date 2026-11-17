@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.8.0).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.9.0).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -106,7 +106,7 @@ write-адаптеры не подключены.
 | `seo_indexing_triage` | чтение | `true` | `false` | Группирует проблемы индексации в план действий |
 | `seo_opportunities` | чтение | `true` | `false` | Striking distance и деградация контента |
 | `seo_recrawl_request` | запись | `false` | `true` | Ставит URL в очередь переобхода Яндекса (gated; `WRITE_DISABLED` в этой сборке) |
-| `seo_sitemap_submit` | запись | `false` | `true` | Отправляет или удаляет sitemap (gated; `WRITE_DISABLED` в этой сборке) |
+| `seo_sitemap_submit` | запись | `false` | `true` | Отправляет sitemap в Bing или GSC (gated; Bing submit подключён, GSC/delete — `WRITE_DISABLED`) |
 
 Ресурсы: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Промпты:
 `weekly_seo_review`, `indexing_triage`, `content_opportunities`. Полные входы, выходы и
@@ -124,15 +124,17 @@ write-адаптеры не подключены.
 
 ## Статус
 
-Бета (v0.8.0). Открытые честные ограничения: `sitemap submit` / `recrawl`
-отвечают `WRITE_DISABLED` (IndexNow реально отправляет), `crawl.concurrency` зарезервирован
-(краулер последовательный с `Crawl-delay`), анализ логов определяет ботов только по User-Agent,
-`portfolio list` и `backup restore` доступны только в CLI, а CWV-секция строится лишь по
-сохранённым field-данным CrUX/PSI. GSC принимает и обычный OAuth access token, и JSON-ключ
-service account (файл читается один раз за процесс, access token обновляется автоматически).
-`0.8.0` — текущая опубликованная сборка (PyPI, npm и MCP Registry, 2026-11-16): writer CWV по URL
-и устройству, безопасный `backup restore --to`, планировщик с явным `--allow-write`. Десктоп
-`0.6.0` — текущий релиз десктопа, он несёт движок `0.8.0`. Новое в 0.8.0 — в
+Бета (v0.9.0). Открытые честные ограничения: GSC sitemap submit, Bing sitemap delete и
+`recrawl` отвечают `WRITE_DISABLED` (Bing sitemap submit и IndexNow реально отправляют),
+`crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`), анализ логов
+определяет ботов только по User-Agent, `portfolio list` и `backup restore` доступны только в CLI,
+а CWV-секция строится лишь по сохранённым field-данным CrUX/PSI. GSC принимает и обычный OAuth
+access token, и JSON-ключ service account (файл читается один раз за процесс, access token
+обновляется автоматически). `0.9.0` — release candidate для Bing sitemap submit и one-click
+IndexNow; `0.8.0` остаётся текущей опубликованной сборкой (PyPI, npm и MCP Registry, 2026-11-16):
+writer CWV по URL и устройству, безопасный `backup restore --to`, планировщик с явным
+`--allow-write`. Десктоп `0.6.0` — текущий релиз десктопа, он несёт движок `0.8.0`. Новое в
+0.9.0 — в [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md); новое в 0.8.0 — в
 [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md); новое в 0.7.0 — в
 [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
 

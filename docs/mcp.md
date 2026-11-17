@@ -141,11 +141,9 @@ the call claims the idempotency slot, so replaying the token returns `status: sk
 `reason: duplicate` and the provider is called once; without a store the envelope warns that replay
 protection is off. A provider failure releases the claim so a genuine retry is allowed.
 
-**Current build:** the engine `SeoService` exposes no recrawl/sitemap write handler, and the
-handler lookup runs before the dry run. Every `seo_recrawl_request` / `seo_sitemap_submit` call with
-`allow_write=true` therefore returns `WRITE_DISABLED` (`… writes are not available in this build`)
-and nothing is sent. The contract above is what the tool layer enforces once the provider adapter
-exists.
+**Current build:** `seo_recrawl_request` still returns `WRITE_DISABLED` because the Yandex
+adapter has no recrawl queue. `seo_sitemap_submit` is wired for Bing submit; GSC submit and Bing
+delete return `WRITE_DISABLED` instead of pretending.
 
 ### `seo_recrawl_request`
 
@@ -154,11 +152,13 @@ Yandex recrawl queue. Reads the remaining quota first, refuses when `urls > quot
 
 ### `seo_sitemap_submit`
 
-GSC/Bing sitemap submit. Inputs: `property`, `sitemap_url`, `action` (`submit|delete`),
-`allow_write`, `plan_hash`, `confirm_token`. Google offers no general URL submission — the tool says
-so instead of pretending.
-
-The CLI has the same provider gap for these two actions (only IndexNow really writes).
+Bing/GSC sitemap submit. Inputs: `provider` (`gsc|bing`, default `gsc`), `property` (GSC property
+id or Bing site URL; Bing defaults to `providers.bing.site`), `sitemap_url` (absolute; Bing
+defaults to `<project.base_url>/sitemap.xml`), `action` (`submit|delete`), `allow_write`,
+`plan_hash`, `confirm_token`. Bing submit calls the same `SeoService.submit_sitemap` path as the
+CLI and returns `{provider, status, site_url, sitemap_url}`; a missing Bing key is
+`AUTH_REQUIRED` during the dry run. GSC submit and Bing delete stay `WRITE_DISABLED`. IndexNow is
+CLI/desktop-only and has no MCP tool.
 
 ## Annotations
 
@@ -194,9 +194,9 @@ Exactly three resources — there is no `seo://property/{id}/baseline`.
 | `content_opportunities` | opportunities → prioritised backlog |
 
 Total: 12 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
-`lv24_seo/mcp/registry.py` — never edit it by hand. The 0.8.0 release adds no MCP tool and changes
-no input or output: `cwv collect`, `backup restore --to` and the scheduler lifecycle are CLI-only,
-and the weekly report content is unchanged by this release.
+`lv24_seo/mcp/registry.py` - never edit it by hand. The 0.9.0 release adds no MCP tool: it adds
+optional `provider`/`property`/`sitemap_url` inputs to `seo_sitemap_submit` and wires Bing submit
+through the shared service path. IndexNow remains CLI/desktop-only.
 
 ## Error contract
 

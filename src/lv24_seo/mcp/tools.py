@@ -92,6 +92,7 @@ _ORDER_FIELDS: dict[str, str] = {
     "CLICKS": "clicks",
 }
 _SITEMAP_ACTIONS = frozenset({"submit", "delete"})
+_SITEMAP_PROVIDERS = frozenset({"gsc", "bing"})
 _CSV = ", "
 
 # ``structuredContent`` is part of the 2025-06-18 spec; old SDK builds predate the field.
@@ -1045,9 +1046,10 @@ def build_recrawl_request(state: ToolState) -> Callable[..., CallToolResult]:
 
 
 def build_sitemap_submit(state: ToolState) -> Callable[..., CallToolResult]:
-    """``seo_sitemap_submit``: gated GSC/Bing sitemap submit or delete (plan -> token -> apply)."""
+    """``seo_sitemap_submit``: gated GSC/Bing sitemap submit (plan -> token -> apply)."""
 
     def seo_sitemap_submit(
+        provider: str = "gsc",
         property: str = "",
         sitemap_url: str = "",
         action: str = "submit",
@@ -1057,15 +1059,13 @@ def build_sitemap_submit(state: ToolState) -> Callable[..., CallToolResult]:
     ) -> CallToolResult:
         def _run() -> Envelope:
             _require_write(allow_write, tool="seo_sitemap_submit")
-            target = property.strip()
-            if not target:
+            name = provider.strip().lower()
+            if name not in _SITEMAP_PROVIDERS:
                 raise SeoError(
                     code=INVALID_INPUT,
-                    message="property is required",
-                    next_action="pass the GSC property id, e.g. sc-domain:example.com",
+                    message=f"provider must be one of: {_CSV.join(sorted(_SITEMAP_PROVIDERS))}",
+                    next_action="pass gsc or bing",
                 )
-            url = sitemap_url.strip()
-            _require_http_url(url, name="sitemap_url")
             verb = action.strip().lower()
             if verb not in _SITEMAP_ACTIONS:
                 raise SeoError(
@@ -1073,12 +1073,9 @@ def build_sitemap_submit(state: ToolState) -> Callable[..., CallToolResult]:
                     message=f"action must be one of: {_CSV.join(sorted(_SITEMAP_ACTIONS))}",
                     next_action="pass submit or delete",
                 )
-            plan = WritePlan(
-                action="sitemap_submit",
-                target=target,
-                summary=f"{verb} sitemap {url} for {target}",
-                payload={"property": target, "sitemap_url": url, "action": verb},
-            )
+            url = sitemap_url.strip()
+            if url:
+                _require_http_url(url, name="sitemap_url")
             handler = _write_handler(state.service, ("sitemap_submit", "submit_sitemap"))
             if handler is None:
                 raise SeoError(
@@ -1090,6 +1087,32 @@ def build_sitemap_submit(state: ToolState) -> Callable[..., CallToolResult]:
                     ),
                     retryable=False,
                 )
+            if verb == "delete":
+                raise SeoError(
+                    code=WRITE_DISABLED,
+                    message=f"{name} sitemap delete is not wired yet",
+                    next_action=(
+                        "delete the sitemap in the provider console; this server never "
+                        "pretends a write happened"
+                    ),
+                    retryable=False,
+                )
+            target = state.service.sitemap_target(
+                provider=name,
+                property=property.strip(),
+                sitemap_url=url,
+            )
+            plan = WritePlan(
+                action="sitemap_submit",
+                target=target["site_url"],
+                summary=f"{verb} sitemap {target['sitemap_url']} for {target['site_url']}",
+                payload={
+                    "provider": name,
+                    "property": target["site_url"],
+                    "sitemap_url": target["sitemap_url"],
+                    "action": verb,
+                },
+            )
             return _gated_write(
                 state,
                 plan=plan,

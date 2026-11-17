@@ -309,11 +309,11 @@ promotion leaves `pending`, which is treated as in-flight until an operator rele
 | `no writable secret backend` | No keyring and no file fallback | Install the `secrets` extra or enable the file fallback |
 
 MCP write tools implement the same two-phase flow: `allow_write=true` plus `plan_hash` and
-`confirm_token` from the dry run, with `LV24_SEO_WRITE_SECRET` in the server environment. The
-engine service still has no recrawl/sitemap write handler and the lookup runs before the dry run, so
-every call returns `WRITE_DISABLED` and nothing is sent; only the CLI's IndexNow path reaches a
-provider. Keep `allow_write` per call; never enable writes globally in an agent config, and never
-log or commit `LV24_SEO_WRITE_SECRET`.
+`confirm_token` from the dry run, with `LV24_SEO_WRITE_SECRET` in the server environment. Bing
+sitemap submit is wired through `SeoService.submit_sitemap`; GSC submit, Bing delete and Yandex
+recrawl return `WRITE_DISABLED` and nothing is sent. IndexNow stays CLI/desktop-only. Keep
+`allow_write` per call; never enable writes globally in an agent config, and never log or commit
+`LV24_SEO_WRITE_SECRET`.
 
 ## STORE_LOCKED / STORE_CORRUPT / STORE_UNAVAILABLE
 
