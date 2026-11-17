@@ -46,10 +46,19 @@ class ProviderResult[T]:
     truncated: bool  # True when a cap was hit
     limitations: list[str]  # machine-readable codes, e.g. "rows_cap_50000", "no_query_page_join"
     warnings: list[str]  # human hints, e.g. "Yandex returned HOST_NOT_LOADED"
+    sample_share: float | None  # provider sampling metadata; None means "not reported"
+    sample_size: int | None
+    sample_space: int | None
+    data_lag: int | None  # provider-reported lag, seconds where documented
+    contains_sensitive_data: bool  # provider hid low-volume rows
+    total_rows_rounded: bool  # the provider rounded its own total
 ```
 
 Rules:
 
+* `sampled` is derived from the `sampled` limitation, never from a missing field. `sample_share`,
+  `sample_size`, `sample_space`, `data_lag`, `contains_sensitive_data` and `total_rows_rounded` are
+  copied into `meta` when the provider reports them; a sampled table is never labelled exact.
 * `truncated` is computed from the provider's own cap and evidence of more data (GSC reports it when
   the cap is reached, including a final page that fills it exactly; Metrika marks it when the walked
   rows are fewer than `total_rows`, a row/page cap stops the walk, or a full page arrives without a

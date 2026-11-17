@@ -1,8 +1,9 @@
 # CLI reference
 
-The CLI has 23 top-level commands: 16 groups (`auth`, `config`, `gsc`, `yandex`, `sitemap`,
-`indexnow`, `bing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`,
-`mcp`) and 7 commands (`version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`).
+The CLI has 24 top-level commands: 17 groups (`auth`, `config`, `gsc`, `yandex`, `metrika`,
+`sitemap`, `indexnow`, `bing`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`,
+`portfolio`, `mcp`) and 7 commands (`version`, `doctor`, `init`, `properties`, `stats`, `crawl`,
+`install`).
 
 Every read/report command supports `--json` (machine output) and a stable exit code; commands that
 use the workspace also accept `--config PATH`.
@@ -18,7 +19,8 @@ Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` 
 stdout; no ANSI colours.
 
 `--strict` is available on the read commands (`stats`, `gsc query`, `yandex queries`,
-`yandex indexing`, `bing quota`, `bing sitemaps`, `bing issues`, `crawl`, `report weekly`,
+`yandex indexing`, `metrika pages|goals|queries|devices|countries|engagement|bytime`,
+`bing quota`, `bing sitemaps`, `bing issues`, `crawl`, `report weekly`,
 `report diff`). It always sets `meta.strict: true`;
 when the payload is also truncated, the command exits `5` and `meta.limitations` explains what is
 missing (a generic `truncated: …` note is added when the provider did not name a limitation).
@@ -134,6 +136,54 @@ reports `new`, `existing`, `skipped` and `truncated` counts (at most 500 provide
 per call), and a limitation is added when rows were skipped or the 500-row budget was hit. A storage
 failure is a warning; the provider read still succeeds.
 
+## Yandex Metrika
+
+```bash
+lv24-seo metrika pages      [--days 7] [--lag-days 2] [--limit 100] [--strict] [--json]
+lv24-seo metrika goals      [--days 7] [--lag-days 2] [--dimension page|source] [--limit 100] [--json]
+lv24-seo metrika queries    [--days 7] [--lag-days 2] [--limit 100] [--json]
+lv24-seo metrika devices    [--days 7] [--lag-days 2] [--limit 100] [--json]
+lv24-seo metrika countries  [--days 7] [--lag-days 2] [--limit 100] [--json]
+lv24-seo metrika engagement [--days 7] [--lag-days 2] [--json]
+lv24-seo metrika bytime     [--days 7] [--lag-days 2] [--group day|week|month] [--json]
+```
+
+All seven commands are read-only and use the configured counter
+(`providers.yandex_metrika.counter`). The window is `--days` long and ends `--lag-days` before today
+in `report.timezone`; the same rule as `stats`, so the defaults cover the last complete week after
+the provider's 2-day lag.
+
+Every command applies the organic filter `ym:s:lastTrafficSource=='organic'`; `meta.organic_only`
+is `true`, and `meta.filters` repeats the expression. The commands use one shared
+`stat/v1/data` helper, so `limit`, `accuracy`, `sort`, paging and the row cap behave identically.
+
+| Command | Dimension | Metrics |
+|---|---|---|
+| `pages` | `ym:s:startURLPath` | `visits`, `users`, `bounceRate`, `avgVisitDurationSeconds`, `pageDepth`, `pageviews` |
+| `queries` | `ym:s:lastSearchPhrase`, `ym:s:lastSearchEngineRoot` | `visits`, `users` |
+| `devices` | `ym:s:deviceCategory` | `visits`, `users`, `bounceRate`, `avgVisitDurationSeconds`, `pageviews` |
+| `countries` | `ym:s:regionCountry` | `visits`, `users`, `bounceRate`, `avgVisitDurationSeconds`, `pageviews` |
+| `engagement` | none (one total row) | `bounceRate`, `avgVisitDurationSeconds`, `pageDepth`, `pageviews`, `visits`, `users` |
+| `bytime` | none (`stat/v1/data/bytime`) | `visits`, `users` per interval (`date` is the interval start) |
+
+`goals` reads the goal ids from `providers.yandex_metrika.goals` and requests
+`ym:s:goal<id>reaches|visits|users|conversionRate` for each one, optionally grouped by `page`
+(`ym:s:startURLPath`) or `source` (`ym:s:lastTrafficSource`). An empty `goals` list is not an
+error: the envelope stays `ok: true`, makes no provider call, and carries an explicit warning and
+limitation. Goal names are not resolved; ids are the stable identity. Metrika accepts at most 20
+metrics per request, so at most five goal ids are queried per call; a longer list is truncated with
+`truncated: true` and a limitation that names the configured count.
+
+`queries` always adds two limitations: Google withholds search phrases, and Metrika hides phrases
+with fewer than 10 users under its sensitive-data rule. The provider's own
+`contains_sensitive_data` flag is carried into `meta` and `limitations` when present.
+
+Sampling is never presented as exact. When Metrika reports `sampled: true`, `meta.sampled` is
+`true`, `meta.sample_share`, `sample_size`, `sample_space`, `data_lag` and `total_rows_rounded` are
+passed through, `limitations` contains `sampled`, and the human output says "values are estimates".
+`data_age_days` describes the **current** window only; the previous window is older by design and
+never raises the headline age.
+
 ## Local logs
 
 ```bash
@@ -213,6 +263,9 @@ the equally long window immediately before it.
   ratio; `position` is the provider's average position (lower is better).
 - `previous` exists only for comparable current/previous windows (GSC, Yandex Webmaster, Metrika);
   Bing, CrUX and PSI return `null`. Bing has no window in its API.
+- Metrika reports **organic** and **all-traffic** numbers separately: `organic_visits`/`organic_users`
+  apply `filters=ym:s:lastTrafficSource=='organic'`, while `all_visits`/`all_users` cover every
+  traffic source. The two are never merged, and `limitations` repeats the scope rule.
 - CrUX adds `units` (`metric -> ms|score`) for p75 field metrics. PSI reports lab
   `performance`/`seo` scores (0..1) from the first configured URL plus field rows when present; with
   several URLs it adds the limitation "lab data, first URL only" and checks at most five URLs.

@@ -15,17 +15,27 @@ Limits that shape the contract (see ``docs/data-sources.md``):
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from typing import Any
 
 from lv24_seo.core.errors import AUTH_REQUIRED, INVALID_INPUT, UPSTREAM_UNAVAILABLE, SeoError
 from lv24_seo.core.http import HttpClient
-from lv24_seo.providers.base import SAMPLED, ProviderResult, data_age_days, now_utc
+from lv24_seo.providers.base import (
+    SAMPLED,
+    SENSITIVE_DATA_HIDDEN,
+    TOTAL_ROWS_ROUNDED,
+    ProviderResult,
+    data_age_days,
+    now_utc,
+)
 
-__all__ = ["YandexMetrikaClient"]
+__all__ = ["ORGANIC_FILTER", "YandexMetrikaClient"]
 
 SOURCE = "yandex_metrika"
 DEFAULT_BASE_URL = "https://api-metrika.yandex.net"
+# The one filter every SEO surface must apply: all-traffic numbers are not search traffic.
+ORGANIC_FILTER = "ym:s:lastTrafficSource=='organic'"
 
 _LOGIN_NEXT_ACTION = "lv24-seo auth login --provider yandex"
 _SESSION_PREFIX = "ym:s:"
@@ -105,6 +115,7 @@ class YandexMetrikaClient:
         date2: date,
         dimensions: Sequence[str] = (),
         filters: str | None = None,
+        sort: str | None = None,
         accuracy: str = "medium",
         limit: int = 100,
         max_rows: int = _MAX_STAT_ROWS,
@@ -114,12 +125,15 @@ class YandexMetrikaClient:
         Row keys are the requested dimension and metric names with the session prefix removed
         (``ym:s:startURLPath`` -> ``startURLPath``, ``ym:s:visits`` -> ``visits``). Every metric
         value is a float. A sampled response carries the ``sampled`` limitation and warning so a
-        consumer can label the number instead of presenting it as exact.
+        consumer can label the number instead of presenting it as exact; ``sample_share``,
+        ``sample_size``, ``sample_space``, ``data_lag``, ``contains_sensitive_data`` and
+        ``total_rows_rounded`` are carried into ``meta`` when the provider reports them.
 
         ``limit`` is the page size, not the result size: the table is walked with ``offset``
         until ``total_rows`` is reached, a short page arrives or ``max_rows`` caps the walk.
         When ``total_rows`` is absent and a page comes back full, more rows may exist, so the
-        result is marked ``truncated`` instead of looking complete.
+        result is marked ``truncated`` instead of looking complete. ``sort`` is passed verbatim
+        (Metrika syntax: ``-ym:s:visits`` for descending visits).
         """
         counter_id = _counter_id(counter)
         metric_names = _names(metrics, what="metrics", required=True)
@@ -136,6 +150,8 @@ class YandexMetrikaClient:
             )
         page_limit = _require_limit(limit)
         row_cap = _require_max_rows(max_rows)
+        sort_value = _optional_text(sort, name="sort")
+        accuracy_value = _require_accuracy(accuracy)
         if not dimension_names:
             # Without dimensions the table has exactly one row. A misreported ``total_rows``
             # must not turn an aggregate call into a long page walk.
@@ -147,14 +163,16 @@ class YandexMetrikaClient:
             "dimensions": ",".join(dimension_names),
             "date1": first.isoformat(),
             "date2": last.isoformat(),
-            "accuracy": accuracy,
+            "accuracy": accuracy_value,
         }
         if filters is not None and filters.strip():
             form["filters"] = filters.strip()
+        if sort_value is not None:
+            form["sort"] = sort_value
 
         rows: list[Row] = []
         total: int | None = None
-        sampled = False
+        sampling = _Sampling()
         truncated = False
         # Metrika ``offset`` is 1-based; ``0`` is rejected with HTTP 400.
         offset = 1
@@ -176,7 +194,7 @@ class YandexMetrikaClient:
             table = _require_mapping(payload)
             if total is None:
                 total = _total_rows(table)
-            sampled = sampled or table.get("sampled") is True
+            sampling.merge(table)
             batch = _stat_rows(
                 table,
                 dimension_names=dimension_names,
@@ -215,8 +233,112 @@ class YandexMetrikaClient:
             rows=rows,
             total=total,
             truncated=truncated,
-            limitations=(SAMPLED,) if sampled else (),
-            warnings=("sampled",) if sampled else (),
+            limitations=sampling.limitations(),
+            warnings=sampling.warnings(),
+            sample_share=sampling.sample_share,
+            sample_size=sampling.sample_size,
+            sample_space=sampling.sample_space,
+            data_lag=sampling.data_lag,
+            contains_sensitive_data=sampling.contains_sensitive_data,
+            total_rows_rounded=sampling.total_rows_rounded,
+        )
+
+    def stat_bytime(
+        self,
+        *,
+        counter: int | str,
+        metrics: Sequence[str],
+        date1: date,
+        date2: date,
+        group: str = "day",
+        dimensions: Sequence[str] = (),
+        filters: str | None = None,
+        accuracy: str = "medium",
+        limit: int = 100,
+        max_rows: int = 1_000,
+    ) -> ProviderResult[Row]:
+        """Read ``stat/v1/data/bytime`` and flatten intervals into one row per date.
+
+        The provider returns metric *series*: every data row carries ``metrics`` arrays aligned
+        with ``time_intervals``. This method zips them into ``{date, <dimensions>, <metrics>}``
+        rows (``date`` is the interval start) so reports never have to know the nested shape.
+        The call is one request bounded by ``limit`` data rows and ``max_rows`` intervals; a
+        response with more data rows than fit is marked ``truncated``.
+        """
+        counter_id = _counter_id(counter)
+        metric_names = _names(metrics, what="metrics", required=True)
+        dimension_names = _names(dimensions, what="dimensions", required=False)
+        first = _require_date(date1, name="date1")
+        last = _require_date(date2, name="date2")
+        if first > last:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=(
+                    f"date1 ({first.isoformat()}) must not be after date2 ({last.isoformat()})"
+                ),
+                next_action="pass an inclusive date window",
+            )
+        group_value = _require_group(group)
+        page_limit = _require_limit(limit)
+        row_cap = _require_max_rows(max_rows)
+        accuracy_value = _require_accuracy(accuracy)
+
+        form: dict[str, str] = {
+            "ids": counter_id,
+            "metrics": ",".join(metric_names),
+            "dimensions": ",".join(dimension_names),
+            "date1": first.isoformat(),
+            "date2": last.isoformat(),
+            "group": group_value,
+            "accuracy": accuracy_value,
+            "limit": str(page_limit),
+            "offset": "1",
+        }
+        if filters is not None and filters.strip():
+            form["filters"] = filters.strip()
+
+        payload = self._http.get_json(
+            self._url("/stat/v1/data/bytime"),
+            params=form,
+            headers=self._auth_headers(),
+            rate_limit_key="yandex_metrika",
+        )
+        table = _require_mapping(payload)
+        sampling = _Sampling()
+        sampling.merge(table)
+        data_rows = _payload_rows(table, "data")
+        rows = _bytime_rows(
+            table,
+            dimension_names=dimension_names,
+            metric_names=metric_names,
+        )
+        # ``total_rows`` in a bytime response does not describe the interval count (a live
+        # response reports 3 for one data row and seven intervals), so it is not used here.
+        # A data page that exactly fills ``limit`` may hide more dimension rows.
+        truncated = len(data_rows) >= page_limit
+        if len(rows) > row_cap:
+            rows = rows[:row_cap]
+            truncated = True
+        total = None if truncated else len(rows)
+
+        fetched = now_utc()
+        window_end = datetime.combine(last, time(hour=23, minute=59), tzinfo=UTC)
+        return ProviderResult(
+            source=SOURCE,
+            property_id=counter_id,
+            fetched_at=fetched,
+            data_age_days=data_age_days(end=window_end, fetched_at=fetched),
+            rows=rows,
+            total=total,
+            truncated=truncated,
+            limitations=sampling.limitations(),
+            warnings=sampling.warnings(),
+            sample_share=sampling.sample_share,
+            sample_size=sampling.sample_size,
+            sample_space=sampling.sample_space,
+            data_lag=sampling.data_lag,
+            contains_sensitive_data=sampling.contains_sensitive_data,
+            total_rows_rounded=sampling.total_rows_rounded,
         )
 
     def _get(self, path: str) -> Mapping[str, Any]:
@@ -241,6 +363,52 @@ class YandexMetrikaClient:
             rows=rows,
             total=len(rows),
         )
+
+
+@dataclass(slots=True)
+class _Sampling:
+    """Sampling and freshness fields Metrika reports next to a stat table."""
+
+    sampled: bool = False
+    sample_share: float | None = None
+    sample_size: int | None = None
+    sample_space: int | None = None
+    data_lag: int | None = None
+    contains_sensitive_data: bool = False
+    total_rows_rounded: bool = False
+
+    def merge(self, table: Mapping[str, Any]) -> None:
+        self.sampled = self.sampled or table.get("sampled") is True
+        if self.sample_share is None:
+            self.sample_share = _optional_float(table.get("sample_share"))
+        if self.sample_size is None:
+            self.sample_size = _optional_int(table.get("sample_size"))
+        if self.sample_space is None:
+            self.sample_space = _optional_int(table.get("sample_space"))
+        if self.data_lag is None:
+            self.data_lag = _optional_int(table.get("data_lag"))
+        if table.get("contains_sensitive_data") is True:
+            self.contains_sensitive_data = True
+        if table.get("total_rows_rounded") is True:
+            self.total_rows_rounded = True
+
+    def limitations(self) -> tuple[str, ...]:
+        limitations: list[str] = []
+        if self.sampled:
+            limitations.append(SAMPLED)
+        if self.total_rows_rounded:
+            limitations.append(TOTAL_ROWS_ROUNDED)
+        if self.contains_sensitive_data:
+            limitations.append(SENSITIVE_DATA_HIDDEN)
+        return tuple(limitations)
+
+    def warnings(self) -> tuple[str, ...]:
+        warnings: list[str] = []
+        if self.sampled:
+            warnings.append(SAMPLED)
+        if self.contains_sensitive_data:
+            warnings.append(SENSITIVE_DATA_HIDDEN)
+        return tuple(warnings)
 
 
 def _names(values: Sequence[str], *, what: str, required: bool) -> list[str]:
@@ -282,6 +450,62 @@ def _require_date(value: date | None, *, name: str) -> date:
         message=f"{name} is required",
         next_action="pass a datetime.date for the stat window",
     )
+
+
+def _optional_text(value: object, *, name: str) -> str | None:
+    if value is None:
+        return None
+    candidate: object = value
+    if not isinstance(candidate, str):
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"{name} must be a string",
+            next_action=f"pass {name} such as '-ym:s:visits'",
+        )
+    text = candidate.strip()
+    return text or None
+
+
+def _require_accuracy(value: str) -> str:
+    allowed = frozenset({"low", "medium", "high", "full"})
+    candidate: object = value
+    if not isinstance(candidate, str) or candidate.strip().lower() not in allowed:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"accuracy must be one of {', '.join(sorted(allowed))}",
+            next_action="pass accuracy=medium (default) or full for an exact table",
+        )
+    return candidate.strip().lower()
+
+
+def _require_group(value: str) -> str:
+    allowed = frozenset({"day", "week", "month"})
+    candidate: object = value
+    if not isinstance(candidate, str) or candidate.strip().lower() not in allowed:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"group must be one of {', '.join(sorted(allowed))}",
+            next_action="pass group=day, group=week or group=month",
+        )
+    return candidate.strip().lower()
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _optional_int(value: object) -> int | None:
+    number = _optional_float(value)
+    return int(number) if number is not None else None
 
 
 def _require_limit(limit: int) -> int:
@@ -366,6 +590,52 @@ def _stat_rows(
             row[_strip_session_prefix(name)] = _to_float(value)
         rows.append(row)
     return rows
+
+
+def _bytime_rows(
+    payload: Mapping[str, Any],
+    *,
+    dimension_names: Sequence[str],
+    metric_names: Sequence[str],
+) -> list[Row]:
+    """Flatten ``stat/v1/data/bytime`` metric series into one row per interval."""
+    intervals = _time_intervals(payload)
+    rows: list[Row] = []
+    for item in _payload_rows(payload, "data"):
+        dimension_values = item.get("dimensions", [])
+        metric_series = item.get("metrics", [])
+        if not isinstance(dimension_values, list) or not isinstance(metric_series, list):
+            raise _bad_response()
+        if len(dimension_values) != len(dimension_names):
+            raise _bad_response()
+        if len(metric_series) != len(metric_names):
+            raise _bad_response()
+        for index, interval in enumerate(intervals):
+            row: Row = {"date": interval}
+            for name, value in zip(dimension_names, dimension_values, strict=True):
+                row[_strip_session_prefix(name)] = _dimension_value(value)
+            for name, series in zip(metric_names, metric_series, strict=True):
+                if not isinstance(series, list) or len(series) != len(intervals):
+                    raise _bad_response()
+                row[_strip_session_prefix(name)] = _to_float(series[index])
+            rows.append(row)
+    return rows
+
+
+def _time_intervals(payload: Mapping[str, Any]) -> list[str]:
+    raw = payload.get("time_intervals")
+    if not isinstance(raw, list) or not raw:
+        raise _bad_response()
+    intervals: list[str] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            intervals.append(item.strip())
+            continue
+        if isinstance(item, (list, tuple)) and item and isinstance(item[0], str):
+            intervals.append(item[0].strip())
+            continue
+        raise _bad_response()
+    return intervals
 
 
 def _dimension_value(value: object) -> object:

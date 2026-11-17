@@ -10,7 +10,11 @@
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
-- CLI: 23 top-level commands (16 groups + 7 commands), every command with `--json`.
+- CLI: 24 top-level commands (17 groups + 7 commands), every command with `--json`.
+- Metrika reads: `lv24-seo metrika pages|goals|queries|devices|countries|engagement|bytime` are
+  organic-only (`filters=ym:s:lastTrafficSource=='organic'`) and read-only. `stats` and the weekly
+  digest expose `organic_visits`/`organic_users` and `all_visits`/`all_users` separately; goals come
+  from `providers.yandex_metrika.goals`; sampling fields and limitations are passed through.
 - Bing writes: `sitemap submit --provider bing` calls the JSON `SubmitFeed` endpoint through the
   two-phase write gate; `bing submit` calls `SubmitUrlbatch` in 500-URL batches with a quota
   pre-check, deduplication and `accepted` (not indexed) results; `indexnow submit --from-sitemap`

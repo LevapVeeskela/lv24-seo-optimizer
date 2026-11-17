@@ -19,6 +19,8 @@ ROWS_CAP_50000 = "rows_cap_50000"
 NO_QUERY_PAGE_JOIN = "no_query_page_join"
 TOP_3000_QUERIES = "top_3000_queries"
 SAMPLED = "sampled"
+TOTAL_ROWS_ROUNDED = "total_rows_rounded"
+SENSITIVE_DATA_HIDDEN = "sensitive_data_hidden"
 LOW_TRAFFIC = "low_traffic"
 DEGRADED_HOST = "degraded_host"
 ONE_URL_PER_CALL = "one_url_per_call"
@@ -64,10 +66,23 @@ class ProviderResult(Generic[T]):
     truncated: bool = False
     limitations: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    # Provider sampling metadata. ``None``/``False`` means the provider did not report it,
+    # which is not the same as "not sampled": only an explicit ``sampled=false`` is exact.
+    sample_share: float | None = None
+    sample_size: int | None = None
+    sample_space: int | None = None
+    data_lag: int | None = None
+    contains_sensitive_data: bool = False
+    total_rows_rounded: bool = False
 
     @property
     def empty(self) -> bool:
         return not self.rows
+
+    @property
+    def sampled(self) -> bool:
+        """Whether the provider explicitly marked this table as sampled."""
+        return SAMPLED in self.limitations
 
     def to_meta(self) -> dict[str, Any]:
         """The ``meta`` block expected by the response envelope."""
@@ -77,11 +92,24 @@ class ProviderResult(Generic[T]):
             "fetched_at": self.fetched_at.isoformat(),
             "data_age_days": self.data_age_days,
             "truncated": self.truncated,
+            "sampled": self.sampled,
         }
         if self.total is not None:
             meta["total"] = self.total
         if self.limitations:
             meta["limitations"] = list(self.limitations)
+        if self.sample_share is not None:
+            meta["sample_share"] = self.sample_share
+        if self.sample_size is not None:
+            meta["sample_size"] = self.sample_size
+        if self.sample_space is not None:
+            meta["sample_space"] = self.sample_space
+        if self.data_lag is not None:
+            meta["data_lag"] = self.data_lag
+        if self.contains_sensitive_data:
+            meta["contains_sensitive_data"] = True
+        if self.total_rows_rounded:
+            meta["total_rows_rounded"] = True
         return meta
 
     def to_dict(self) -> dict[str, Any]:

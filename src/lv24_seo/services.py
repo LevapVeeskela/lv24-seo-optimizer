@@ -77,7 +77,7 @@ from lv24_seo.providers.gsc.auth import (
     token_provider_from_token,
 )
 from lv24_seo.providers.psi import PsiClient
-from lv24_seo.providers.yandex_metrika import YandexMetrikaClient
+from lv24_seo.providers.yandex_metrika import ORGANIC_FILTER, YandexMetrikaClient
 from lv24_seo.providers.yandex_webmaster import YandexWebmasterClient
 from lv24_seo.report.models import Report, ReportSection
 from lv24_seo.store.repositories import Store
@@ -125,6 +125,45 @@ _YANDEX_MAX_LIMIT = 500
 _STATS_GSC_LIMIT = 5_000
 _STATS_YANDEX_LIMIT = 500
 _STATS_PSI_URL_LIMIT = 5
+# Metrika SEO tables are dimensioned; 100 rows is the default page and 1,000 is the CLI cap.
+# The organic/all split in stats and the weekly digest costs four aggregate calls, each one row.
+_METRIKA_LIMIT = 100
+_METRIKA_LIMIT_MAX = 1_000
+_METRIKA_GOAL_LIMIT = 500
+# Metrika accepts at most 20 metrics per request; one goal costs four metrics.
+_METRIKA_GOALS_PER_CALL = 5
+_METRIKA_BYTIME_ROWS = 1_000
+_METRIKA_ORGANIC_METRICS: tuple[str, ...] = ("ym:s:visits", "ym:s:users")
+_METRIKA_PAGE_METRICS: tuple[str, ...] = (
+    "ym:s:visits",
+    "ym:s:users",
+    "ym:s:bounceRate",
+    "ym:s:avgVisitDurationSeconds",
+    "ym:s:pageDepth",
+    "ym:s:pageviews",
+)
+_METRIKA_ENGAGEMENT_METRICS: tuple[str, ...] = (
+    "ym:s:bounceRate",
+    "ym:s:avgVisitDurationSeconds",
+    "ym:s:pageDepth",
+    "ym:s:pageviews",
+    "ym:s:visits",
+    "ym:s:users",
+)
+_METRIKA_DIMENSIONS: dict[str, str] = {
+    "page": "ym:s:startURLPath",
+    "source": "ym:s:lastTrafficSource",
+}
+_METRIKA_SCOPE_NOTE = (
+    "metrika: organic_* is filtered to ym:s:lastTrafficSource=='organic'; "
+    "all_* covers every traffic source"
+)
+_METRIKA_GOOGLE_KEYWORD_NOTE = (
+    "metrika: Google withholds search phrases; its rows cannot be attributed"
+)
+_METRIKA_SENSITIVE_PHRASES = (
+    "metrika: phrases with fewer than 10 users are hidden by the provider's sensitive-data rule"
+)
 # Digest evidence is joined against the bounded delta list, so a larger cap would only
 # slow the report without changing the rendered section.
 _DIGEST_EVIDENCE_LIMIT = 500
@@ -606,8 +645,30 @@ class SeoService:
     ) -> None:
         metrika = self._config.providers.yandex_metrika
         counter_id = metrika.counter if metrika is not None else ""
-        metrics = ("ym:s:visits", "ym:s:users")
-        current = _call(
+        metrics = _METRIKA_ORGANIC_METRICS
+        # Organic and all-traffic are separate reads so neither number can be mistaken for
+        # the other: the organic call filters lastTrafficSource, the all call does not.
+        organic_current = _call(
+            client,
+            "stat_data",
+            counter=counter_id,
+            metrics=metrics,
+            date1=start,
+            date2=end,
+            filters=ORGANIC_FILTER,
+            limit=1,
+        )
+        organic_previous = _call(
+            client,
+            "stat_data",
+            counter=counter_id,
+            metrics=metrics,
+            date1=previous_start,
+            date2=previous_end,
+            filters=ORGANIC_FILTER,
+            limit=1,
+        )
+        all_current = _call(
             client,
             "stat_data",
             counter=counter_id,
@@ -616,7 +677,7 @@ class SeoService:
             date2=end,
             limit=1,
         )
-        previous = _call(
+        all_previous = _call(
             client,
             "stat_data",
             counter=counter_id,
@@ -625,17 +686,32 @@ class SeoService:
             date2=previous_end,
             limit=1,
         )
-        _stats_fill(entry, _combined_result_meta((current, previous), source=SOURCE_YANDEX_METRIKA))
-        current_rows = _result_rows(current)
-        previous_rows = _result_rows(previous)
+        _stats_fill(
+            entry,
+            _combined_result_meta(
+                (organic_current, organic_previous, all_current, all_previous),
+                source=SOURCE_YANDEX_METRIKA,
+            ),
+        )
+        entry["limitations"] = _unique([*entry["limitations"], _METRIKA_SCOPE_NOTE])
+        current_rows = _result_rows(organic_current)
+        previous_rows = _result_rows(organic_previous)
+        all_current_rows = _result_rows(all_current)
+        all_previous_rows = _result_rows(all_previous)
         entry["rows"] = len(current_rows)
-        if current_rows:
+        if current_rows or all_current_rows:
             entry["status"] = "ok"
-            entry["metrics"] = _metrika_totals(current_rows)
+            entry["metrics"] = {
+                **_metrika_totals(current_rows, prefix="organic_"),
+                **_metrika_totals(all_current_rows, prefix="all_"),
+            }
         else:
             entry["status"] = "no_data"
-        if previous_rows:
-            entry["previous"] = _metrika_totals(previous_rows)
+        if previous_rows or all_previous_rows:
+            entry["previous"] = {
+                **_metrika_totals(previous_rows, prefix="organic_"),
+                **_metrika_totals(all_previous_rows, prefix="all_"),
+            }
 
     def _stats_bing(
         self,
@@ -993,6 +1069,398 @@ class SeoService:
                 f"indexing events: {skipped} provider row(s) without url/event/date were not stored"
             )
         return counts
+
+    # -- Yandex Metrika reads ----------------------------------------------------------------
+
+    def metrika_pages(
+        self, *, days: int = 7, lag_days: int = 2, limit: int = 100
+    ) -> dict[str, Any]:
+        """Organic landing pages: visits, users, engagement and pageviews (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "metrika_pages",
+            warnings,
+            lambda: self._metrika_pages(days, lag_days, limit, warnings),
+        )
+
+    def _metrika_pages(
+        self, days: int, lag_days: int, limit: int, warnings: list[str]
+    ) -> dict[str, Any]:
+        start, end = self._metrika_window(days, lag_days)
+        size = _positive_int(limit, name="limit", maximum=_METRIKA_LIMIT_MAX)
+        counter_id, client = self._metrika_target(warnings)
+        return self._metrika_table(
+            client=client,
+            counter_id=counter_id,
+            start=start,
+            end=end,
+            metrics=_METRIKA_PAGE_METRICS,
+            dimensions=("ym:s:startURLPath",),
+            filters=ORGANIC_FILTER,
+            sort="-ym:s:visits",
+            limit=size,
+            max_rows=size,
+        )
+
+    def metrika_goals(
+        self,
+        *,
+        days: int = 7,
+        lag_days: int = 2,
+        dimension: str = "",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Configured Metrika goals with organic reaches, visits, users and conversion rate."""
+        warnings: list[str] = []
+        return self._respond(
+            "metrika_goals",
+            warnings,
+            lambda: self._metrika_goals(days, lag_days, dimension, limit, warnings),
+        )
+
+    def _metrika_goals(
+        self, days: int, lag_days: int, dimension: str, limit: int, warnings: list[str]
+    ) -> dict[str, Any]:
+        start, end = self._metrika_window(days, lag_days)
+        counter_id = self._metrika_counter()
+        metrika = self._config.providers.yandex_metrika
+        goals = list(metrika.goals) if metrika is not None else []
+        if not goals:
+            warnings.append(
+                "yandex_metrika: providers.yandex_metrika.goals is empty; "
+                "no goal metrics were requested"
+            )
+            return ok(
+                {"counter": counter_id, "goals": [], "rows": []},
+                meta={
+                    "source": SOURCE_YANDEX_METRIKA,
+                    "data_age_days": None,
+                    "truncated": False,
+                    "sampled": False,
+                    "organic_only": True,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "dimensions": [],
+                    "metrics": [],
+                    "filters": ORGANIC_FILTER,
+                    "sort": None,
+                    "limit": limit,
+                    "goals": [],
+                    "goals_configured": [],
+                    "limitations": ["metrika: no goal ids configured; no provider call was made"],
+                },
+                warnings=warnings,
+            )
+        dimension_name = ""
+        if dimension.strip():
+            key = dimension.strip().lower()
+            dimension_name = _METRIKA_DIMENSIONS.get(key, "")
+            if not dimension_name:
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message=f"unknown goal dimension {dimension!r}",
+                    next_action="pass --dimension page or --dimension source",
+                )
+        size = _positive_int(limit, name="limit", maximum=_METRIKA_GOAL_LIMIT)
+        configured_goals = goals
+        goals = goals[:_METRIKA_GOALS_PER_CALL]
+        extra_limitations: list[str] = []
+        if len(goals) < len(configured_goals):
+            extra_limitations.append(
+                "truncated: only the first "
+                f"{_METRIKA_GOALS_PER_CALL} goal ids were queried "
+                f"({len(configured_goals)} configured; 20-metric request cap)"
+            )
+        metrics = [
+            f"ym:s:goal{goal}{suffix}"
+            for goal in goals
+            for suffix in ("reaches", "visits", "users", "conversionRate")
+        ]
+        dimensions = (dimension_name,) if dimension_name else ()
+        client = self._client_for(SOURCE_YANDEX_METRIKA, warnings)
+        envelope = self._metrika_table(
+            client=client,
+            counter_id=counter_id,
+            start=start,
+            end=end,
+            metrics=metrics,
+            dimensions=dimensions,
+            filters=ORGANIC_FILTER,
+            sort=f"-ym:s:goal{goals[0]}reaches" if dimension_name else None,
+            limit=size if dimension_name else 1,
+            max_rows=size if dimension_name else 1,
+            extra_limitations=extra_limitations,
+        )
+        data = envelope.get("data")
+        if isinstance(data, dict):
+            data["goals"] = goals
+            data["goals_configured"] = configured_goals
+        meta = envelope.get("meta")
+        if isinstance(meta, dict):
+            meta["goals"] = goals
+            meta["goals_configured"] = configured_goals
+            if extra_limitations:
+                meta["truncated"] = True
+        return envelope
+
+    def metrika_queries(
+        self, *, days: int = 7, lag_days: int = 2, limit: int = 100
+    ) -> dict[str, Any]:
+        """Organic search phrases and the search engine that referred them."""
+        warnings: list[str] = []
+        return self._respond(
+            "metrika_queries",
+            warnings,
+            lambda: self._metrika_queries(days, lag_days, limit, warnings),
+        )
+
+    def _metrika_queries(
+        self, days: int, lag_days: int, limit: int, warnings: list[str]
+    ) -> dict[str, Any]:
+        start, end = self._metrika_window(days, lag_days)
+        size = _positive_int(limit, name="limit", maximum=_METRIKA_LIMIT_MAX)
+        counter_id, client = self._metrika_target(warnings)
+        return self._metrika_table(
+            client=client,
+            counter_id=counter_id,
+            start=start,
+            end=end,
+            metrics=_METRIKA_ORGANIC_METRICS,
+            dimensions=("ym:s:lastSearchPhrase", "ym:s:lastSearchEngineRoot"),
+            filters=ORGANIC_FILTER,
+            sort="-ym:s:visits",
+            limit=size,
+            max_rows=size,
+            extra_limitations=(_METRIKA_GOOGLE_KEYWORD_NOTE, _METRIKA_SENSITIVE_PHRASES),
+        )
+
+    def metrika_devices(
+        self, *, days: int = 7, lag_days: int = 2, limit: int = 100
+    ) -> dict[str, Any]:
+        """Organic visits by device category."""
+        warnings: list[str] = []
+        return self._respond(
+            "metrika_devices",
+            warnings,
+            lambda: self._metrika_devices(days, lag_days, limit, warnings),
+        )
+
+    def _metrika_devices(
+        self, days: int, lag_days: int, limit: int, warnings: list[str]
+    ) -> dict[str, Any]:
+        start, end = self._metrika_window(days, lag_days)
+        size = _positive_int(limit, name="limit", maximum=_METRIKA_LIMIT_MAX)
+        counter_id, client = self._metrika_target(warnings)
+        return self._metrika_table(
+            client=client,
+            counter_id=counter_id,
+            start=start,
+            end=end,
+            metrics=_METRIKA_PAGE_METRICS,
+            dimensions=("ym:s:deviceCategory",),
+            filters=ORGANIC_FILTER,
+            sort="-ym:s:visits",
+            limit=size,
+            max_rows=size,
+        )
+
+    def metrika_countries(
+        self, *, days: int = 7, lag_days: int = 2, limit: int = 100
+    ) -> dict[str, Any]:
+        """Organic visits by country."""
+        warnings: list[str] = []
+        return self._respond(
+            "metrika_countries",
+            warnings,
+            lambda: self._metrika_countries(days, lag_days, limit, warnings),
+        )
+
+    def _metrika_countries(
+        self, days: int, lag_days: int, limit: int, warnings: list[str]
+    ) -> dict[str, Any]:
+        start, end = self._metrika_window(days, lag_days)
+        size = _positive_int(limit, name="limit", maximum=_METRIKA_LIMIT_MAX)
+        counter_id, client = self._metrika_target(warnings)
+        return self._metrika_table(
+            client=client,
+            counter_id=counter_id,
+            start=start,
+            end=end,
+            metrics=_METRIKA_PAGE_METRICS,
+            dimensions=("ym:s:regionCountry",),
+            filters=ORGANIC_FILTER,
+            sort="-ym:s:visits",
+            limit=size,
+            max_rows=size,
+        )
+
+    def metrika_engagement(self, *, days: int = 7, lag_days: int = 2) -> dict[str, Any]:
+        """Organic engagement totals: bounce rate, duration, page depth and pageviews."""
+        warnings: list[str] = []
+        return self._respond(
+            "metrika_engagement",
+            warnings,
+            lambda: self._metrika_engagement(days, lag_days, warnings),
+        )
+
+    def _metrika_engagement(self, days: int, lag_days: int, warnings: list[str]) -> dict[str, Any]:
+        start, end = self._metrika_window(days, lag_days)
+        counter_id, client = self._metrika_target(warnings)
+        return self._metrika_table(
+            client=client,
+            counter_id=counter_id,
+            start=start,
+            end=end,
+            metrics=_METRIKA_ENGAGEMENT_METRICS,
+            dimensions=(),
+            filters=ORGANIC_FILTER,
+            limit=1,
+            max_rows=1,
+        )
+
+    def metrika_bytime(
+        self, *, days: int = 7, lag_days: int = 2, group: str = "day"
+    ) -> dict[str, Any]:
+        """Organic visits and users over time (``stat/v1/data/bytime``)."""
+        warnings: list[str] = []
+        return self._respond(
+            "metrika_bytime",
+            warnings,
+            lambda: self._metrika_bytime(days, lag_days, group, warnings),
+        )
+
+    def _metrika_bytime(
+        self, days: int, lag_days: int, group: str, warnings: list[str]
+    ) -> dict[str, Any]:
+        start, end = self._metrika_window(days, lag_days)
+        counter_id, client = self._metrika_target(warnings)
+        result = _call(
+            client,
+            "stat_bytime",
+            counter=counter_id,
+            metrics=_METRIKA_ORGANIC_METRICS,
+            date1=start,
+            date2=end,
+            group=group,
+            filters=ORGANIC_FILTER,
+            limit=_METRIKA_LIMIT,
+            max_rows=_METRIKA_BYTIME_ROWS,
+        )
+        return self._metrika_envelope(
+            result,
+            counter_id=counter_id,
+            start=start,
+            end=end,
+            dimensions=(),
+            metrics=_METRIKA_ORGANIC_METRICS,
+            filters=ORGANIC_FILTER,
+            sort=None,
+            limit=_METRIKA_LIMIT,
+            extra_meta={"group": group.strip().lower()},
+        )
+
+    def _metrika_window(self, days: int, lag_days: int) -> tuple[date, date]:
+        """Resolve the current reporting window shared by every ``metrika`` command."""
+        span = _positive_int(days, name="days", maximum=MAX_REPORT_DAYS)
+        lag = _non_negative_int(lag_days, name="lag_days")
+        end = local_today(self._config.report.timezone)
+        (start, current_end), _ = compare_period(span, end=end, lag_days=lag)
+        return start, current_end
+
+    def _metrika_counter(self) -> str:
+        metrika = self._config.providers.yandex_metrika
+        counter_id = metrika.counter.strip() if metrika is not None else ""
+        if not counter_id:
+            raise SeoError(
+                code=CONFIG_INVALID,
+                message="Yandex Metrika counter is not configured",
+                next_action="set providers.yandex_metrika.counter in seo.toml",
+            )
+        return counter_id
+
+    def _metrika_target(self, warnings: list[str]) -> tuple[str, object]:
+        return self._metrika_counter(), self._client_for(SOURCE_YANDEX_METRIKA, warnings)
+
+    def _metrika_table(
+        self,
+        *,
+        client: object,
+        counter_id: str,
+        start: date,
+        end: date,
+        metrics: Sequence[str],
+        dimensions: Sequence[str],
+        filters: str | None,
+        sort: str | None = None,
+        limit: int = _METRIKA_LIMIT,
+        max_rows: int = _METRIKA_LIMIT,
+        extra_limitations: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """One bounded ``stat/v1/data`` read behind every ``metrika`` table command."""
+        result = _call(
+            client,
+            "stat_data",
+            counter=counter_id,
+            metrics=metrics,
+            date1=start,
+            date2=end,
+            dimensions=dimensions,
+            filters=filters,
+            sort=sort,
+            limit=limit,
+            max_rows=max_rows,
+        )
+        return self._metrika_envelope(
+            result,
+            counter_id=counter_id,
+            start=start,
+            end=end,
+            dimensions=dimensions,
+            metrics=metrics,
+            filters=filters,
+            sort=sort,
+            limit=limit,
+            extra_limitations=extra_limitations,
+        )
+
+    def _metrika_envelope(
+        self,
+        result: object,
+        *,
+        counter_id: str,
+        start: date,
+        end: date,
+        dimensions: Sequence[str],
+        metrics: Sequence[str],
+        filters: str | None,
+        sort: str | None,
+        limit: int,
+        extra_meta: Mapping[str, Any] | None = None,
+        extra_limitations: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        rows = _result_rows(result)
+        warnings = _unique([*_result_warnings(result)])
+        meta = _result_meta(result, source=SOURCE_YANDEX_METRIKA, rows=rows)
+        limitations = _unique([*_result_limitations(result), *extra_limitations])
+        if meta.get("truncated") and not any("truncat" in item.lower() for item in limitations):
+            limitations.append("metrika: response truncated; more rows may exist")
+        meta.update(
+            {
+                "counter": counter_id,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "dimensions": list(dimensions),
+                "metrics": list(metrics),
+                "filters": filters,
+                "sort": sort,
+                "limit": limit,
+                "organic_only": filters == ORGANIC_FILTER,
+                "limitations": limitations,
+            }
+        )
+        if extra_meta:
+            meta.update(dict(extra_meta))
+        return ok({"counter": counter_id, "rows": rows}, meta=meta, warnings=warnings)
 
     # -- sitemap writes ----------------------------------------------------------------------
 
@@ -2705,8 +3173,28 @@ class SeoService:
             warnings.append("yandex_metrika: counter missing")
             return
 
-        metrics = ("ym:s:visits", "ym:s:users")
-        current_result = _call(
+        metrics = _METRIKA_ORGANIC_METRICS
+        organic_current = _call(
+            client,
+            "stat_data",
+            counter=counter_id,
+            metrics=metrics,
+            date1=start,
+            date2=end,
+            filters=ORGANIC_FILTER,
+            limit=1,
+        )
+        organic_previous = _call(
+            client,
+            "stat_data",
+            counter=counter_id,
+            metrics=metrics,
+            date1=previous_start,
+            date2=previous_end,
+            filters=ORGANIC_FILTER,
+            limit=1,
+        )
+        all_current = _call(
             client,
             "stat_data",
             counter=counter_id,
@@ -2715,7 +3203,7 @@ class SeoService:
             date2=end,
             limit=1,
         )
-        previous_result = _call(
+        all_previous = _call(
             client,
             "stat_data",
             counter=counter_id,
@@ -2724,14 +3212,25 @@ class SeoService:
             date2=previous_end,
             limit=1,
         )
-        current_rows = _result_rows(current_result)
-        previous_rows = _result_rows(previous_result)
-        current[SOURCE_YANDEX_METRIKA] = _metrika_totals(current_rows)
-        previous[SOURCE_YANDEX_METRIKA] = _metrika_totals(previous_rows)
-        sources[SOURCE_YANDEX_METRIKA] = _source_entry(current_result, current_rows)
-        sources[SOURCE_YANDEX_METRIKA]["meta"] = _combined_result_meta(
-            (current_result, previous_result), source=SOURCE_YANDEX_METRIKA
+        organic_current_rows = _result_rows(organic_current)
+        organic_previous_rows = _result_rows(organic_previous)
+        all_current_rows = _result_rows(all_current)
+        all_previous_rows = _result_rows(all_previous)
+        current[SOURCE_YANDEX_METRIKA] = {
+            **_metrika_totals(organic_current_rows, prefix="organic_"),
+            **_metrika_totals(all_current_rows, prefix="all_"),
+        }
+        previous[SOURCE_YANDEX_METRIKA] = {
+            **_metrika_totals(organic_previous_rows, prefix="organic_"),
+            **_metrika_totals(all_previous_rows, prefix="all_"),
+        }
+        sources[SOURCE_YANDEX_METRIKA] = _source_entry(organic_current, organic_current_rows)
+        meta = _combined_result_meta(
+            (organic_current, organic_previous, all_current, all_previous),
+            source=SOURCE_YANDEX_METRIKA,
         )
+        meta["limitations"] = _unique([*meta["limitations"], _METRIKA_SCOPE_NOTE])
+        sources[SOURCE_YANDEX_METRIKA]["meta"] = meta
 
     def _collect_bing_weekly(self, sources: dict[str, dict[str, Any]], warnings: list[str]) -> None:
         """Collect Bing query stats when the site is configured (traffic only).
@@ -2881,12 +3380,17 @@ class SeoService:
                     "current": float((metrika_current or {}).get(metric, 0.0)),
                     "previous": float((metrika_previous or {}).get(metric, 0.0)),
                 }
-                for metric in ("visits", "users")
+                for metric in (
+                    "organic_visits",
+                    "organic_users",
+                    "all_visits",
+                    "all_users",
+                )
             ]
             sections.append(
                 ReportSection(
                     key="yandex_metrika",
-                    title="Yandex Metrika",
+                    title="Yandex Metrika (organic vs all traffic)",
                     summary=", ".join(
                         f"{row['metric']} {row['current']:.0f} (prev {row['previous']:.0f})"
                         for row in rows
@@ -3116,16 +3620,25 @@ def _result_meta(result: object, *, source: str, rows: Sequence[Any]) -> dict[st
         payload = to_meta()
         meta = dict(payload) if isinstance(payload, Mapping) else {}
     else:
+        limitations = _list_of_str(getattr(result, "limitations", ()))
         meta = {
             "source": str(getattr(result, "source", source)),
             "property_id": str(getattr(result, "property_id", "")),
             "fetched_at": _iso_or_empty(getattr(result, "fetched_at", None)),
             "data_age_days": _result_data_age(result),
             "truncated": _result_truncated(result),
+            "sampled": "sampled" in limitations,
         }
         total = getattr(result, "total", None)
         if isinstance(total, int) and not isinstance(total, bool):
             meta["total"] = total
+        for key in ("sample_share", "sample_size", "sample_space", "data_lag"):
+            value = getattr(result, key, None)
+            if value is not None:
+                meta[key] = value
+        for key in ("contains_sensitive_data", "total_rows_rounded"):
+            if getattr(result, key, False) is True:
+                meta[key] = True
     meta["rows"] = len(rows)
     meta.setdefault("source", source)
     return meta
@@ -3170,17 +3683,34 @@ def _combined_result_meta(results: Sequence[object], *, source: str) -> dict[str
     known = bool(totals) and all(
         isinstance(value, int) and not isinstance(value, bool) for value in totals
     )
-    return {
+    first_meta = metadata[0] if metadata else {}
+    meta: dict[str, Any] = {
         "source": source,
         "truncated": any(meta.get("truncated") for meta in metadata),
         "total": sum(_int_of(value) for value in totals) if known else None,
-        "data_age_days": max((_result_data_age(result) for result in results), default=0),
+        # Freshness describes the current window. The previous window is older by design,
+        # so taking the max of both would claim the current data is a week older than it is.
+        "data_age_days": _result_data_age(results[0]) if results else 0,
+        "sampled": any(meta.get("sampled") is True for meta in metadata),
         "limitations": _unique(
             [item for result in results for item in _result_limitations(result)]
         ),
         "warnings": _unique([item for result in results for item in _result_warnings(result)]),
         "datasets": metadata,
     }
+    # Sampling is a property of the current table; a previous window must not overwrite it.
+    for key in (
+        "sample_share",
+        "sample_size",
+        "sample_space",
+        "data_lag",
+    ):
+        if first_meta.get(key) is not None:
+            meta[key] = first_meta[key]
+    for key in ("contains_sensitive_data", "total_rows_rounded"):
+        if any(item.get(key) is True for item in metadata):
+            meta[key] = True
+    return meta
 
 
 def _source_rows(sources: Mapping[str, Mapping[str, Any]], engine: str) -> list[Any]:
@@ -3284,10 +3814,10 @@ def _yandex_totals(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
     }
 
 
-def _metrika_totals(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+def _metrika_totals(rows: Sequence[Mapping[str, Any]], *, prefix: str = "") -> dict[str, float]:
     return {
-        "visits": sum(_float_or_none(row.get("visits")) or 0.0 for row in rows),
-        "users": sum(_float_or_none(row.get("users")) or 0.0 for row in rows),
+        f"{prefix}visits": sum(_float_or_none(row.get("visits")) or 0.0 for row in rows),
+        f"{prefix}users": sum(_float_or_none(row.get("users")) or 0.0 for row in rows),
     }
 
 
@@ -3330,6 +3860,18 @@ def _stats_fill(entry: dict[str, Any], meta: Mapping[str, Any]) -> None:
     entry["truncated"] = bool(meta.get("truncated"))
     entry["limitations"] = _list_of_str(meta.get("limitations"))
     entry["warnings"] = _list_of_str(meta.get("warnings"))
+    # Sampling fields are copied only when the provider reported them; absence stays absent.
+    for key in (
+        "sampled",
+        "sample_share",
+        "sample_size",
+        "sample_space",
+        "data_lag",
+        "contains_sensitive_data",
+        "total_rows_rounded",
+    ):
+        if key in meta:
+            entry[key] = meta[key]
 
 
 def _crux_metrics(
