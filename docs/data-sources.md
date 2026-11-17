@@ -9,14 +9,41 @@ Legend: **R** = read, **W** = write (gated), *free* = no payment required.
 
 | | |
 |---|---|
-| Auth | OAuth 2.0 user token (`webmasters.readonly` for reports, `webmasters` for sitemaps) or a service-account JSON key added to the property as Full/Owner |
+| Auth | OAuth 2.0 user token (`webmasters.readonly` for every read; `webmasters` is required for sitemap submit/delete and is **not** requested) or a service-account JSON key added to the property as Full/Owner |
 | Base | `https://www.googleapis.com/webmasters/v3/` |
 | Free quota | 1,200 QPM per site and per user; 40k QPM / 30M QPD per project; **50,000 rows/day/site/type** for search analytics; URL Inspection 2,000/day/site, 600/min |
-| Methods | `POST /sites/{siteUrl}/searchAnalytics/query` (**R**), `GET /sites` (**R**), `PUT/DELETE /sites/{siteUrl}/sitemaps/{feedpath}` (**W**), `GET /sites/{siteUrl}/sitemaps` (**R**) |
+| Methods | `POST /sites/{siteUrl}/searchAnalytics/query` (**R**), `GET /sites` (**R**), `GET /sites/{siteUrl}/sitemaps` (**R**), `GET /sites/{siteUrl}/sitemaps/{feedpath}` (**R**), `PUT/DELETE /sites/{siteUrl}/sitemaps/{feedpath}` (**W**, disabled) |
 | URL Inspection | `POST https://searchconsole.googleapis.com/v1/urlInspection/index:inspect` (**R**, one URL per call, no batch, no live test) |
 | Dimensions | `query, page, country, device, date, hour, searchAppearance` |
-| Types | `web, image, video, news, discover, googleNews` |
+| Types | `web, image, video, news, discover, googleNews, webMultimodal` |
 | Latency | 2–3 days; `dataState=all` returns fresher but incomplete data (`metadata.first_incomplete_date`) |
+
+**URL Inspection.** One URL per call (2,000/day/site, 600/min). The adapter maps the full
+`indexStatusResult` (`verdict`, `coverageState`, `robotsTxtState`, `indexingState`,
+`lastCrawlTime`, `pageFetchState`, `googleCanonical`, `userCanonical`, `crawledAs`, `sitemap[]`,
+`referringUrls[]`), `richResultsResult` (`verdict`, `detectedItems[].richResultType`, per-item
+`issues[].issueMessage`/`severity`), `inspectionResultLink` and the request `languageCode`
+(default `en-US`; it localizes `coverageState` but not verdicts or canonicals). It is a report
+about Google's **last crawl**, not a live test, and the result carries
+`one_url_per_call`, `url_inspection_quota_2000_per_day` and `inspection_reflects_last_crawl`.
+
+**Sitemaps.** `sitemaps.list`/`sitemaps.get` map `path`, `lastSubmitted`, `lastDownloaded`,
+`isPending`, `isSitemapsIndex`, `type`, `errors`, `warnings` and
+`contents[{type,submitted,indexed}]`. GSC's `indexed` count is deprecated (always 0), so each
+content item carries `indexed_deprecated: true` and the result carries
+`sitemap_indexed_count_deprecated`. A sitemap index reports per-type totals only: GSC does not
+expose the child sitemap URLs, so `sitemap_index_children_not_exposed` is added instead of
+inventing children. Submit/delete require the full `webmasters` scope and remain
+`WRITE_DISABLED`; the engine signs `webmasters.readonly` only.
+
+**Search Analytics.** The CLI forwards `type`, `dimensionFilterGroups[].filters[]`,
+`dimensionFilterGroups[].filterLists[]`, `dataState` (`all`/`final`/`hourly_all`),
+`aggregationType` (`auto`/`byPage`/`byProperty`/`byNewsShowcasePanel`), a
+`searchAppearance` filter and a `brandedClassification` filter (`BRANDED`/`NON_BRANDED`, only
+`equals`, and never together with a `query` filter). Responses add
+`meta.responseAggregationType` and `meta.metadata` (normalized
+`first_incomplete_date`/`first_incomplete_hour`) without changing the row shape. Row limits are
+unchanged: at most **25,000 rows per page** and **50,000 rows/day/site/type**.
 
 **Hard rules for this tool**
 
@@ -38,7 +65,9 @@ Legend: **R** = read, **W** = write (gated), *free* = no payment required.
    token and is not refreshed.
 
 **Not available:** general URL submission (the Indexing API only supports `JobPosting`/`BroadcastEvent`),
-rich-result validation (no public API), query data beyond 16 months, real-time data.
+a standalone rich-result validation API (URL Inspection reports detected items/issues for the one
+inspected URL only), query data beyond 16 months, real-time data, and sitemap submit/delete from this
+engine (full `webmasters` scope, disabled).
 
 ## 2. Yandex Webmaster
 

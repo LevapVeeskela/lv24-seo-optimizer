@@ -7,6 +7,7 @@ different way (see ``docs/data-sources.md``).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Generic, TypeVar
@@ -22,7 +23,11 @@ SAMPLED = "sampled"
 LOW_TRAFFIC = "low_traffic"
 DEGRADED_HOST = "degraded_host"
 ONE_URL_PER_CALL = "one_url_per_call"
+URL_INSPECTION_QUOTA = "url_inspection_quota_2000_per_day"
+INSPECTION_REFLECTS_LAST_CRAWL = "inspection_reflects_last_crawl"
 NO_PER_URL_SITEMAP_ERRORS = "no_per_url_sitemap_errors"
+SITEMAP_INDEXED_DEPRECATED = "sitemap_indexed_count_deprecated"
+SITEMAP_INDEX_CHILDREN = "sitemap_index_children_not_exposed"
 TOKEN_EXPIRING = "token_expiring"  # noqa: S105 - a limitation code, not a secret
 PAID_PROVIDER = "paid_provider"
 PARTIAL_RESPONSE = "partial_response"
@@ -64,6 +69,9 @@ class ProviderResult(Generic[T]):
     truncated: bool = False
     limitations: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    # Provider response fields that do not fit the row model (GSC aggregation type and
+    # incomplete-data metadata). Merged into ``meta`` without overriding the core keys.
+    extra_meta: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def empty(self) -> bool:
@@ -71,13 +79,16 @@ class ProviderResult(Generic[T]):
 
     def to_meta(self) -> dict[str, Any]:
         """The ``meta`` block expected by the response envelope."""
-        meta: dict[str, Any] = {
-            "source": self.source,
-            "property_id": self.property_id,
-            "fetched_at": self.fetched_at.isoformat(),
-            "data_age_days": self.data_age_days,
-            "truncated": self.truncated,
-        }
+        meta: dict[str, Any] = dict(self.extra_meta)
+        meta.update(
+            {
+                "source": self.source,
+                "property_id": self.property_id,
+                "fetched_at": self.fetched_at.isoformat(),
+                "data_age_days": self.data_age_days,
+                "truncated": self.truncated,
+            }
+        )
         if self.total is not None:
             meta["total"] = self.total
         if self.limitations:

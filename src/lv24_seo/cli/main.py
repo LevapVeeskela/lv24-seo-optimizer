@@ -535,9 +535,55 @@ def gsc_query(
     end: Annotated[date, typer.Option("--end", help="Last day, YYYY-MM-DD.")],
     dimensions: Annotated[
         str,
-        typer.Option("--dimensions", help="Comma-separated: query,page,country,device,date."),
+        typer.Option(
+            "--dimensions",
+            help="Comma-separated: query,page,country,device,date,searchAppearance,hour.",
+        ),
     ] = "query",
     limit: Annotated[int, typer.Option("--limit", min=1, help="Maximum rows.")] = 100,
+    search_type: Annotated[
+        str,
+        typer.Option(
+            "--type",
+            help="Search type: web,image,video,news,discover,googleNews,webMultimodal.",
+        ),
+    ] = "web",
+    filters: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--filter",
+            help="Filter dimension:operator:expression; repeat for an AND group.",
+        ),
+    ] = None,
+    filter_lists: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--filter-list",
+            help="Multi-value filter dimension:expr1,expr2 (country/device); repeatable.",
+        ),
+    ] = None,
+    data_state: Annotated[
+        str,
+        typer.Option("--data-state", help="Data freshness: all, final or hourly_all."),
+    ] = "",
+    aggregation: Annotated[
+        str,
+        typer.Option(
+            "--aggregation",
+            help="auto, byPage, byProperty or byNewsShowcasePanel.",
+        ),
+    ] = "",
+    search_appearance: Annotated[
+        str,
+        typer.Option(
+            "--search-appearance",
+            help="Filter by a search appearance, e.g. AMP_BLUE_LINK.",
+        ),
+    ] = "",
+    branded: Annotated[
+        str,
+        typer.Option("--branded", help="Branded filter: branded or non_branded."),
+    ] = "",
     strict: Annotated[bool, typer.Option("--strict", help=_STRICT_HELP)] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
@@ -548,18 +594,91 @@ def gsc_query(
 ) -> None:
     """Query GSC search analytics for one date range."""
     dims = tuple(part.strip() for part in dimensions.split(",") if part.strip())
-    payload = _run(
-        config_path,
-        lambda service, config: service.gsc_query(
+
+    def operation(service: SeoService, config: SeoConfig) -> dict[str, Any]:
+        query_filters = _gsc_filter_args(filters, search_appearance, branded)
+        query_filter_lists = _gsc_filter_list_args(filter_lists)
+        return service.gsc_query(
             start=start,
             end=end,
             dimensions=dims,
             limit=limit,
-        ),
-        persist=True,
-        strict=strict,
-    )
+            search_type=search_type,
+            filters=query_filters or None,
+            filter_lists=query_filter_lists or None,
+            data_state=data_state,
+            aggregation=aggregation,
+        )
+
+    payload = _run(config_path, operation, persist=True, strict=strict)
     emit(payload, as_json=as_json, lines=_gsc_lines(payload))
+
+
+@gsc_app.command("inspect")
+def gsc_inspect(
+    url: Annotated[str, typer.Option("--url", help="Absolute URL to inspect (one per call).")],
+    language: Annotated[
+        str,
+        typer.Option("--language", help="BCP-47 language for localized states (default en-US)."),
+    ] = "en-US",
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Inspect one URL with GSC URL Inspection (read-only)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.gsc_inspect(url, language=language),
+    )
+    emit(payload, as_json=as_json, lines=_gsc_inspect_lines(payload))
+
+
+@gsc_app.command("sitemaps")
+def gsc_sitemaps(
+    sitemap_index: Annotated[
+        str,
+        typer.Option(
+            "--sitemap-index",
+            help="Sitemap index URL whose contents summary should be added.",
+        ),
+    ] = "",
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """List the property's sitemaps as Google reports them (read-only)."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.gsc_sitemaps(sitemap_index=sitemap_index),
+    )
+    emit(payload, as_json=as_json, lines=_gsc_sitemaps_lines(payload))
+
+
+@gsc_app.command("sitemap")
+def gsc_sitemap(
+    path: Annotated[
+        str,
+        typer.Option("--path", help="Absolute sitemap (or sitemap index) URL."),
+    ],
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Config file to use.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable envelope output.")
+    ] = False,
+) -> None:
+    """Read one sitemap entry, including a sitemap index's contents summary."""
+    payload = _run(
+        config_path,
+        lambda service, config: service.gsc_sitemap(path=path),
+    )
+    emit(payload, as_json=as_json, lines=_gsc_sitemap_lines(payload))
 
 
 @yandex_app.command("queries")
@@ -2809,6 +2928,199 @@ def _stats_value(name: str, value: Any) -> str:
     if float(value).is_integer():
         return str(int(value))
     return f"{value:.2f}"
+
+
+def _gsc_filter_args(
+    values: Sequence[str] | None,
+    search_appearance: str,
+    branded: str,
+) -> list[dict[str, str]]:
+    """Parse ``--filter``/``--search-appearance``/``--branded`` into API filter objects."""
+    filters: list[dict[str, str]] = []
+    for raw in values or []:
+        text = raw.strip()
+        parts = text.split(":", 2)
+        if len(parts) != 3 or not all(part.strip() for part in parts):
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=f"--filter expects dimension:operator:expression, got {raw!r}",
+                next_action="pass --filter query:contains:coffee",
+            )
+        filters.append(
+            {
+                "dimension": parts[0].strip(),
+                "operator": parts[1].strip(),
+                "expression": parts[2].strip(),
+            }
+        )
+    appearance = search_appearance.strip()
+    if appearance:
+        filters.append(
+            {
+                "dimension": "searchAppearance",
+                "operator": "equals",
+                "expression": appearance,
+            }
+        )
+    brand = branded.strip()
+    if brand:
+        canonical = {
+            "branded": "BRANDED",
+            "non_branded": "NON_BRANDED",
+            "non-branded": "NON_BRANDED",
+            "nonbranded": "NON_BRANDED",
+            "unbranded": "NON_BRANDED",
+        }.get(brand.casefold())
+        if canonical is None:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=f"--branded expects branded or non_branded, got {branded!r}",
+                next_action="pass --branded branded or --branded non_branded",
+            )
+        filters.append(
+            {
+                "dimension": "brandedClassification",
+                "operator": "equals",
+                "expression": canonical,
+            }
+        )
+    return filters
+
+
+def _gsc_filter_list_args(values: Sequence[str] | None) -> list[dict[str, Any]]:
+    """Parse ``--filter-list dimension:expr1,expr2`` into multi-value filter objects."""
+    filter_lists: list[dict[str, Any]] = []
+    for raw in values or []:
+        dimension, separator, expressions = raw.strip().partition(":")
+        items = [part.strip() for part in expressions.split(",") if part.strip()]
+        if not separator or not dimension.strip() or not items:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=f"--filter-list expects dimension:expr1,expr2, got {raw!r}",
+                next_action="pass --filter-list country:FRA,DEU",
+            )
+        filter_lists.append({"dimension": dimension.strip(), "expressions": items})
+    return filter_lists
+
+
+def _gsc_inspect_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    if not isinstance(data, Mapping):
+        return []
+    inspection = data.get("inspection")
+    if not isinstance(inspection, Mapping):
+        return ["gsc inspect: no inspection result"]
+    lines = [
+        f"url: {inspection.get('url') or '-'}",
+        f"verdict: {inspection.get('verdict') or '-'}",
+        f"coverage: {inspection.get('coverage_state') or '-'}",
+        (
+            f"indexing: {inspection.get('indexing_state') or '-'}  "
+            f"robots.txt: {inspection.get('robots_txt_state') or '-'}  "
+            f"fetch: {inspection.get('page_fetch_state') or '-'}"
+        ),
+        f"crawled as: {inspection.get('crawled_as') or '-'}",
+        f"last crawl: {inspection.get('last_crawl_time') or '-'}",
+        (
+            f"canonical: google={inspection.get('google_canonical') or '-'}  "
+            f"user={inspection.get('user_canonical') or '-'}"
+        ),
+    ]
+    sitemaps = inspection.get("sitemap")
+    referring = inspection.get("referring_urls")
+    lines.append(f"sitemaps: {_count(sitemaps)}  referring URLs: {_count(referring)}")
+    rich = inspection.get("rich_results")
+    if isinstance(rich, Mapping):
+        detected = rich.get("detected_items")
+        lines.append(
+            f"rich results: {rich.get('verdict') or '-'} ({_count(detected)} detected types)"
+        )
+        if isinstance(detected, list):
+            for item in detected[:5]:
+                if not isinstance(item, Mapping):
+                    continue
+                issues = item.get("items")
+                issue_count = 0
+                if isinstance(issues, list):
+                    issue_count = sum(
+                        _count(entry.get("issues"))
+                        for entry in issues
+                        if isinstance(entry, Mapping)
+                    )
+                lines.append(f"  {item.get('rich_result_type') or '-'}: {issue_count} issue(s)")
+    link = inspection.get("inspection_result_link")
+    if link:
+        lines.append(f"details: {link}")
+    limitations = (payload.get("meta") or {}).get("limitations")
+    if limitations:
+        lines.append("limitations: " + "; ".join(str(item) for item in limitations))
+    return lines
+
+
+def _gsc_sitemaps_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    rows = data.get("rows") if isinstance(data, Mapping) else []
+    lines = [f"gsc sitemaps: {_count(rows)}"]
+    lines.extend(
+        _rows_table(
+            rows,
+            (
+                "path",
+                "type",
+                "is_sitemaps_index",
+                "last_submitted",
+                "last_downloaded",
+                "is_pending",
+                "errors",
+                "warnings",
+            ),
+        )
+    )
+    index_row = data.get("sitemap_index") if isinstance(data, Mapping) else None
+    if isinstance(index_row, Mapping):
+        lines.append(f"sitemap index: {index_row.get('path') or '-'}")
+        contents = index_row.get("contents")
+        if isinstance(contents, list) and contents:
+            lines.extend(_rows_table(contents, ("type", "submitted", "indexed")))
+        else:
+            lines.append("contents: none reported (child sitemap URLs are not exposed)")
+    limitations = (payload.get("meta") or {}).get("limitations")
+    if limitations:
+        lines.append("limitations: " + "; ".join(str(item) for item in limitations))
+    return lines
+
+
+def _gsc_sitemap_lines(payload: Mapping[str, Any]) -> list[str]:
+    if not payload.get("ok"):
+        return []
+    data = payload.get("data") or {}
+    sitemap = data.get("sitemap") if isinstance(data, Mapping) else None
+    if not isinstance(sitemap, Mapping):
+        return ["gsc sitemap: no entry"]
+    lines = [
+        f"path: {sitemap.get('path') or '-'}",
+        f"type: {sitemap.get('type') or '-'}  index: {_yes_no(sitemap.get('is_sitemaps_index'))}",
+        (
+            f"submitted: {sitemap.get('last_submitted') or '-'}  "
+            f"downloaded: {sitemap.get('last_downloaded') or '-'}  "
+            f"pending: {_yes_no(sitemap.get('is_pending'))}"
+        ),
+        f"errors: {sitemap.get('errors', 0)}  warnings: {sitemap.get('warnings', 0)}",
+    ]
+    contents = sitemap.get("contents")
+    if isinstance(contents, list) and contents:
+        lines.append("contents (indexed is deprecated):")
+        lines.extend(_rows_table(contents, ("type", "submitted", "indexed")))
+    else:
+        lines.append("contents: none reported")
+    limitations = (payload.get("meta") or {}).get("limitations")
+    if limitations:
+        lines.append("limitations: " + "; ".join(str(item) for item in limitations))
+    return lines
 
 
 def _gsc_lines(payload: Mapping[str, Any]) -> list[str]:

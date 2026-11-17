@@ -326,9 +326,16 @@ class FakeService:
         end: Any,
         dimensions: Sequence[str] = ("query",),
         limit: int = 100,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         type(self).calls.append(
-            {"start": start, "end": end, "dimensions": tuple(dimensions), "limit": limit}
+            {
+                "start": start,
+                "end": end,
+                "dimensions": tuple(dimensions),
+                "limit": limit,
+                **kwargs,
+            }
         )
         return type(self).response
 

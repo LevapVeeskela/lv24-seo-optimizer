@@ -12,7 +12,14 @@ import pytest
 
 from lv24_seo.core.errors import AUTH_INVALID, AUTH_REQUIRED, SeoError
 from lv24_seo.core.http import HttpClient
-from lv24_seo.providers.base import ONE_URL_PER_CALL, ROWS_CAP_50000
+from lv24_seo.providers.base import (
+    INSPECTION_REFLECTS_LAST_CRAWL,
+    ONE_URL_PER_CALL,
+    ROWS_CAP_50000,
+    SITEMAP_INDEX_CHILDREN,
+    SITEMAP_INDEXED_DEPRECATED,
+    URL_INSPECTION_QUOTA,
+)
 from lv24_seo.providers.gsc import GscClient
 from lv24_seo.providers.gsc import client as gsc_client
 
@@ -80,8 +87,11 @@ def test_list_sitemaps_mapping() -> None:
                         "lastSubmitted": "2026-11-01T10:00:00.000Z",
                         "lastDownloaded": "2026-11-09T08:30:00.000Z",
                         "isPending": True,
+                        "isSitemapsIndex": False,
+                        "type": "sitemap",
                         "errors": "2",
                         "warnings": "1",
+                        "contents": [{"type": "web", "submitted": "120", "indexed": "0"}],
                     }
                 ]
             },
@@ -99,10 +109,53 @@ def test_list_sitemaps_mapping() -> None:
             "last_submitted": "2026-11-01T10:00:00.000Z",
             "last_downloaded": "2026-11-09T08:30:00.000Z",
             "is_pending": True,
+            "is_sitemaps_index": False,
+            "type": "sitemap",
             "errors": 2,
             "warnings": 1,
+            "contents": [
+                {
+                    "type": "web",
+                    "submitted": 120,
+                    "indexed": 0,
+                    "indexed_deprecated": True,
+                }
+            ],
         }
     ]
+    assert result.limitations == (SITEMAP_INDEXED_DEPRECATED,)
+
+
+def test_get_sitemap_maps_a_sitemap_index() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "path": "https://example.com/sitemap-seo.xml",
+                "lastSubmitted": "2026-11-01T10:00:00.000Z",
+                "isSitemapsIndex": True,
+                "type": "sitemap",
+                "errors": "0",
+                "warnings": "0",
+                "contents": [{"type": "sitemap", "submitted": "3", "indexed": "0"}],
+            },
+        )
+
+    result = _gsc(handler).get_sitemap("https://example.com/sitemap-seo.xml")
+
+    raw_path = seen[0].url.raw_path.decode("ascii")
+    assert (
+        "/sites/https%3A%2F%2Fexample.com%2F/sitemaps/https%3A%2F%2Fexample.com%2Fsitemap-seo.xml"
+    ) in raw_path
+    assert result.rows[0]["is_sitemaps_index"] is True
+    assert result.rows[0]["contents"][0]["submitted"] == 3
+    assert result.limitations == (
+        SITEMAP_INDEXED_DEPRECATED,
+        SITEMAP_INDEX_CHILDREN,
+    )
 
 
 def test_search_analytics_maps_rows_and_data_age(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -333,6 +386,7 @@ def test_inspect_url_maps_inspection_result() -> None:
             200,
             json={
                 "inspectionResult": {
+                    "inspectionResultLink": "https://search.google.com/search-console/inspect?x=1",
                     "indexStatusResult": {
                         "verdict": "PASS",
                         "coverageState": "Submitted and indexed",
@@ -342,12 +396,37 @@ def test_inspect_url_maps_inspection_result() -> None:
                         "userCanonical": "https://example.com/page",
                         "robotsTxtState": "ALLOWED",
                         "pageFetchState": "SUCCESSFUL",
-                    }
+                        "crawledAs": "MOBILE",
+                        "sitemap": ["https://example.com/sitemap.xml"],
+                        "referringUrls": [
+                            "https://example.com/",
+                            "https://example.com/other",
+                        ],
+                    },
+                    "richResultsResult": {
+                        "verdict": "PASS",
+                        "detectedItems": [
+                            {
+                                "richResultType": "Breadcrumbs",
+                                "items": [
+                                    {
+                                        "name": "Breadcrumb",
+                                        "issues": [
+                                            {
+                                                "issueMessage": "Missing field",
+                                                "severity": "WARNING",
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ],
+                    },
                 }
             },
         )
 
-    result = _gsc(handler).inspect_url("https://example.com/page")
+    result = _gsc(handler).inspect_url("https://example.com/page", language_code="ru-RU")
 
     assert str(seen[0].url) == (
         "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect"
@@ -355,22 +434,129 @@ def test_inspect_url_maps_inspection_result() -> None:
     assert _body(seen[0]) == {
         "inspectionUrl": "https://example.com/page",
         "siteUrl": PROPERTY,
+        "languageCode": "ru-RU",
     }
     assert result.rows == [
         {
             "url": "https://example.com/page",
             "verdict": "PASS",
             "coverage_state": "Submitted and indexed",
+            "robots_txt_state": "ALLOWED",
             "indexing_state": "INDEXING_ALLOWED",
             "last_crawl_time": "2026-11-09T08:00:00Z",
-            "canonical": "https://example.com/page",
-            "robots_txt_state": "ALLOWED",
             "page_fetch_state": "SUCCESSFUL",
+            "google_canonical": "https://example.com/page",
+            "user_canonical": "https://example.com/page",
+            "canonical": "https://example.com/page",
+            "crawled_as": "MOBILE",
+            "sitemap": ["https://example.com/sitemap.xml"],
+            "referring_urls": [
+                "https://example.com/",
+                "https://example.com/other",
+            ],
+            "rich_results": {
+                "verdict": "PASS",
+                "detected_items": [
+                    {
+                        "rich_result_type": "Breadcrumbs",
+                        "items": [
+                            {
+                                "name": "Breadcrumb",
+                                "issues": [
+                                    {
+                                        "message": "Missing field",
+                                        "severity": "WARNING",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+            "inspection_result_link": ("https://search.google.com/search-console/inspect?x=1"),
         }
     ]
     assert result.total == 1
     assert result.truncated is False
-    assert result.limitations == (ONE_URL_PER_CALL,)
+    assert result.limitations == (
+        ONE_URL_PER_CALL,
+        URL_INSPECTION_QUOTA,
+        INSPECTION_REFLECTS_LAST_CRAWL,
+    )
+
+
+def test_search_analytics_forwards_filters_type_state_and_returns_metadata() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "rows": [
+                    {
+                        "keys": ["coffee", "MOBILE"],
+                        "clicks": 2,
+                        "impressions": 20,
+                        "ctr": 0.1,
+                        "position": 4.0,
+                    }
+                ],
+                "responseAggregationType": "byPage",
+                "metadata": {"firstIncompleteDate": "2026-11-08"},
+            },
+        )
+
+    result = _gsc(handler).search_analytics(
+        start_date=date(2026, 11, 1),
+        end_date=date(2026, 11, 9),
+        dimensions=("query", "device"),
+        search_type="image",
+        filters=[{"dimension": "country", "operator": "equals", "expression": "BLR"}],
+        filter_lists=[{"dimension": "device", "expressions": ["MOBILE", "TABLET"]}],
+        data_state="all",
+        aggregation_type="byPage",
+    )
+
+    body = _body(seen[0])
+    assert body["type"] == "image"
+    assert body["dataState"] == "all"
+    assert body["aggregationType"] == "byPage"
+    assert body["dimensionFilterGroups"] == [
+        {
+            "groupType": "and",
+            "filters": [{"dimension": "country", "operator": "equals", "expression": "BLR"}],
+            "filterLists": [{"dimension": "device", "expressions": ["MOBILE", "TABLET"]}],
+        }
+    ]
+    assert result.extra_meta == {
+        "responseAggregationType": "byPage",
+        "metadata": {"first_incomplete_date": "2026-11-08"},
+    }
+    assert result.to_meta()["responseAggregationType"] == "byPage"
+    assert result.to_meta()["metadata"] == {"first_incomplete_date": "2026-11-08"}
+
+
+def test_search_analytics_default_body_stays_backward_compatible() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"rows": []})
+
+    _gsc(handler).search_analytics(
+        start_date=date(2026, 11, 1),
+        end_date=date(2026, 11, 2),
+    )
+
+    assert _body(seen[0]) == {
+        "startDate": "2026-11-01",
+        "endDate": "2026-11-02",
+        "dimensions": ["query"],
+        "type": "web",
+        "rowLimit": 25_000,
+        "startRow": 0,
+    }
 
 
 def test_401_is_mapped_to_auth_invalid() -> None:

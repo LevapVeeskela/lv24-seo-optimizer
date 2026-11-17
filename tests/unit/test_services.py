@@ -142,6 +142,9 @@ class FakeGscClient:
         row_limit: int = 25_000,
         max_rows: int = 50_000,
         filters: Sequence[dict[str, Any]] | None = None,
+        filter_lists: Sequence[dict[str, Any]] | None = None,
+        data_state: str | None = None,
+        aggregation_type: str | None = None,
     ) -> ProviderResult[dict[str, Any]]:
         self.calls.append(
             {
@@ -152,6 +155,9 @@ class FakeGscClient:
                 "row_limit": row_limit,
                 "max_rows": max_rows,
                 "filters": filters,
+                "filter_lists": filter_lists,
+                "data_state": data_state,
+                "aggregation_type": aggregation_type,
             }
         )
         index = min(len(self.calls) - 1, len(self.responses) - 1)
@@ -356,6 +362,9 @@ def test_gsc_query_returns_rows_meta_and_persists_metrics(store: Store) -> None:
             "row_limit": 100,
             "max_rows": 100,
             "filters": None,
+            "filter_lists": None,
+            "data_state": None,
+            "aggregation_type": None,
         }
     ]
 

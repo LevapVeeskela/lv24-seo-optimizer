@@ -761,7 +761,7 @@ def _report_from_payload(payload: Mapping[str, Any]) -> Report | None:
 def build_indexing_triage(state: ToolState) -> Callable[..., CallToolResult]:
     """``seo_indexing_triage``: bucket URL-level indexing events by root cause."""
 
-    def seo_indexing_triage(max_examples: int = 5) -> CallToolResult:
+    def seo_indexing_triage(max_examples: int = 5, url: str = "") -> CallToolResult:
         def _run() -> Envelope:
             examples, examples_warning = bounded_int(
                 max_examples,
@@ -771,6 +771,9 @@ def build_indexing_triage(state: ToolState) -> Callable[..., CallToolResult]:
                 default=5,
             )
             warnings = [examples_warning] if examples_warning else []
+            target = url.strip()
+            if target:
+                _require_http_url(target, name="url")
             payload, ignored = invoke(state.service, "yandex_indexing", arguments={})
             warnings.extend(ignored)
             warnings.extend(_strings(payload.get("warnings")))
@@ -791,17 +794,57 @@ def build_indexing_triage(state: ToolState) -> Callable[..., CallToolResult]:
             buckets = triage(yandex=yandex_rows, max_examples=examples)
             provider_meta = _mapping(payload.get("meta"))
             limitations = _strings(provider_meta.get("limitations"))
+            inspection: dict[str, Any] | None = None
+            inspection_limitations: list[str] = []
+            if target:
+                try:
+                    inspected, inspect_ignored = invoke(
+                        state.service,
+                        "gsc_inspect",
+                        arguments={"url": target},
+                    )
+                except SeoError as exc:
+                    warnings.append(f"gsc inspection: {exc.code}: {exc.message}")
+                else:
+                    warnings.extend(inspect_ignored)
+                    warnings.extend(_strings(inspected.get("warnings")))
+                    if inspected.get("ok"):
+                        inspection_data = _mapping(inspected.get("data"))
+                        raw_inspection = inspection_data.get("inspection")
+                        if isinstance(raw_inspection, Mapping):
+                            inspection = _mapping(raw_inspection)
+                        inspection_limitations = _strings(
+                            _mapping(inspected.get("meta")).get("limitations")
+                        )
+                    else:
+                        error = _mapping(inspected.get("error"))
+                        code = str(error.get("code") or "UPSTREAM_UNAVAILABLE")
+                        message = str(error.get("message") or "inspection failed")
+                        warnings.append(f"gsc inspection: {code}: {message}")
+            limitations.extend(inspection_limitations)
+            if not target:
+                google_note = (
+                    "google: URL-level coverage is not exposed by the configured service; "
+                    "pass url=... to add one URL Inspection result"
+                )
+            elif inspection is not None:
+                google_note = "google: URL Inspection is one URL per call (2,000/day/site quota)"
+            else:
+                google_note = "google: URL Inspection failed; the triage buckets are unchanged"
             limitations.extend(
                 [
-                    "google: URL-level coverage is not exposed by the configured service",
+                    google_note,
                     "crawl: crawl issues are not exposed here; run seo_crawl_site separately",
                 ]
             )
             if not buckets:
                 warnings.append("yandex: no per-URL indexing events returned")
 
+            sources = ["yandex_webmaster"]
+            if inspection is not None:
+                sources.append("gsc")
             meta: dict[str, Any] = {
-                "sources": ["yandex_webmaster"],
+                "sources": sources,
                 "buckets": len(buckets),
                 "limitations": _unique(limitations),
                 "truncated": bool(provider_meta.get("truncated", False)),
@@ -809,23 +852,23 @@ def build_indexing_triage(state: ToolState) -> Callable[..., CallToolResult]:
             if "data_age_days" in provider_meta:
                 meta["data_age_days"] = provider_meta["data_age_days"]
 
-            return ok(
-                {
-                    "buckets": [
-                        {
-                            "reason": bucket.reason,
-                            "count": bucket.count,
-                            "examples": list(bucket.examples),
-                            "next_action": bucket.next_action,
-                            "engines": list(bucket.engines),
-                        }
-                        for bucket in buckets
-                    ],
-                    "sources": ["yandex_webmaster"],
-                },
-                meta=meta,
-                warnings=_unique(warnings),
-            )
+            response: dict[str, Any] = {
+                "buckets": [
+                    {
+                        "reason": bucket.reason,
+                        "count": bucket.count,
+                        "examples": list(bucket.examples),
+                        "next_action": bucket.next_action,
+                        "engines": list(bucket.engines),
+                    }
+                    for bucket in buckets
+                ],
+                "sources": sources,
+            }
+            if inspection is not None:
+                response["inspection"] = inspection
+
+            return ok(response, meta=meta, warnings=_unique(warnings))
 
         return respond("seo_indexing_triage", _run)
 

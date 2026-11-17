@@ -123,8 +123,18 @@ TOOLS: tuple[ToolSpec, ...] = (
         title="Indexing triage",
         summary="Group not-indexed URLs by reason and propose the cheapest fix.",
         providers=("gsc", "yandex_webmaster", "crawl"),
-        inputs={"max_examples": "example URLs per bucket (0..20, default 5)"},
-        returns="{buckets:[{reason,count,examples,next_action}]}",
+        inputs={
+            "max_examples": "example URLs per bucket (0..20, default 5)",
+            "url": "optional absolute URL; adds one live GSC URL Inspection result",
+        },
+        returns=(
+            "{buckets:[{reason,count,examples,next_action}], "
+            "inspection:{verdict,coverage_state,rich_results,...}}"
+        ),
+        limitations=(
+            "URL Inspection is one URL per call (2,000/day/site quota)",
+            "no bulk URL inspection or live-test request",
+        ),
     ),
     ToolSpec(
         name="seo_log_analysis",

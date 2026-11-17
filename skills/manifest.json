@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "schema_hash": "sha256:2060d1bbb28dcfde9fe4016b3ee03989cb90f6fdba795552d56bbdf48a9e5ab1",
+  "schema_hash": "sha256:343a6dc74b73f7164dabc9ffb244d87e9cd059119d56d1c6f747af67f546906a",
   "generated_from": "schemas/tools.json",
   "skills": [
     {
@@ -18,7 +18,7 @@
     },
     {
       "name": "seo-indexing-triage",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "path": "skills/seo-indexing-triage/SKILL.md",
       "description": "Bucket not-indexed URLs by cause and produce an ordered fix plan.",
       "requires_tools": [

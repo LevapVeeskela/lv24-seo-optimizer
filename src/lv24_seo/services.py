@@ -117,6 +117,43 @@ _ENGINE_NEXT_ACTIONS: dict[str, str] = {
 _WEEKLY_GSC_LIMIT = 5_000
 _WEEKLY_YANDEX_LIMIT = 500
 _GSC_MAX_LIMIT = 50_000
+# GSC searchAnalytics request enums (docs/data-sources.md). Values are canonicalized from the
+# caller's spelling so `--type googleNews` and `--aggregation bypage` both reach the API.
+_GSC_SEARCH_TYPES: dict[str, str] = {
+    "web": "web",
+    "image": "image",
+    "video": "video",
+    "news": "news",
+    "discover": "discover",
+    "googlenews": "googleNews",
+    "webmultimodal": "webMultimodal",
+}
+_GSC_DATA_STATES: dict[str, str] = {
+    "all": "all",
+    "final": "final",
+    "hourly_all": "hourly_all",
+}
+_GSC_AGGREGATIONS: dict[str, str] = {
+    "auto": "auto",
+    "bypage": "byPage",
+    "byproperty": "byProperty",
+    "bynewsshowcasepanel": "byNewsShowcasePanel",
+}
+# Dimensions accepted in dimensionFilterGroups[].filters[] and filterLists[].
+_GSC_FILTER_DIMENSIONS: frozenset[str] = frozenset(
+    {"country", "device", "page", "query", "searchAppearance", "brandedClassification"}
+)
+_GSC_FILTER_LIST_DIMENSIONS: frozenset[str] = frozenset({"country", "device"})
+_GSC_FILTER_OPERATORS: frozenset[str] = frozenset(
+    {"contains", "equals", "notContains", "notEquals", "includingRegex", "excludingRegex"}
+)
+_GSC_BRANDED_VALUES: dict[str, str] = {
+    "branded": "BRANDED",
+    "non_branded": "NON_BRANDED",
+    "non-branded": "NON_BRANDED",
+    "nonbranded": "NON_BRANDED",
+    "unbranded": "NON_BRANDED",
+}
 _YANDEX_MAX_LIMIT = 500
 
 # Dashboard stats: a date-dimensioned GSC window has one row per day, and the
@@ -735,13 +772,29 @@ class SeoService:
         end: date,
         dimensions: Sequence[str] = ("query",),
         limit: int = 100,
+        search_type: str = "web",
+        filters: Sequence[Mapping[str, Any]] | None = None,
+        filter_lists: Sequence[Mapping[str, Any]] | None = None,
+        data_state: str = "",
+        aggregation: str = "",
     ) -> dict[str, Any]:
         """Query GSC search analytics and persist the returned metrics/pages."""
         warnings: list[str] = []
         return self._respond(
             "gsc_query",
             warnings,
-            lambda: self._gsc_query(start, end, dimensions, limit, warnings),
+            lambda: self._gsc_query(
+                start,
+                end,
+                dimensions,
+                limit,
+                warnings,
+                search_type=search_type,
+                filters=filters,
+                filter_lists=filter_lists,
+                data_state=data_state,
+                aggregation=aggregation,
+            ),
         )
 
     def _gsc_query(
@@ -751,12 +804,24 @@ class SeoService:
         dimensions: Sequence[str],
         limit: int,
         warnings: list[str],
+        *,
+        search_type: str = "web",
+        filters: Sequence[Mapping[str, Any]] | None = None,
+        filter_lists: Sequence[Mapping[str, Any]] | None = None,
+        data_state: str = "",
+        aggregation: str = "",
     ) -> dict[str, Any]:
         first = _as_date(start, name="start")
         last = _as_date(end, name="end")
         days_between(first, last)
         dims = _dimensions(dimensions)
         size = _positive_int(limit, name="limit", maximum=_GSC_MAX_LIMIT)
+        query_type = _gsc_search_type(search_type)
+        query_filters = _gsc_filters(filters)
+        query_filter_lists = _gsc_filter_lists(filter_lists)
+        state = _gsc_data_state(data_state)
+        aggregation_type = _gsc_aggregation(aggregation)
+        _gsc_check_branded(query_filters, query_filter_lists)
 
         client = self._client_for("gsc", warnings)
         result = _call(
@@ -765,8 +830,13 @@ class SeoService:
             start_date=first,
             end_date=last,
             dimensions=dims,
+            search_type=query_type,
             row_limit=size,
             max_rows=size,
+            filters=query_filters or None,
+            filter_lists=query_filter_lists or None,
+            data_state=state or None,
+            aggregation_type=aggregation_type or None,
         )
         rows = _result_rows(result)
         warnings.extend(_result_warnings(result))
@@ -778,8 +848,17 @@ class SeoService:
                 "end": last.isoformat(),
                 "dimensions": list(dims),
                 "limit": size,
+                "type": query_type,
             }
         )
+        if state:
+            meta["dataState"] = state
+        if aggregation_type:
+            meta["aggregationType"] = aggregation_type
+        if query_filters:
+            meta["filters"] = query_filters
+        if query_filter_lists:
+            meta["filterLists"] = query_filter_lists
 
         property_id = _gsc_property(result, self._config)
         if self._store is None:
@@ -790,6 +869,96 @@ class SeoService:
             meta["persisted"] = self._persist_gsc(rows, dims, first, last, property_id)
 
         return ok({"rows": rows}, meta=meta, warnings=warnings)
+
+    def gsc_inspect(self, url: str, language: str = "en-US") -> dict[str, Any]:
+        """Inspect one URL with GSC URL Inspection (one URL per call, read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "gsc_inspect",
+            warnings,
+            lambda: self._gsc_inspect(url, language, warnings),
+        )
+
+    def _gsc_inspect(self, url: str, language: str, warnings: list[str]) -> dict[str, Any]:
+        target = _absolute_http_url(url, name="url")
+        language_code = _gsc_language(language)
+        client = self._client_for("gsc", warnings)
+        result = _call(client, "inspect_url", target, language_code=language_code)
+        rows = _result_rows(result)
+        warnings.extend(_result_warnings(result))
+        inspection = rows[0] if rows else {}
+        meta = _result_meta(result, source="gsc", rows=rows)
+        meta["language"] = language_code
+        return ok(
+            {"url": target, "language": language_code, "inspection": inspection},
+            meta=meta,
+            warnings=warnings,
+        )
+
+    def gsc_sitemaps(self, *, sitemap_index: str = "") -> dict[str, Any]:
+        """List the property's sitemaps; optionally add one sitemap index's detail."""
+        warnings: list[str] = []
+        return self._respond(
+            "gsc_sitemaps",
+            warnings,
+            lambda: self._gsc_sitemaps(sitemap_index, warnings),
+        )
+
+    def _gsc_sitemaps(self, sitemap_index: str, warnings: list[str]) -> dict[str, Any]:
+        index_url = sitemap_index.strip()
+        if index_url:
+            index_url = _absolute_http_url(index_url, name="sitemap_index")
+        client = self._client_for("gsc", warnings)
+        result = _call(client, "list_sitemaps")
+        rows = _result_rows(result)
+        warnings.extend(_result_warnings(result))
+
+        index_row: dict[str, Any] | None = None
+        index_limitations: list[str] = []
+        if index_url:
+            index_result = _call(client, "get_sitemap", index_url)
+            index_rows = _result_rows(index_result)
+            warnings.extend(_result_warnings(index_result))
+            index_limitations = _result_limitations(index_result)
+            index_row = index_rows[0] if index_rows else None
+            if index_row is not None and not index_row.get("is_sitemaps_index"):
+                warnings.append(
+                    f"sitemap_index: {index_url} is not reported as a sitemap index "
+                    "(isSitemapsIndex=false)"
+                )
+
+        meta = _result_meta(result, source="gsc", rows=rows)
+        limitations = _unique([*_result_limitations(result), *index_limitations])
+        if limitations:
+            meta["limitations"] = limitations
+        meta["sitemap_index"] = index_url or None
+        return ok(
+            {"rows": rows, "sitemap_index": index_row},
+            meta=meta,
+            warnings=_unique(warnings),
+        )
+
+    def gsc_sitemap(self, *, path: str) -> dict[str, Any]:
+        """Read one sitemap entry by its feed URL (read-only)."""
+        warnings: list[str] = []
+        return self._respond(
+            "gsc_sitemap",
+            warnings,
+            lambda: self._gsc_sitemap(path, warnings),
+        )
+
+    def _gsc_sitemap(self, path: str, warnings: list[str]) -> dict[str, Any]:
+        target = _absolute_http_url(path, name="path")
+        client = self._client_for("gsc", warnings)
+        result = _call(client, "get_sitemap", target)
+        rows = _result_rows(result)
+        warnings.extend(_result_warnings(result))
+        sitemap = rows[0] if rows else {}
+        return ok(
+            {"path": target, "sitemap": sitemap},
+            meta=_result_meta(result, source="gsc", rows=rows),
+            warnings=warnings,
+        )
 
     def _persist_gsc(
         self,
@@ -1118,7 +1287,9 @@ class SeoService:
                 message="gsc sitemap submit is not wired yet",
                 next_action=(
                     "submit the sitemap in Search Console until the GSC write adapter lands; "
-                    "the engine never pretends a write happened"
+                    "GSC writes need the full https://www.googleapis.com/auth/webmasters scope "
+                    "(the engine signs webmasters.readonly), and the engine never pretends a "
+                    "write happened"
                 ),
                 retryable=False,
             )
@@ -3697,6 +3868,171 @@ def _dimensions(dimensions: object) -> tuple[str, ...]:
             next_action="use at least one of query, page, country, device or date",
         )
     return tuple(names)
+
+
+def _gsc_search_type(value: str) -> str:
+    canonical = _GSC_SEARCH_TYPES.get(value.strip().casefold())
+    if canonical is None:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"unsupported gsc type: {value!r}",
+            next_action=f"pass one of: {', '.join(sorted(set(_GSC_SEARCH_TYPES.values())))}",
+        )
+    return canonical
+
+
+def _gsc_data_state(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+    canonical = _GSC_DATA_STATES.get(text.casefold())
+    if canonical is None:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"unsupported gsc data state: {value!r}",
+            next_action="pass all, final or hourly_all",
+        )
+    return canonical
+
+
+def _gsc_aggregation(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+    canonical = _GSC_AGGREGATIONS.get(text.casefold())
+    if canonical is None:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"unsupported gsc aggregation: {value!r}",
+            next_action=f"pass one of: {', '.join(sorted(set(_GSC_AGGREGATIONS.values())))}",
+        )
+    return canonical
+
+
+def _gsc_filters(values: Sequence[Mapping[str, Any]] | None) -> list[dict[str, str]]:
+    """Validate ``dimensionFilterGroups[].filters`` entries without trusting the surface."""
+    if values is None:
+        return []
+    filters: list[dict[str, str]] = []
+    for raw in values:
+        if not isinstance(raw, Mapping):
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="each filter must be an object",
+                next_action="pass --filter dimension:operator:expression",
+            )
+        dimension = str(raw.get("dimension") or "").strip()
+        operator = str(raw.get("operator") or "").strip()
+        expression = str(raw.get("expression") or "").strip()
+        if dimension not in _GSC_FILTER_DIMENSIONS:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=f"unsupported filter dimension: {dimension!r}",
+                next_action=f"use one of: {', '.join(sorted(_GSC_FILTER_DIMENSIONS))}",
+            )
+        if operator not in _GSC_FILTER_OPERATORS:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=f"unsupported filter operator: {operator!r}",
+                next_action=f"use one of: {', '.join(sorted(_GSC_FILTER_OPERATORS))}",
+            )
+        if not expression:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="filter expression must not be empty",
+                next_action="pass --filter query:contains:coffee",
+            )
+        if dimension == "brandedClassification":
+            if operator != "equals":
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message="brandedClassification supports only the equals operator",
+                    next_action="pass --branded branded or --branded non_branded",
+                )
+            if expression.upper() not in {"BRANDED", "NON_BRANDED"}:
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message=f"unsupported branded value: {expression!r}",
+                    next_action="pass BRANDED or NON_BRANDED",
+                )
+            expression = expression.upper()
+        filters.append({"dimension": dimension, "operator": operator, "expression": expression})
+    return filters
+
+
+def _gsc_filter_lists(
+    values: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Validate multi-value ``filterLists`` entries (country/device only per the API)."""
+    if values is None:
+        return []
+    merged: dict[str, list[str]] = {}
+    for raw in values:
+        if not isinstance(raw, Mapping):
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="each filter list must be an object",
+                next_action="pass --filter-list country:FRA,DEU",
+            )
+        dimension = str(raw.get("dimension") or "").strip()
+        if dimension not in _GSC_FILTER_LIST_DIMENSIONS:
+            raise SeoError(
+                code=INVALID_INPUT,
+                message=f"unsupported filter list dimension: {dimension!r}",
+                next_action="filterLists supports country and device only",
+            )
+        expressions = raw.get("expressions")
+        if isinstance(expressions, str) or not isinstance(expressions, Sequence):
+            raise SeoError(
+                code=INVALID_INPUT,
+                message="filter list expressions must be a list of strings",
+                next_action="pass --filter-list country:FRA,DEU",
+            )
+        values_for_dimension = merged.setdefault(dimension, [])
+        for expression in expressions:
+            if not isinstance(expression, str) or not expression.strip():
+                raise SeoError(
+                    code=INVALID_INPUT,
+                    message="filter list expressions must be non-empty strings",
+                    next_action="pass --filter-list country:FRA,DEU",
+                )
+            text = expression.strip()
+            if text not in values_for_dimension:
+                values_for_dimension.append(text)
+    return [
+        {"dimension": dimension, "expressions": expressions}
+        for dimension, expressions in merged.items()
+    ]
+
+
+def _gsc_check_branded(
+    filters: Sequence[Mapping[str, str]],
+    filter_lists: Sequence[Mapping[str, Any]],
+) -> None:
+    """Reject the documented incompatible combination before spending a quota unit."""
+    branded = any(item.get("dimension") == "brandedClassification" for item in filters) or any(
+        item.get("dimension") == "brandedClassification" for item in filter_lists
+    )
+    if not branded:
+        return
+    if any(item.get("dimension") == "query" for item in filters):
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=("brandedClassification cannot be combined with a query filter in one request"),
+            next_action="drop --branded or drop the query filter",
+        )
+
+
+def _gsc_language(value: str) -> str:
+    text = (value or "en-US").strip() or "en-US"
+    parts = text.split("-")
+    if len(text) > 35 or not all(part.isalnum() for part in parts):
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"unsupported language code: {value!r}",
+            next_action="pass a BCP-47 code such as en-US or ru-RU",
+        )
+    return text
 
 
 def _cwv_source(value: str) -> str:

@@ -179,10 +179,14 @@
         "crawl"
       ],
       "inputs": {
-        "max_examples": "example URLs per bucket (0..20, default 5)"
+        "max_examples": "example URLs per bucket (0..20, default 5)",
+        "url": "optional absolute URL; adds one live GSC URL Inspection result"
       },
-      "returns": "{buckets:[{reason,count,examples,next_action}]}",
-      "limitations": [],
+      "returns": "{buckets:[{reason,count,examples,next_action}], inspection:{verdict,coverage_state,rich_results,...}}",
+      "limitations": [
+        "URL Inspection is one URL per call (2,000/day/site quota)",
+        "no bulk URL inspection or live-test request"
+      ],
       "annotations": {
         "readOnlyHint": true,
         "destructiveHint": false,

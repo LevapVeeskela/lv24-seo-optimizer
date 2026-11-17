@@ -214,6 +214,10 @@ class DigestWeeklyService(WeeklyService):
 
 
 class TriageService(ReadService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inspected: list[str] = []
+
     def yandex_indexing(self) -> dict[str, Any]:
         return ok(
             {
@@ -224,6 +228,22 @@ class TriageService(ReadService):
                 ]
             },
             meta={"data_age_days": 4},
+        )
+
+    def gsc_inspect(self, url: str, language: str = "en-US") -> dict[str, Any]:
+        self.inspected.append(url)
+        return ok(
+            {
+                "url": url,
+                "language": language,
+                "inspection": {
+                    "url": url,
+                    "verdict": "NEUTRAL",
+                    "coverage_state": "URL is unknown to Google",
+                    "rich_results": {"verdict": None, "detected_items": []},
+                },
+            },
+            meta={"source": "gsc", "limitations": ["one_url_per_call"]},
         )
 
 
@@ -512,6 +532,35 @@ def test_indexing_triage_builds_buckets_from_yandex_events() -> None:
     assert buckets["noindex"]["next_action"]
     assert payload["meta"]["data_age_days"] == 4
     assert any("google:" in item for item in payload["meta"]["limitations"])
+    assert "inspection" not in payload["data"]
+
+
+def test_indexing_triage_with_url_includes_gsc_inspection() -> None:
+    service = TriageService()
+    result = _call(
+        create_server(service),
+        "seo_indexing_triage",
+        {"url": "https://example.com/places"},
+    )
+    payload = _payload(result)
+
+    assert result.is_error is False
+    assert service.inspected == ["https://example.com/places"]
+    assert payload["data"]["inspection"]["verdict"] == "NEUTRAL"
+    assert payload["data"]["sources"] == ["yandex_webmaster", "gsc"]
+    assert "one_url_per_call" in payload["meta"]["limitations"]
+    assert not any("pass url=" in item for item in payload["meta"]["limitations"])
+
+
+def test_indexing_triage_rejects_a_relative_url() -> None:
+    result = _call(
+        create_server(TriageService()),
+        "seo_indexing_triage",
+        {"url": "/places"},
+    )
+
+    assert result.is_error is True
+    assert _payload(result)["error"]["code"] == INVALID_INPUT
 
 
 def test_opportunities_uses_two_gsc_windows_and_real_rows() -> None:

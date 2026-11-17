@@ -36,6 +36,12 @@ Lists every property the configured tokens can see.
 
 → `{ "rows": [{ "keys": ["..."], "clicks": 1, "impressions": 10, "ctr": 0.1, "position": 8.4 }], "total": 1200, "truncated": false, "data_age_days": 2, "limitations": ["no_query_page_join"] }`
 
+The richer Search Analytics selectors (`type`, filters, `filterLists`, `dataState`,
+`aggregationType`, `searchAppearance`, `brandedClassification`) are exposed by the CLI
+(`gsc query`) but not by this MCP tool yet; the tool keeps its stable five inputs and the row
+shape above. The response metadata (`responseAggregationType`, `metadata`) is additive when the
+service returns it.
+
 Filters travel as `dimensionFilterGroups`, never as a top-level `filters` key. A final page that
 exactly fills the row cap is reported as `truncated: true` with `rows_cap_50000` (or a caller-cap
 warning); a full page is not proof of complete coverage.
@@ -119,9 +125,15 @@ requests once per request, so `share` stays inside `0..1`. Same data as `lv24-se
 
 ### `seo_indexing_triage`
 
-Inputs: `max_examples` (0..20, default 5) — example URLs per bucket. Buckets not-indexed URLs (GSC
-coverage, Yandex `search-urls/events`, crawl states) into actionable groups with a `next_action` per
-bucket. No `property`/`urls`/`limit` inputs — scope comes from stored crawl + provider data.
+Inputs: `max_examples` (0..20, default 5) - example URLs per bucket - and optional `url` - one
+absolute URL whose live GSC URL Inspection result is added as `data.inspection`. Buckets
+not-indexed URLs (GSC coverage, Yandex `search-urls/events`, crawl states) into actionable groups
+with a `next_action` per bucket. Without `url`, the response keeps the honest limitation that
+Google URL-level coverage is not exposed by this call; with it, `sources` gains `gsc` and the
+inspection limitations (`one_url_per_call`, `url_inspection_quota_2000_per_day`,
+`inspection_reflects_last_crawl`) are merged into `meta.limitations`. There is still no bulk
+inspection and no live-test request. A failed inspection adds a warning and leaves the triage
+usable rather than failing the whole call.
 
 ### `seo_opportunities`
 
@@ -200,6 +212,11 @@ surface stays at 12. Bing URL submission, quota, sitemap-feed and crawl-issue vi
 CLI/desktop-only; `seo_sitemap_submit` still submits a sitemap, not a URL batch. The 0.9.0 release
 added optional `provider`/`property`/`sitemap_url` inputs to `seo_sitemap_submit` and wired Bing
 submit through the shared service path.
+
+GSC depth stays inside the same 12 tools: `gsc_search_analytics` keeps its existing inputs (the
+extra Search Analytics selectors are CLI-only for now), `seo_indexing_triage` gained the optional
+`url` input for one URL Inspection, and `gsc sitemaps`/`gsc sitemap` are CLI-only. No 13th tool was
+added.
 
 ## Error contract
 

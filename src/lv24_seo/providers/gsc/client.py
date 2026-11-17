@@ -24,8 +24,12 @@ from urllib.parse import quote
 from lv24_seo.core.errors import AUTH_REQUIRED, INVALID_INPUT, SeoError
 from lv24_seo.core.http import HttpClient
 from lv24_seo.providers.base import (
+    INSPECTION_REFLECTS_LAST_CRAWL,
     ONE_URL_PER_CALL,
     ROWS_CAP_50000,
+    SITEMAP_INDEX_CHILDREN,
+    SITEMAP_INDEXED_DEPRECATED,
+    URL_INSPECTION_QUOTA,
     ProviderResult,
     Row,
     data_age_days,
@@ -109,6 +113,31 @@ class GscClient:
             data_age_days=0,
             rows=rows,
             total=len(rows),
+            limitations=_sitemap_limitations(rows),
+        )
+
+    def get_sitemap(self, sitemap_url: str, *, site_url: str | None = None) -> ProviderResult[Row]:
+        """Return one sitemap entry, including an index file's contents summary.
+
+        GSC exposes the ``contents`` aggregate per content type; it does not list the child
+        sitemap URLs of a sitemap index. The limitation says so instead of inventing children.
+        """
+        site = self._require_property(site_url)
+        fetched_at = now_utc()
+        payload = self._http.get_json(
+            self._sitemap_url(site, sitemap_url),
+            headers=self._auth_headers(),
+            rate_limit_key="gsc",
+        )
+        row = _map_sitemap(payload if isinstance(payload, Mapping) else {})
+        return ProviderResult(
+            source=GSC_SOURCE,
+            property_id=site,
+            fetched_at=fetched_at,
+            data_age_days=0,
+            rows=[row],
+            total=1,
+            limitations=_sitemap_limitations([row]),
         )
 
     def search_analytics(
@@ -121,6 +150,9 @@ class GscClient:
         row_limit: int = 25_000,
         max_rows: int = 50_000,
         filters: Sequence[dict[str, Any]] | None = None,
+        filter_lists: Sequence[dict[str, Any]] | None = None,
+        data_state: str | None = None,
+        aggregation_type: str | None = None,
     ) -> ProviderResult[Row]:
         """Query search analytics, paging until a short batch or ``max_rows`` is reached."""
         site = self._require_property()
@@ -132,6 +164,7 @@ class GscClient:
         # A zero cap suppresses every row, which is a cap and not an empty result set.
         truncated = row_cap == 0
         start_row = 0
+        extra_meta: dict[str, Any] = {}
 
         while len(rows) < row_cap:
             body: dict[str, Any] = {
@@ -142,8 +175,17 @@ class GscClient:
                 "rowLimit": page_size,
                 "startRow": start_row,
             }
-            if filters:
-                body["dimensionFilterGroups"] = [{"groupType": "and", "filters": list(filters)}]
+            if filters or filter_lists:
+                group: dict[str, Any] = {"groupType": "and"}
+                if filters:
+                    group["filters"] = list(filters)
+                if filter_lists:
+                    group["filterLists"] = list(filter_lists)
+                body["dimensionFilterGroups"] = [group]
+            if data_state:
+                body["dataState"] = data_state
+            if aggregation_type:
+                body["aggregationType"] = aggregation_type
 
             payload = self._http.post_json(
                 self._search_analytics_url(site),
@@ -152,6 +194,7 @@ class GscClient:
                 retry=True,
                 rate_limit_key="gsc",
             )
+            _merge_response_meta(extra_meta, payload)
             batch = _entries(payload, "rows")
             if not batch:
                 break
@@ -196,15 +239,24 @@ class GscClient:
             truncated=truncated,
             limitations=limitations,
             warnings=warnings,
+            extra_meta=extra_meta,
         )
 
-    def inspect_url(self, url: str) -> ProviderResult[Row]:
-        """Inspect one URL (GSC allows a single URL per call, no batching)."""
+    def inspect_url(self, url: str, *, language_code: str = "en-US") -> ProviderResult[Row]:
+        """Inspect one URL (GSC allows a single URL per call, no batching).
+
+        ``language_code`` localizes ``coverageState`` and the other human-readable enums;
+        the verdicts and canonical URLs are language-independent.
+        """
         site = self._require_property()
         fetched_at = now_utc()
         payload = self._http.post_json(
             self._inspection_url,
-            json={"inspectionUrl": url, "siteUrl": site},
+            json={
+                "inspectionUrl": url,
+                "siteUrl": site,
+                "languageCode": language_code,
+            },
             headers=self._auth_headers(),
             retry=True,
             rate_limit_key="gsc.url_inspection",
@@ -214,10 +266,14 @@ class GscClient:
             source=GSC_SOURCE,
             property_id=site,
             fetched_at=fetched_at,
-            data_age_days=0,
+            data_age_days=_inspection_data_age(row.get("last_crawl_time"), fetched_at),
             rows=[row],
             total=1,
-            limitations=(ONE_URL_PER_CALL,),
+            limitations=(
+                ONE_URL_PER_CALL,
+                URL_INSPECTION_QUOTA,
+                INSPECTION_REFLECTS_LAST_CRAWL,
+            ),
         )
 
     def _auth_headers(self) -> dict[str, str]:
@@ -240,6 +296,10 @@ class GscClient:
     def _sitemaps_url(self, site: str) -> str:
         return f"{self._base_url}/sites/{quote(site, safe='')}/sitemaps"
 
+    def _sitemap_url(self, site: str, sitemap_url: str) -> str:
+        # The feed path is a full URL and must be percent-encoded as one path segment.
+        return f"{self._sitemaps_url(site)}/{quote(sitemap_url.strip(), safe='')}"
+
 
 def _entries(payload: Any, key: str) -> list[Mapping[str, Any]]:
     """Return the list under ``key`` as mappings; tolerate a missing/odd payload."""
@@ -259,14 +319,48 @@ def _map_site(entry: Mapping[str, Any]) -> Row:
 
 
 def _map_sitemap(entry: Mapping[str, Any]) -> Row:
-    return {
+    row: Row = {
         "path": entry.get("path"),
         "last_submitted": entry.get("lastSubmitted"),
         "last_downloaded": entry.get("lastDownloaded"),
         "is_pending": bool(entry.get("isPending", False)),
+        "is_sitemaps_index": bool(entry.get("isSitemapsIndex", False)),
+        "type": entry.get("type"),
         "errors": _as_int(entry.get("errors")),
         "warnings": _as_int(entry.get("warnings")),
+        "contents": _map_sitemap_contents(entry.get("contents")),
     }
+    return row
+
+
+def _map_sitemap_contents(raw: object) -> list[Row]:
+    """Map ``contents[]``; GSC's ``indexed`` count is deprecated and always 0."""
+    if not isinstance(raw, list):
+        return []
+    contents: list[Row] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        contents.append(
+            {
+                "type": item.get("type"),
+                "submitted": _as_int(item.get("submitted")),
+                "indexed": _as_int(item.get("indexed")),
+                "indexed_deprecated": True,
+            }
+        )
+    return contents
+
+
+def _sitemap_limitations(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Limitation codes that make a sitemap read honest about what GSC does not expose."""
+    limitations: list[str] = []
+    if any(row.get("contents") for row in rows):
+        limitations.append(SITEMAP_INDEXED_DEPRECATED)
+    if any(row.get("is_sitemaps_index") for row in rows):
+        # A sitemap index reports per-type totals, not the child sitemap URLs.
+        limitations.append(SITEMAP_INDEX_CHILDREN)
+    return tuple(limitations)
 
 
 def _map_search_row(entry: Mapping[str, Any], dimensions: Sequence[str]) -> Row:
@@ -283,20 +377,133 @@ def _map_search_row(entry: Mapping[str, Any], dimensions: Sequence[str]) -> Row:
     return row
 
 
+def _merge_response_meta(target: dict[str, Any], payload: Any) -> None:
+    """Keep ``responseAggregationType`` and incomplete-data ``metadata`` from any page."""
+    if not isinstance(payload, Mapping):
+        return
+    aggregation = payload.get("responseAggregationType")
+    if isinstance(aggregation, str) and aggregation.strip():
+        target["responseAggregationType"] = aggregation.strip()
+    metadata = _map_incomplete_metadata(payload.get("metadata"))
+    if metadata:
+        target["metadata"] = metadata
+
+
+def _map_incomplete_metadata(raw: object) -> dict[str, Any]:
+    """Normalize the two documented incomplete-data markers, tolerating camel/snake case."""
+    if not isinstance(raw, Mapping):
+        return {}
+    metadata: dict[str, Any] = {}
+    known = (
+        ("firstIncompleteDate", "first_incomplete_date"),
+        ("first_incomplete_date", "first_incomplete_date"),
+        ("firstIncompleteHour", "first_incomplete_hour"),
+        ("first_incomplete_hour", "first_incomplete_hour"),
+    )
+    for source, target in known:
+        value = raw.get(source)
+        if isinstance(value, str) and value.strip():
+            metadata[target] = value.strip()
+    # Unknown scalar markers are passed through unchanged: dropping a provider field the
+    # caller may need would be less honest than an extra key.
+    known_keys = {source for source, _target in known}
+    for key, value in raw.items():
+        if not isinstance(key, str) or key in known_keys:
+            continue
+        if isinstance(value, (str, int, float, bool)) and value not in ("", None):
+            metadata.setdefault(key, value)
+    return metadata
+
+
 def _map_inspection(url: str, payload: Any) -> Row:
     result = payload.get("inspectionResult") if isinstance(payload, Mapping) else None
-    index_status = result.get("indexStatusResult") if isinstance(result, Mapping) else None
+    inspection = result if isinstance(result, Mapping) else {}
+    index_status = inspection.get("indexStatusResult")
     status = index_status if isinstance(index_status, Mapping) else {}
+    google_canonical = _as_text(status.get("googleCanonical"))
+    user_canonical = _as_text(status.get("userCanonical"))
     return {
         "url": url,
         "verdict": status.get("verdict"),
         "coverage_state": status.get("coverageState"),
+        "robots_txt_state": status.get("robotsTxtState"),
         "indexing_state": status.get("indexingState"),
         "last_crawl_time": status.get("lastCrawlTime"),
-        "canonical": status.get("googleCanonical") or status.get("userCanonical"),
-        "robots_txt_state": status.get("robotsTxtState"),
         "page_fetch_state": status.get("pageFetchState"),
+        "google_canonical": google_canonical,
+        "user_canonical": user_canonical,
+        # Backward-compatible alias: the first canonical Google reports.
+        "canonical": google_canonical or user_canonical,
+        "crawled_as": status.get("crawledAs"),
+        "sitemap": _string_list(status.get("sitemap")),
+        "referring_urls": _string_list(status.get("referringUrls")),
+        "rich_results": _map_rich_results(inspection.get("richResultsResult")),
+        "inspection_result_link": inspection.get("inspectionResultLink"),
     }
+
+
+def _map_rich_results(raw: object) -> Row:
+    rich = raw if isinstance(raw, Mapping) else {}
+    detected = rich.get("detectedItems")
+    items: list[Row] = []
+    if isinstance(detected, list):
+        for entry in detected:
+            if not isinstance(entry, Mapping):
+                continue
+            items.append(
+                {
+                    "rich_result_type": entry.get("richResultType"),
+                    "items": _map_rich_items(entry.get("items")),
+                }
+            )
+    return {"verdict": rich.get("verdict"), "detected_items": items}
+
+
+def _map_rich_items(raw: object) -> list[Row]:
+    if not isinstance(raw, list):
+        return []
+    items: list[Row] = []
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            continue
+        issues: list[Row] = []
+        raw_issues = entry.get("issues")
+        if isinstance(raw_issues, list):
+            for issue in raw_issues:
+                if not isinstance(issue, Mapping):
+                    continue
+                issues.append(
+                    {
+                        "message": issue.get("issueMessage"),
+                        "severity": issue.get("severity"),
+                    }
+                )
+        items.append({"name": entry.get("name"), "issues": issues})
+    return items
+
+
+def _string_list(raw: object) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+
+
+def _as_text(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _inspection_data_age(last_crawl_time: object, fetched_at: datetime) -> int:
+    """Days since the last crawl; 0 when Google never crawled the URL."""
+    if not isinstance(last_crawl_time, str) or not last_crawl_time.strip():
+        return 0
+    text = last_crawl_time.strip().replace("Z", "+00:00")
+    try:
+        crawled = datetime.fromisoformat(text)
+    except ValueError:
+        return 0
+    if crawled.tzinfo is None:
+        crawled = crawled.replace(tzinfo=UTC)
+    return max(0, (fetched_at - crawled).days)
 
 
 def _search_data_age(end_date: date, fetched_at: datetime) -> int:

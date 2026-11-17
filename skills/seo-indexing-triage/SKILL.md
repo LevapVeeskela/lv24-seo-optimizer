@@ -1,7 +1,7 @@
 ---
 name: seo-indexing-triage
 description: Use when pages are missing from Google or Yandex, after a deploy or migration, when Search Console reports "Crawled - currently not indexed" or "Discovered - currently not indexed", when sitemaps show errors, or when a site suddenly loses indexed pages.
-version: 0.1.0
+version: 0.1.1
 requires_tools: [seo_indexing_triage, gsc_search_analytics, seo_crawl_site, yandex_indexing_state, seo_recrawl_request]
 ---
 
@@ -23,11 +23,13 @@ requires_tools: [seo_indexing_triage, gsc_search_analytics, seo_crawl_site, yand
 Property, URL set (from the sitemap or a supplied list) and engine (Google / Yandex / both).
 Scope comes from the configured property, the stored crawl and provider data — the tools take
 no `property`/`urls`/`limit` inputs. URL Inspection allows one URL per call, so triage works off
-stored buckets, not live per-URL checks.
+stored buckets; pass `url=...` to `seo_indexing_triage` when one live GSC inspection should be
+added to the same response.
 
 ## Recipe
 
-1. `seo_indexing_triage()`
+1. `seo_indexing_triage()` (or `seo_indexing_triage(url="https://example.com/page")` for one
+   GSC inspection alongside the buckets)
    → buckets: `noindex`, `blocked_by_robots`, `canonical_mismatch`, `soft_404`, `redirect`,
    `discovered_not_indexed`, `crawled_not_indexed`, `duplicate`, `error_5xx`, `ok`.
 2. For every bucket, confirm with a cheap crawl before recommending a fix:

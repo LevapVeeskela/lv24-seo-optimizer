@@ -88,6 +88,13 @@ and neither prints the key.
 
 ```bash
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 [--dimensions query,page] [--limit 100] [--strict]
+lv24-seo gsc query ... [--type web|image|video|news|discover|googleNews|webMultimodal]
+lv24-seo gsc query ... [--filter dimension:operator:expression]... [--filter-list country:FRA,DEU]
+lv24-seo gsc query ... [--data-state all|final|hourly_all] [--aggregation auto|byPage|byProperty|byNewsShowcasePanel]
+lv24-seo gsc query ... [--search-appearance AMP_BLUE_LINK] [--branded branded|non_branded]
+lv24-seo gsc inspect --url https://example.com/page [--language en-US] [--json]
+lv24-seo gsc sitemaps [--sitemap-index https://example.com/sitemap-seo.xml] [--json]
+lv24-seo gsc sitemap --path https://example.com/sitemap.xml [--json]
 lv24-seo yandex queries [--limit 100] [--strict] [--json]
 lv24-seo yandex indexing [--strict] [--json]
 lv24-seo crawl [--start URL] [--max-urls 500] [--strict] [--json]
@@ -98,7 +105,43 @@ override — the property comes from `seo.toml`). A GSC page that exactly fills 
 as `truncated: true` with `rows_cap_50000` (default cap) or a caller-cap warning: a full page is not
 proof that no row exists behind the cap, so an exact-cap result is never claimed complete. A
 truncated GSC result also omits `total` (`null`) — an exact count next to `truncated: true` would
-read as a complete answer. `data_age_days` is floored at the documented 3-day lag.
+read as a complete answer. `data_age_days` is floored at the documented 3-day lag. The hard API
+limits stay: **25,000 rows per page** and **50,000 rows/day/site/type**; the engine never asks for
+more and reports the cap.
+
+`gsc query` forwards every Search Analytics selector without changing the row shape. `--filter`
+takes `dimension:operator:expression` and may be repeated (one AND group; operators `contains`,
+`equals`, `notContains`, `notEquals`, `includingRegex`, `excludingRegex`). `--filter-list` takes
+`dimension:expr1,expr2` (multi-value, `country`/`device` only) and may be repeated. `--type` accepts
+`web`, `image`, `video`, `news`, `discover`, `googleNews` and `webMultimodal`; `--data-state` accepts
+`all`, `final`, `hourly_all`; `--aggregation` accepts `auto`, `byPage`, `byProperty` and
+`byNewsShowcasePanel`. `--search-appearance VALUE` adds a `searchAppearance equals VALUE` filter and
+`--branded branded|non_branded` adds a `brandedClassification` filter (only `equals`; rejected
+together with a `query` filter, as the API requires). The response adds
+`meta.responseAggregationType` and `meta.metadata` (`first_incomplete_date`,
+`first_incomplete_hour`) when Google returns them, plus the echoed `meta.type`,
+`meta.dataState`, `meta.aggregationType`, `meta.filters` and `meta.filterLists`.
+
+`gsc inspect` calls URL Inspection for exactly one absolute URL. It returns the full
+`indexStatusResult` mapping (`verdict`, `coverage_state`, `robots_txt_state`, `indexing_state`,
+`last_crawl_time`, `page_fetch_state`, `google_canonical`, `user_canonical`, `canonical`,
+`crawled_as`, `sitemap[]`, `referring_urls[]`), `rich_results`
+(`verdict`, `detected_items[].rich_result_type`, per-item `issues[]`) and
+`inspection_result_link`. `--language` (BCP-47, default `en-US`) localizes `coverage_state` and
+other human-readable states. It is a read-only report about the last crawl, not a live test; the
+result carries `one_url_per_call`, `url_inspection_quota_2000_per_day` and
+`inspection_reflects_last_crawl`.
+
+`gsc sitemaps` lists what Google reports for the property: `path`, `last_submitted`,
+`last_downloaded`, `is_pending`, `is_sitemaps_index`, `type`, `errors`, `warnings` and
+`contents[{type,submitted,indexed}]`. `--sitemap-index URL` also reads that index entry and returns
+it as `data.sitemap_index` (separate from `rows`, so the list total stays exact). `gsc sitemap --path URL`
+reads one entry. GSC's `indexed` count is deprecated, so each content item carries
+`indexed_deprecated: true` and the meta carries `sitemap_indexed_count_deprecated`; an index adds
+`sitemap_index_children_not_exposed` because child sitemap URLs are not available from the API.
+Sitemap submit/delete stay `WRITE_DISABLED`: they need the full
+`https://www.googleapis.com/auth/webmasters` scope, while the engine signs
+`webmasters.readonly`.
 
 `yandex queries` returns the documented query indicators as `shows`, `clicks`, `position` and
 `avg_click_position` when Yandex returns them; an indicator the engine does not map is kept under
