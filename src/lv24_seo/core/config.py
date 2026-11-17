@@ -263,6 +263,38 @@ class IndexingConfig(_StrictModel):
         return unique
 
 
+class OAuthClientConfig(_StrictModel):
+    """Public OAuth client settings for one provider.
+
+    ``client_id`` is public and may live in ``seo.toml``. The client secret is **not**
+    part of this model: it is stored in the OS keychain (``<provider>_oauth_client_secret``)
+    and never serialized into the config or an envelope.
+    """
+
+    client_id: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    redirect_uri: str = ""
+
+
+def _default_gsc_scopes() -> list[str]:
+    return ["https://www.googleapis.com/auth/webmasters.readonly"]
+
+
+def _default_yandex_scopes() -> list[str]:
+    return ["webmaster:hostinfo", "metrika:read"]
+
+
+class AuthConfig(_StrictModel):
+    """OAuth client registrations used by ``lv24-seo auth login`` (``[auth]``)."""
+
+    gsc: OAuthClientConfig = Field(
+        default_factory=lambda: OAuthClientConfig(scopes=_default_gsc_scopes())
+    )
+    yandex: OAuthClientConfig = Field(
+        default_factory=lambda: OAuthClientConfig(scopes=_default_yandex_scopes())
+    )
+
+
 class SeoConfig(_StrictModel):
     """Validated, fully-defaulted configuration for one SEO workspace."""
 
@@ -272,6 +304,7 @@ class SeoConfig(_StrictModel):
     crawl: CrawlConfig = Field(default_factory=CrawlConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     indexing: IndexingConfig = Field(default_factory=IndexingConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
 
 
 # Environment variables that map to one string leaf. Keep in sync with docs/config.md.
@@ -283,6 +316,10 @@ _ENV_STRING_PATHS: dict[str, tuple[str, ...]] = {
     "LV24_SEO_YANDEX_METRIKA_COUNTER": ("providers", "yandex_metrika", "counter"),
     "LV24_SEO_INDEXNOW_KEY": ("providers", "bing", "indexnow_key"),
     "LV24_SEO_INDEXNOW_KEY_LOCATION": ("providers", "bing", "indexnow_key_location"),
+    "LV24_SEO_GSC_CLIENT_ID": ("auth", "gsc", "client_id"),
+    "LV24_SEO_GSC_REDIRECT_URI": ("auth", "gsc", "redirect_uri"),
+    "LV24_SEO_YANDEX_CLIENT_ID": ("auth", "yandex", "client_id"),
+    "LV24_SEO_YANDEX_REDIRECT_URI": ("auth", "yandex", "redirect_uri"),
     "LV24_SEO_SMTP_HOST": ("report", "email", "smtp_host"),
     "LV24_SEO_SMTP_USER": ("report", "email", "smtp_user"),
     "LV24_SEO_SMTP_FROM": ("report", "email", "from"),

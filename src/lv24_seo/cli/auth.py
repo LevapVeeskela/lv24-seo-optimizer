@@ -35,8 +35,13 @@ auth_app = typer.Typer(
 
 _PROVIDER_SECRETS: dict[str, str] = {
     "gsc": "gsc_token",
+    "gsc_oauth": "gsc_refresh_token",
+    "gsc_oauth_secret": "gsc_oauth_client_secret",
     "yandex": "yandex_webmaster_token",
+    "yandex_oauth": "yandex_refresh_token",
+    "yandex_oauth_secret": "yandex_oauth_client_secret",
     "metrika": "yandex_metrika_token",
+    "metrika_oauth": "yandex_metrika_refresh_token",
     "bing": "bing_api_key",
     "crux": "crux_api_key",
     "psi": "psi_api_key",
@@ -153,7 +158,28 @@ def auth_set(
 
 @auth_app.command("login")
 def auth_login(
-    provider: Annotated[str, typer.Option("--provider", help="gsc or yandex.")],
+    provider: Annotated[str, typer.Option("--provider", help="gsc or yandex/metrika.")],
+    no_browser: Annotated[
+        bool,
+        typer.Option("--no-browser", help="Print the authorization URL instead of opening it."),
+    ] = False,
+    port: Annotated[
+        int,
+        typer.Option(
+            "--port",
+            min=0,
+            max=65535,
+            help="Loopback callback port for GSC (0=auto).",
+        ),
+    ] = 0,
+    code: Annotated[
+        str,
+        typer.Option("--code", help="Authorization code for a manual/no-browser exchange."),
+    ] = "",
+    manual: Annotated[
+        bool,
+        typer.Option("--manual", help="Print the old manual token instructions; no browser."),
+    ] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Config file to use.")
     ] = None,
@@ -161,17 +187,25 @@ def auth_login(
         bool, typer.Option("--json", help="Machine-readable envelope output.")
     ] = False,
 ) -> None:
-    """Print manual token instructions; nothing is written and no browser opens."""
+    """Run the provider OAuth connector, or print manual steps with ``--manual``."""
 
     def action() -> dict[str, Any]:
         name = _canonical_provider(provider)
+        config = load_config(config_path)
+        if not manual and name == "gsc" and config.auth.gsc.client_id.strip():
+            from lv24_seo.cli.auth_google import login_gsc
+
+            return ok(login_gsc(config, no_browser=no_browser, port=port, code=code))
+        if not manual and name in {"yandex", "metrika"} and config.auth.yandex.client_id.strip():
+            from lv24_seo.cli.auth_yandex import login_yandex
+
+            return ok(login_yandex(name, config, code=code, no_browser=no_browser))
         if name not in _LOGIN_STEPS:
             raise SeoError(
                 code=INVALID_INPUT,
                 message=f"provider {name!r} has no login flow; use `lv24-seo auth set`",
                 next_action="use --provider gsc or --provider yandex",
             )
-        config = load_config(config_path)
         return ok(
             {
                 "provider": name,
@@ -203,6 +237,14 @@ def auth_logout(
         secret = _PROVIDER_SECRETS[name]
         config = load_config(config_path)
         store = SecretStore(data_dir=config.storage.data_dir)
+        if name == "gsc":
+            from lv24_seo.cli.auth_google import logout_gsc
+
+            logout_gsc(store)
+        elif name in {"yandex", "metrika"}:
+            from lv24_seo.cli.auth_yandex import logout_yandex
+
+            logout_yandex(store, name)
         store.delete(secret)
         status = _first_status(store.status([secret]))
         return ok(
