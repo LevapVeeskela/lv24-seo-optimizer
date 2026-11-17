@@ -55,7 +55,7 @@ def _result(rows: Sequence[Mapping[str, Any]], **kwargs: Any) -> ProviderResult[
         rows=[dict(row) for row in rows],
         total=kwargs.pop("total", len(rows)),
         limitations=tuple(kwargs.pop("limitations", ())),
-        extra_meta=kwargs.pop("extra_meta", {}),
+        extra=kwargs.pop("extra", {}),
     )
 
 
@@ -180,7 +180,7 @@ class StubGscClient:
                     "position": 4.0,
                 }
             ],
-            extra_meta={
+            extra={
                 "responseAggregationType": "byPage",
                 "metadata": {"first_incomplete_date": "2026-11-16"},
             },

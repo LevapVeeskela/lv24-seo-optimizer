@@ -529,7 +529,7 @@ def test_search_analytics_forwards_filters_type_state_and_returns_metadata() -> 
             "filterLists": [{"dimension": "device", "expressions": ["MOBILE", "TABLET"]}],
         }
     ]
-    assert result.extra_meta == {
+    assert result.extra == {
         "responseAggregationType": "byPage",
         "metadata": {"first_incomplete_date": "2026-11-08"},
     }

@@ -164,7 +164,7 @@ class GscClient:
         # A zero cap suppresses every row, which is a cap and not an empty result set.
         truncated = row_cap == 0
         start_row = 0
-        extra_meta: dict[str, Any] = {}
+        extra: dict[str, Any] = {}
 
         while len(rows) < row_cap:
             body: dict[str, Any] = {
@@ -194,7 +194,7 @@ class GscClient:
                 retry=True,
                 rate_limit_key="gsc",
             )
-            _merge_response_meta(extra_meta, payload)
+            _merge_response_meta(extra, payload)
             batch = _entries(payload, "rows")
             if not batch:
                 break
@@ -239,7 +239,7 @@ class GscClient:
             truncated=truncated,
             limitations=limitations,
             warnings=warnings,
-            extra_meta=extra_meta,
+            extra=extra,
         )
 
     def inspect_url(self, url: str, *, language_code: str = "en-US") -> ProviderResult[Row]:
