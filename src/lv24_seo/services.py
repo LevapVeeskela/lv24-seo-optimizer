@@ -90,6 +90,16 @@ from lv24_seo.providers.gsc.auth import (
     service_account_file_problem,
     token_provider_from_token,
 )
+from lv24_seo.providers.gsc.oauth import (
+    CLIENT_SECRET_NAME as GSC_OAUTH_CLIENT_SECRET,
+)
+from lv24_seo.providers.gsc.oauth import (
+    OAUTH_SOURCE,
+    OAuthTokenProvider,
+)
+from lv24_seo.providers.gsc.oauth import (
+    REFRESH_TOKEN_SECRET as GSC_OAUTH_REFRESH_TOKEN,
+)
 from lv24_seo.providers.psi import PsiClient
 from lv24_seo.providers.yandex_metrika import ORGANIC_FILTER, YandexMetrikaClient
 from lv24_seo.providers.yandex_webmaster import YandexWebmasterClient
@@ -4633,6 +4643,10 @@ class SeoService:
             return self._overrides[name]
         if name in _KEYLESS_CLIENTS:
             return self._wired_client(name)
+        if name == "gsc" and self._gsc_oauth_credentials() is not None:
+            # A stored OAuth grant is the interactive login the owner performed; it wins over
+            # a service-account file and a stale manual token.
+            return self._wired_client(name)
         if name == "gsc" and self._gsc_service_account_file():
             problem = self._gsc_service_account_problem()
             if problem is not None:
@@ -4670,8 +4684,20 @@ class SeoService:
         if name == "gsc":
             gsc = providers_cfg.gsc
             property_id = gsc.property if gsc is not None else ""
-            # Resolution order: config/env service_account_file, then the gsc_token secret.
-            # The file wins even when a stale access token is still stored.
+            # Resolution order: a stored OAuth refresh token, then the service_account_file
+            # from config/env, then the legacy gsc_token secret (plain or service-account
+            # JSON). A stale access token never shadows a fresher credential source.
+            oauth = self._gsc_oauth_credentials()
+            if oauth is not None:
+                client_id, client_secret = oauth
+                return GscClient(
+                    token_provider=OAuthTokenProvider(
+                        store=self._secrets,
+                        client_id=client_id,
+                        client_secret=client_secret,
+                    ),
+                    property_id=property_id,
+                )
             account_file = self._gsc_service_account_file()
             if account_file:
                 return GscClient(
@@ -4722,18 +4748,34 @@ class SeoService:
     def _credential_state(self, provider: str, secret_name: str) -> tuple[bool, str]:
         """Presence plus a non-secret source label for ``properties``.
 
-        A configured GSC service-account file wins over a stored token, mirroring the
-        resolution order used to build the client. The check only stats the file; the
-        JSON is read once when the client is constructed.
+        A stored OAuth grant wins over a service-account file, which wins over a stored
+        token, mirroring the resolution order used to build the client. The file check only
+        stats the path; the JSON is read once when the client is constructed.
         """
-        if provider == "gsc" and self._gsc_service_account_file():
-            return (self._gsc_service_account_problem() is None, "service_account_file")
+        if provider == "gsc":
+            if self._gsc_oauth_credentials() is not None:
+                return (True, OAUTH_SOURCE)
+            if self._gsc_service_account_file():
+                return (self._gsc_service_account_problem() is None, "service_account_file")
         if self._secret_present(secret_name):
             return (True, "secret")
         return (False, "missing")
 
     def _credential_present(self, provider: str, secret_name: str) -> bool:
         return self._credential_state(provider, secret_name)[0]
+
+    def _secret_value(self, secret_name: str) -> str:
+        value = self._secrets.get(secret_name)
+        return value.strip() if value is not None else ""
+
+    def _gsc_oauth_credentials(self) -> tuple[str, str] | None:
+        """Return ``(client_id, client_secret)`` when a complete OAuth grant is stored."""
+        client_id = self._config.auth.gsc.client_id.strip()
+        refresh_token = self._secret_value(GSC_OAUTH_REFRESH_TOKEN)
+        client_secret = self._secret_value(GSC_OAUTH_CLIENT_SECRET)
+        if not client_id or not refresh_token or not client_secret:
+            return None
+        return client_id, client_secret
 
     # -- shared helpers ----------------------------------------------------------------------
 

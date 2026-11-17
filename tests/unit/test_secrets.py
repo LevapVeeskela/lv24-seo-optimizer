@@ -59,6 +59,14 @@ def test_secret_names_contract() -> None:
         "psi_api_key",
         "smtp_password",
         "telegram_bot_token",
+        "gsc_access_token",
+        "gsc_refresh_token",
+        "gsc_token_expires_at",
+        "gsc_oauth_client_secret",
+        "gsc_oauth_code_verifier",
+        "yandex_refresh_token",
+        "yandex_oauth_client_secret",
+        "yandex_metrika_refresh_token",
     )
 
 

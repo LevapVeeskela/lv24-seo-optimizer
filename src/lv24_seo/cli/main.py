@@ -354,6 +354,11 @@ def doctor(
         gsc = config.providers.gsc
         gsc_file = gsc.service_account_file.strip() if gsc is not None else ""
         gsc_problem = service_account_file_problem(gsc_file)
+        oauth_grant = (
+            bool(config.auth.gsc.client_id.strip())
+            and "gsc_refresh_token" in present
+            and "gsc_oauth_client_secret" in present
+        )
         if gsc_file:
             gsc_ok = gsc_problem is None
             gsc_detail = (
@@ -361,6 +366,9 @@ def doctor(
                 if gsc_ok
                 else str(gsc_problem)
             )
+        elif oauth_grant:
+            gsc_ok = True
+            gsc_detail = "OAuth refresh token present (gsc_refresh_token)"
         else:
             if "gsc_token" in present:
                 gsc_ok = True

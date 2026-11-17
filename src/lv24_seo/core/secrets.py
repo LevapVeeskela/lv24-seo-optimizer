@@ -50,6 +50,17 @@ SECRET_NAMES: tuple[str, ...] = (
     "psi_api_key",
     "smtp_password",
     "telegram_bot_token",
+    # OAuth grants. Access/refresh tokens and the expiry are written by `auth login`; the
+    # client secret is set with `auth set --provider <name>_oauth_secret`; the PKCE verifier
+    # is internal state kept between a `--no-browser` attempt and a `--code` exchange.
+    "gsc_access_token",
+    "gsc_refresh_token",
+    "gsc_token_expires_at",
+    "gsc_oauth_client_secret",
+    "gsc_oauth_code_verifier",
+    "yandex_refresh_token",
+    "yandex_oauth_client_secret",
+    "yandex_metrika_refresh_token",
 )
 
 _SECRETS_FILENAME = "secrets.json"
