@@ -6,8 +6,7 @@ All notable changes to this project are documented here. Format follows
 ## [0.11.0] - 2026-11-17
 
 Release notes: [`docs/releases/0.11.0.md`](docs/releases/0.11.0.md). Status: **released** (PyPI,
-npm and the MCP Registry, 2026-11-17); desktop `0.8.0` bundles engine `0.10.0` and desktop `0.9.0`
-follows. Minor release: full-platform read depth. GSC gains URL Inspection, sitemap reads and
+npm and the MCP Registry, 2026-11-17); desktop `0.9.0` bundles engine `0.11.0`. Minor release: full-platform read depth. GSC gains URL Inspection, sitemap reads and
 filtered search analytics; Yandex gains events samples, sitemaps, history and a wired recrawl queue;
 Bing gains page/traffic/crawl/URL/role/join diagnostics; Metrika gains an organic-only collector and
 a `metrika` read group; CrUX gains collection periods and weekly history; PSI gains Lighthouse

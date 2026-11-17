@@ -65,15 +65,15 @@ systemd-юниты или XML задачи и не пишет ничего бе�
 
 ## Десктоп
 
-Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.8.0** — оболочка Tauri v2 с
-дашбордом, просмотром недельного отчёта, редактором конфигурации и сценарием «рекомендации →
-агенту». Она несёт закреплённый сайдкар `lv24-seo` (`0.10.0` в текущей сборке десктопа), требует
-движок `>= 0.10.0` и не добавляет собственной логики провайдеров.
+Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.9.0** — оболочка Tauri v2 с
+дашбордом, просмотром недельного отчёта, редактором конфигурации, сценарием «рекомендации →
+агенту» и read-only экраном Diagnostics. Она несёт закреплённый сайдкар `lv24-seo` (`0.11.0` в
+текущей сборке десктопа), требует движок `>= 0.11.0` и не добавляет собственной логики провайдеров.
 
 | Платформа | Файлы | Автообновление |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.8.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.8.0_x64-portable.zip` | только NSIS |
-| Linux x64 | `LV24.SEO.Optimizer_0.8.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.8.0_amd64.deb`, `LV24.SEO.Optimizer-0.8.0-1.x86_64.rpm` | только AppImage |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.0_x64-portable.zip` | только NSIS |
+| Linux x64 | `LV24.SEO.Optimizer_0.9.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.0_amd64.deb`, `LV24.SEO.Optimizer-0.9.0-1.x86_64.rpm` | только AppImage |
 | macOS 13+ arm64/x64 | DMG, `.app.tar.gz` (+ `.sig`) | только `.app` |
 
 deb, rpm и portable ZIP ставятся вручную (MSI не выпускается); у `0.1.0` нет обновлятора. Релизы
@@ -134,8 +134,8 @@ URL submit и Yandex recrawl подключены,
 Бета (v0.11.0). `0.11.0` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-17): полная глубина
 чтения по платформам — GSC URL Inspection/sitemap/фильтры, Yandex events/sitemaps/история/очередь
 recrawl, Bing page/traffic/crawl/URL/joins, органическая Метрика (страницы, цели, устройства,
-страны, bytime), CrUX-история и PSI-аудиты. Десктоп `0.8.0` — текущий
-релиз десктопа, он несёт движок `0.10.0` и требует `>= 0.10.0`. Открытые честные ограничения: GSC
+страны, bytime), CrUX-история и PSI-аудиты. Десктоп `0.9.0` — текущий
+релиз десктопа, он несёт движок `0.11.0` и требует `>= 0.11.0`. Открытые честные ограничения: GSC
 sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing sitemap/URL submit, IndexNow
 и Yandex recrawl реально отправляют),
 `crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`), анализ логов

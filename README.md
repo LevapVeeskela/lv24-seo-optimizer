@@ -70,7 +70,7 @@ the MCP server
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
 enforced with regression tests. `0.11.0` is the current release: full-platform read depth across
 GSC, Yandex, Bing, Metrika and CWV/IndexNow (PyPI, npm and the MCP Registry, 2026-11-17),
-and desktop `0.8.0` bundles engine `0.10.0`. See
+and desktop `0.9.0` bundles engine `0.11.0`. See
 [`docs/releases/0.11.0.md`](docs/releases/0.11.0.md),
 [`docs/releases/0.10.0.md`](docs/releases/0.10.0.md),
 [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md),
@@ -138,16 +138,16 @@ lv24-seo install --client claude|opencode|vscode|cursor
 
 ## Desktop app
 
-The same engine ships as **LV24 SEO Optimizer Desktop 0.8.0** — a Tauri v2 shell with a dashboard,
-weekly report view, configuration editor/diff/validation and a recommendations-to-agent workflow. It
-bundles a pinned `lv24-seo` sidecar (`0.10.0` in the current desktop build), requires engine
-`>= 0.10.0`, and adds no provider logic of its own.
+The same engine ships as **LV24 SEO Optimizer Desktop 0.9.0** — a Tauri v2 shell with a dashboard,
+weekly report view, configuration editor/diff/validation, a recommendations-to-agent workflow and a
+read-only Diagnostics screen. It bundles a pinned `lv24-seo` sidecar (`0.11.0` in the current desktop
+build), requires engine `>= 0.11.0`, and adds no provider logic of its own.
 
 | Platform | Assets | Auto-update |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.8.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.8.0_x64-portable.zip` | NSIS only |
-| Linux x64 | `LV24.SEO.Optimizer_0.8.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.8.0_amd64.deb`, `LV24.SEO.Optimizer-0.8.0-1.x86_64.rpm` | AppImage only |
-| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.8.0_aarch64.dmg`, `LV24.SEO.Optimizer_0.8.0_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.0_x64-portable.zip` | NSIS only |
+| Linux x64 | `LV24.SEO.Optimizer_0.9.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.0_amd64.deb`, `LV24.SEO.Optimizer-0.9.0-1.x86_64.rpm` | AppImage only |
+| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.9.0_aarch64.dmg`, `LV24.SEO.Optimizer_0.9.0_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
 
 deb, rpm and the portable ZIP are manual-only (MSI is not produced); `0.1.0` has no updater. Releases
 publish `latest.json` and `SHA256SUMS.txt`.

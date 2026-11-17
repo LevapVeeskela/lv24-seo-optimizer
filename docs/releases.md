@@ -7,11 +7,12 @@ The pipeline is **release plumbing only**: it verifies the exact tagged commit (
 offline tests, schema drift, installed-wheel smoke), builds the sdist/wheel, publishes them to
 PyPI with OIDC Trusted Publishing, publishes the thin `@lv24/seo` npm launcher with npm OIDC
 trusted publishing, and publishes `server.json` to the MCP Registry. No long-lived NPM_TOKEN or
-PyPI token exists. `0.10.0` is the current published build (2026-11-17, notes:
-[`releases/0.10.0.md`](releases/0.10.0.md)) on PyPI, npm and the MCP Registry. Desktop `0.8.0` is
-the current desktop release, bundles engine `0.10.0` and requires engine `>= 0.10.0`. `0.9.0` was
-the previous release (2026-11-17, [`releases/0.9.0.md`](releases/0.9.0.md)); `0.8.0` the
-CWV/schedule release before it (2026-11-16, [`releases/0.8.0.md`](releases/0.8.0.md)), `0.7.0` the
+PyPI token exists. `0.11.0` is the current published build (2026-11-17, notes:
+[`releases/0.11.0.md`](releases/0.11.0.md)) on PyPI, npm and the MCP Registry. Desktop `0.9.0` is
+the current desktop release, bundles engine `0.11.0` and requires engine `>= 0.11.0`. `0.10.0` was
+the previous release (2026-11-17, [`releases/0.10.0.md`](releases/0.10.0.md)); `0.9.0` the
+Bing sitemap/IndexNow release before it (2026-11-17, [`releases/0.9.0.md`](releases/0.9.0.md));
+`0.8.0` the CWV/schedule release (2026-11-16, [`releases/0.8.0.md`](releases/0.8.0.md)), `0.7.0` the
 coverage release (2026-11-16, [`releases/0.7.0.md`](releases/0.7.0.md)), `0.6.0` the insights
 release, and `0.5.3` the P0 hardening release.
 

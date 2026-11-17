@@ -1,7 +1,7 @@
 # 0.11.0 - Full-platform read depth
 
-Status: **released** (2026-11-17) on PyPI, npm and the MCP Registry. Desktop `0.8.0` bundles engine
-`0.10.0`; desktop `0.9.0` is the release that surfaces these reads in the UI.
+Status: **released** (2026-11-17) on PyPI, npm and the MCP Registry. Desktop `0.9.0` bundles engine
+`0.11.0` and surfaces these reads in the UI.
 
 Minor release: every supported platform gains the read APIs that were previously adapter-only,
 partial or missing. The CLI now has **24 top-level commands** (17 groups + 7 commands), the MCP
