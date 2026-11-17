@@ -7,10 +7,11 @@ The pipeline is **release plumbing only**: it verifies the exact tagged commit (
 offline tests, schema drift, installed-wheel smoke), builds the sdist/wheel, publishes them to
 PyPI with OIDC Trusted Publishing, publishes the thin `@lv24/seo` npm launcher with npm OIDC
 trusted publishing, and publishes `server.json` to the MCP Registry. No long-lived NPM_TOKEN or
-PyPI token exists. `0.12.2` is the current published build (2026-11-17, notes:
-[`releases/0.12.2.md`](releases/0.12.2.md)) on PyPI, npm and the MCP Registry. Desktop `0.9.0` is
-the current desktop release, bundles engine `0.11.0` and requires engine `>= 0.11.0`. `0.12.1` was
-the previous release (2026-11-17, [`releases/0.12.1.md`](releases/0.12.1.md)); `0.12.0` the
+PyPI token exists. `0.13.0` is the current published build (2026-11-18, notes:
+[`releases/0.13.0.md`](releases/0.13.0.md)) on PyPI, npm and the MCP Registry. Desktop `0.9.0` is
+the current desktop release, bundles engine `0.11.0` and requires engine `>= 0.11.0`. `0.12.2` was
+the previous release (2026-11-17, [`releases/0.12.2.md`](releases/0.12.2.md)); `0.12.1` the
+indexing client-lifecycle fix (2026-11-17, [`releases/0.12.1.md`](releases/0.12.1.md)); `0.12.0` the
 quota-aware indexing automation release (2026-11-17, [`releases/0.12.0.md`](releases/0.12.0.md));
 `0.11.0` the full-platform read-depth release (2026-11-17, [`releases/0.11.0.md`](releases/0.11.0.md));
 `0.10.0` the Bing URL submission release (2026-11-17, [`releases/0.10.0.md`](releases/0.10.0.md));

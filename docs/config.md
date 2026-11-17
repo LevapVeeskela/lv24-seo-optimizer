@@ -84,6 +84,16 @@ stale_days = 7
 check_interval_days = 7
 gsc_inspect_daily_limit = 2000
 indexnow_daily_limit = 1000
+
+[auth.gsc]
+client_id = ""           # public OAuth client id; empty = manual token flow
+scopes = ["https://www.googleapis.com/auth/webmasters.readonly"]
+redirect_uri = ""        # default: http://127.0.0.1:<port>/callback
+
+[auth.yandex]
+client_id = ""           # public OAuth client id; empty = manual token flow
+scopes = ["webmaster:hostinfo", "metrika:read"]
+redirect_uri = ""        # default: https://oauth.yandex.ru/verification_code
 ```
 
 `providers.bing.indexnow_key` and `providers.bing.indexnow_key_location` are **public**
@@ -119,6 +129,23 @@ The engine still enforces provider caps at run time: Bing's remaining daily/mont
 Yandex's `quota_remainder`, 500 URLs per Bing batch and one URL per Yandex request. A scheduled
 `lv24-seo indexing run --allow-write` also needs `LV24_SEO_WRITE_SECRET` in the host scheduler's
 environment; see [scheduling](scheduling.md).
+
+## `[auth.gsc]` and `[auth.yandex]`
+
+OAuth client registrations for `lv24-seo auth login`. `client_id` is public; the client secret is
+**not** part of this model and is stored with
+`lv24-seo auth set --provider gsc_oauth_secret|yandex_oauth_secret --stdin`. An empty `client_id`
+keeps the manual token flow.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `client_id` | `""` | public OAuth client id |
+| `scopes` | provider default | requested scopes; Google defaults to `webmasters.readonly`, Yandex to `webmaster:hostinfo` + `metrika:read` |
+| `redirect_uri` | provider default | Google loopback `http://127.0.0.1:<port>/callback`; Yandex `https://oauth.yandex.ru/verification_code` |
+
+Environment overrides: `LV24_SEO_GSC_CLIENT_ID`, `LV24_SEO_GSC_REDIRECT_URI`,
+`LV24_SEO_YANDEX_CLIENT_ID`, `LV24_SEO_YANDEX_REDIRECT_URI`. See
+[auth-google.md](auth-google.md) and [auth-yandex.md](auth-yandex.md).
 
 > Telemetry is not configurable: the tool sends nothing anywhere. There is no `[privacy]` section and
 > One `seo.toml` describes one project; a multi-site block is not implemented.

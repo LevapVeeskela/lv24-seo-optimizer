@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.12.2).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.13.0).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -131,10 +131,11 @@ URL submit и Yandex recrawl подключены,
 
 ## Статус
 
-Бета (v0.12.2). `0.12.2` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-17): квото-зависимая
-автоматизация индексации — `indexing status/run/history`, лимиты Bing/Yandex/IndexNow/GSC и
-честные счётчики проиндексированного, плюс патчи клиентского жизненного цикла и Yandex 5xx, плюс
-полная глубина чтения по платформам (GSC URL
+Бета (v0.13.0). `0.13.0` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-18): OAuth-коннекторы
+для Google Search Console и Yandex Webmaster/Metrika (`auth login`, refresh-токены в keychain),
+квото-зависимая автоматизация индексации — `indexing status/run/history`, лимиты
+Bing/Yandex/IndexNow/GSC и честные счётчики проиндексированного, плюс полная глубина чтения по
+платформам (GSC URL
 Inspection/sitemap/фильтры, Yandex events/sitemaps/история/очередь recrawl, Bing
 page/traffic/crawl/URL/joins, органическая Метрика, CrUX-история и PSI-аудиты). Десктоп `0.9.0` — текущий
 релиз десктопа, он несёт движок `0.11.0` и требует `>= 0.11.0`. Открытые честные ограничения: GSC
@@ -142,11 +143,12 @@ sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing si
 и Yandex recrawl реально отправляют),
 `crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`), анализ логов
 определяет ботов только по User-Agent, `portfolio list` и `backup restore` доступны только в CLI,
-а CWV-секция строится лишь по сохранённым field-данным CrUX/PSI. GSC принимает и обычный OAuth
-access token, и JSON-ключ service account (файл читается один раз за процесс, access token
+а CWV-секция строится лишь по сохранённым field-данным CrUX/PSI. GSC принимает OAuth-коннектор,
+обычный access token и JSON-ключ service account (файл читается один раз за процесс, access token
 обновляется автоматически). `0.9.0` — предыдущий релиз: Bing sitemap submit и one-click
 IndexNow; `0.8.0` — до него: writer CWV по URL и устройству, безопасный
-`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.12.2 — в
+`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.13.0 — в
+[`docs/releases/0.13.0.md`](docs/releases/0.13.0.md); новое в 0.12.2 — в
 [`docs/releases/0.12.2.md`](docs/releases/0.12.2.md); новое в 0.12.1 — в
 [`docs/releases/0.12.1.md`](docs/releases/0.12.1.md); новое в 0.12.0 — в
 [`docs/releases/0.12.0.md`](docs/releases/0.12.0.md); новое в 0.11.0 — в

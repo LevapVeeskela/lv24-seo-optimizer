@@ -55,7 +55,7 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.12.2).** Working today: six
+**Beta (v0.13.0).** Working today: six
 provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule
 crawler, SQLite history, analysis (deltas, opportunities, indexing triage, multi-engine fusion,
 nginx log analysis with UA-only bot triage, CWV by template), per-provider `stats`, report builders
@@ -65,13 +65,15 @@ read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, Bi
 crawl/URL diagnostics, Bing sitemap and URL submission, one-click IndexNow from the project
 sitemap, GSC URL inspection + sitemap reads + filtered search analytics, Yandex events/sitemaps/
 history/recrawl-queue reads, organic Metrika pages/goals/dimensions, quota-aware indexing automation
-(status/run/history with Bing, Yandex, IndexNow and GSC checks), the 25-command CLI,
+(status/run/history with Bing, Yandex, IndexNow and GSC checks), OAuth connectors for Google Search
+Console and Yandex Webmaster/Metrika, the 25-command CLI,
 the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
-enforced with regression tests. `0.12.2` is the current release: quota-aware indexing automation
-across Bing, Yandex, IndexNow and GSC, with the indexing client-lifecycle and Yandex 5xx fixes
-(PyPI, npm and the MCP Registry, 2026-11-17), and desktop `0.9.0` bundles engine `0.11.0`. See
+enforced with regression tests. `0.13.0` is the current release: OAuth connectors for Google and
+Yandex, quota-aware indexing automation and full-platform read depth
+(PyPI, npm and the MCP Registry, 2026-11-18), and desktop `0.9.0` bundles engine `0.11.0`. See
+[`docs/releases/0.13.0.md`](docs/releases/0.13.0.md),
 [`docs/releases/0.12.2.md`](docs/releases/0.12.2.md),
 [`docs/releases/0.12.1.md`](docs/releases/0.12.1.md),
 [`docs/releases/0.12.0.md`](docs/releases/0.12.0.md),
@@ -268,6 +270,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Architecture](docs/architecture.md) — layers, data model, provider contracts
 * [Data sources & limits](docs/data-sources.md) — what each API can and cannot do
 * [MCP tool surface](docs/mcp.md) — tool names, inputs, outputs, annotations
+* [OAuth connectors](docs/auth.md) — Google Search Console, Yandex Webmaster/Metrika
 * [CLI reference](docs/cli.md) — commands, JSON envelope, exit codes
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram

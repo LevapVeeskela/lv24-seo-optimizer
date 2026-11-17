@@ -15,6 +15,11 @@ Do not publish credentials, customer queries or exploit details in public issues
 * Secrets resolve from `LV24_SEO_*` environment variables, then the optional OS
   keyring, then `data/secrets.json` only when `LV24_SEO_ALLOW_FILE_SECRETS=1` is set.
   There are no token command-line flags; `auth set` reads stdin or a hidden prompt.
+* OAuth connectors (`auth login --provider gsc|yandex|metrika`) store access tokens,
+  refresh tokens, expiry stamps and the client secret in the same secret store. Google
+  uses a loopback `127.0.0.1` callback with S256 PKCE and a random `state`; Yandex uses
+  the `verification_code` page. No token is written to `seo.toml`, an envelope, a log or
+  a `repr`; `auth status` reports presence only.
 * Install `lv24-seo[secrets]` for OS keychain support. On Windows, file fallback
   relies on directory/file ACLs; POSIX mode 0600 cannot enforce Windows permissions.
 * No secrets belong in `seo.toml`, source control, reports or test fixtures.

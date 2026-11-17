@@ -6,7 +6,7 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.12.2` (current; PyPI, npm and the MCP Registry, 2026-11-17): 6 provider
+- Engine `lv24-seo 0.13.0` (current; PyPI, npm and the MCP Registry, 2026-11-18): 6 provider
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
@@ -72,6 +72,15 @@
   provider writes — `seo_sitemap_submit` is wired for Bing submit, `seo_recrawl_request` is wired
   for Yandex recrawl, and the GSC/delete sitemap paths return `WRITE_DISABLED`), 3 resources,
   3 prompts.
+- New in 0.13.0: OAuth connectors for Google Search Console and Yandex Webmaster/Metrika.
+  `lv24-seo auth login --provider gsc` uses a Desktop app client with a loopback
+  `127.0.0.1` callback, S256 PKCE and `state`; `--provider yandex|metrika` uses the
+  `https://oauth.yandex.ru/verification_code` flow. Access/refresh tokens and expiry live in
+  the OS keychain (`OAUTH_SECRET_NAMES`), client secrets are set with
+  `auth set --provider gsc_oauth_secret|yandex_oauth_secret --stdin`, and `[auth.gsc]`/
+  `[auth.yandex]` hold the public `client_id`/`scopes`/`redirect_uri`. GSC keeps the
+  service-account fallback; Yandex keeps static tokens. Bing/IndexNow/CrUX/PSI stay key-based.
+  No new MCP tool, schema or dependency.
 - New in 0.12.2: Yandex `recrawl/queue` 5xx responses (including a 504 with an empty body) are
   reported as `UPSTREAM_UNAVAILABLE` with the HTTP status, not as "invalid JSON"; `202`/`409`/`429`
   behavior is unchanged. No API, CLI, schema or config changes.
@@ -133,6 +142,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
+- [Release notes 0.13.0](docs/releases/0.13.0.md): OAuth connectors for Google Search Console and Yandex
 - [Release notes 0.12.2](docs/releases/0.12.2.md): Yandex recrawl 5xx mapping
 - [Release notes 0.12.1](docs/releases/0.12.1.md): indexing client-lifecycle fix
 - [Release notes 0.12.0](docs/releases/0.12.0.md): quota-aware indexing automation (status/run/history, quotas, honest index counts)

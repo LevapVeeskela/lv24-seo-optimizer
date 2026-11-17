@@ -7,10 +7,10 @@ The CLI has 25 top-level commands: 18 groups (`auth`, `config`, `gsc`, `yandex`,
 
 Every read/report command supports `--json` (machine output) and a stable exit code; commands that
 use the workspace also accept `--config PATH`.
-Output envelope (`meta.version` is the package version, e.g. `0.12.2`):
+Output envelope (`meta.version` is the package version, e.g. `0.13.0`):
 
 ```json
-{ "ok": true, "data": {}, "meta": { "version": "0.12.2", "duration_ms": 812 }, "warnings": [] }
+{ "ok": true, "data": {}, "meta": { "version": "0.13.0", "duration_ms": 812 }, "warnings": [] }
 ```
 
 Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` strict truncation · `1` unexpected.
@@ -54,17 +54,42 @@ directory returns `ok: false` with `meta.healthy: false` and exit `1`, instead o
 ```bash
 lv24-seo auth status [--json]                                  # presence + source, never values
 lv24-seo auth set --provider gsc|yandex|metrika|bing|crux|psi|smtp|telegram [--stdin]
-lv24-seo auth login --provider gsc|yandex                      # prints the provider-specific steps
+lv24-seo auth set --provider gsc_oauth_secret|yandex_oauth_secret [--stdin]
+lv24-seo auth login --provider gsc|yandex|metrika [--no-browser] [--port N] [--code CODE] [--json]
 lv24-seo auth logout --provider <name>
 ```
 
 `auth set` reads the secret from stdin or a hidden prompt, stores it in the OS keychain (or the
 `0600` file fallback), and prints only `{provider, stored, source}`.
 
+`auth login` runs the provider OAuth connector when `[auth.<provider>].client_id` is configured.
+Without a client id it prints the manual token steps; `--manual` forces that path. The OAuth
+connector stores access/refresh tokens and expiry in the secret store, never in `seo.toml` or an
+envelope. `--no-browser` prints the authorization URL to stderr so `--json` on stdout stays one
+document; `--code` completes a flow whose code was obtained out of band.
+
 ### Google Search Console credentials
 
-`auth set --provider gsc` stores a **plain OAuth access token** (`Authorization: Bearer`), which
-normally expires after about an hour. For unattended runs use a service-account JSON key instead:
+Interactive OAuth (Desktop app client, loopback `127.0.0.1` + S256 PKCE):
+
+```toml
+[auth.gsc]
+client_id = "1234567890-abc.apps.googleusercontent.com"
+# scopes default to https://www.googleapis.com/auth/webmasters.readonly
+```
+
+```bash
+lv24-seo auth set --provider gsc_oauth_secret --stdin   # client secret, from Google Cloud
+lv24-seo auth login --provider gsc                      # opens the browser, waits for the callback
+```
+
+Google OAuth apps in **Testing** issue refresh tokens that expire after 7 days; for unattended runs
+keep the service account. A public app needs Google verification for the sensitive
+`webmasters.readonly` scope. `auth login --provider gsc --no-browser` prints the URL and waits;
+`--code` reuses the stored PKCE verifier and needs `--port` or `[auth.gsc].redirect_uri` to repeat
+the redirect exactly.
+
+Service account (recommended for unattended runs):
 
 ```bash
 export LV24_SEO_GSC_SERVICE_ACCOUNT_FILE=/etc/lv24-seo/gsc-service-account.json   # absolute
@@ -76,17 +101,46 @@ $env:LV24_SEO_GSC_SERVICE_ACCOUNT_FILE = "C:\lv24-seo\gsc-service-account.json"
 lv24-seo properties --json
 ```
 
-The same path can live in `seo.toml` as `providers.gsc.service_account_file`. The service-account
-file is tried first (`LV24_SEO_GSC_SERVICE_ACCOUNT_FILE` overrides the config value when both are
-set), then the `gsc_token` secret. A `gsc_token` value that is a service-account JSON object is also
-accepted; a plain token keeps the old bearer behaviour.
-The engine reads the key once per process, signs an RS256 JWT, exchanges it at the Google token
-endpoint, caches the access token and refreshes it 60 seconds before expiry. Relative, missing or
-unreadable files return `CONFIG_INVALID` with a next action.
+The same path can live in `seo.toml` as `providers.gsc.service_account_file`. Resolution order is
+**OAuth grant**, then the service-account file (`LV24_SEO_GSC_SERVICE_ACCOUNT_FILE` overrides the
+config value when both are set), then the `gsc_token` secret. A `gsc_token` value that is a
+service-account JSON object is also accepted; a plain token keeps the old bearer behaviour. The
+engine reads the key once per process, signs an RS256 JWT, exchanges it at the Google token endpoint,
+caches the access token and refreshes it 60 seconds before expiry. Relative, missing or unreadable
+files return `CONFIG_INVALID` with a next action.
 
 `auth status` reports only stored secrets (`env`, `keyring`, `file`); it does not inspect the
 service-account file. `properties` and `doctor` (the `gsc_auth` check) are the readiness surfaces,
 and neither prints the key.
+
+### Yandex Webmaster and Metrika credentials
+
+One Yandex OAuth app can carry both scopes; the CLI keeps separate token slots for the two engines.
+
+```toml
+[auth.yandex]
+client_id = "0123456789abcdef0123456789abcdef"
+scopes = ["webmaster:hostinfo", "metrika:read"]
+# redirect_uri defaults to https://oauth.yandex.ru/verification_code
+```
+
+```bash
+lv24-seo auth set --provider yandex_oauth_secret --stdin
+lv24-seo auth login --provider yandex --no-browser   # open the URL, approve, copy the code
+lv24-seo auth login --provider yandex --code <code>
+lv24-seo auth login --provider metrika               # same app, separate token slot
+```
+
+Yandex shows the verification code at `https://oauth.yandex.ru/verification_code`; the CLI exchanges
+it for an access token and a refresh token. The connector refreshes inside the 60-second margin and
+falls back to a static `yandex_webmaster_token` / `yandex_metrika_token` when no OAuth grant exists.
+`auth logout --provider yandex|metrika` removes the matching OAuth tokens.
+
+### Key-based providers
+
+Bing Webmaster uses an API key (`auth set --provider bing`), IndexNow uses a public key file
+(`providers.bing.indexnow_key`), and CrUX/PSI use Google API keys (`auth set --provider crux|psi`).
+Those providers have no OAuth connector.
 
 ## Data
 

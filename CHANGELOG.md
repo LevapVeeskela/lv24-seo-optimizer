@@ -3,6 +3,29 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.13.0] - 2026-11-18
+
+Release notes: [`docs/releases/0.13.0.md`](docs/releases/0.13.0.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-18); desktop `0.9.0` bundles engine `0.11.0` and desktop `0.9.1`
+follows. Minor release: OAuth connectors for Google Search Console and Yandex Webmaster/Metrika.
+
+### Added
+
+* `auth login --provider gsc`: Google Cloud Desktop app client, loopback `127.0.0.1` + S256 PKCE
+  and `state`, `access_type=offline`, refresh token, `OAuthTokenProvider`, `--no-browser`/`--code`.
+* `auth login --provider yandex|metrika`: Yandex authorization code via
+  `https://oauth.yandex.ru/verification_code`, refresh token, separate token slots and
+  `ensure_fresh_access_token`.
+* `[auth.gsc]`/`[auth.yandex]` public client configuration (`client_id`, `scopes`, `redirect_uri`),
+  `OAUTH_SECRET_NAMES`, client-secret storage via `auth set --provider *_oauth_secret`, and
+  `doctor` recognition of an OAuth grant.
+* `docs/auth.md`, `docs/auth-google.md`, `docs/auth-yandex.md`.
+
+### Not changed
+
+* MCP stays at **12 tools**, SQLite schema at **version 5**, CLI at **25 top-level commands**.
+* No new required dependency; Bing/IndexNow/CrUX/PSI stay key-based.
+
 ## [0.12.2] - 2026-11-17
 
 Release notes: [`docs/releases/0.12.2.md`](docs/releases/0.12.2.md). Status: **released** (PyPI,
