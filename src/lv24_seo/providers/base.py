@@ -23,7 +23,11 @@ SAMPLED = "sampled"
 LOW_TRAFFIC = "low_traffic"
 DEGRADED_HOST = "degraded_host"
 ONE_URL_PER_CALL = "one_url_per_call"
+URL_INSPECTION_QUOTA = "url_inspection_quota_2000_per_day"
+INSPECTION_REFLECTS_LAST_CRAWL = "inspection_reflects_last_crawl"
 NO_PER_URL_SITEMAP_ERRORS = "no_per_url_sitemap_errors"
+SITEMAP_INDEXED_DEPRECATED = "sitemap_indexed_count_deprecated"
+SITEMAP_INDEX_CHILDREN = "sitemap_index_children_not_exposed"
 TOKEN_EXPIRING = "token_expiring"  # noqa: S105 - a limitation code, not a secret
 PAID_PROVIDER = "paid_provider"
 PARTIAL_RESPONSE = "partial_response"
@@ -65,8 +69,8 @@ class ProviderResult(Generic[T]):
     truncated: bool = False
     limitations: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
-    # Provider-specific metadata (for example a collection period). Merged first so
-    # the honesty fields above always win.
+    # Provider-specific metadata (for example a CrUX collection period or a GSC
+    # aggregation type). Merged first so the honesty fields above always win.
     extra: Mapping[str, Any] = field(default_factory=dict)
 
     @property

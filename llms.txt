@@ -32,6 +32,14 @@
   users` lists roles without delegated codes; `bing sites` is account-scoped and works without a
   configured site; `bing joins --query|--page` exposes the three query/page joins with explicit
   `query`/`page` columns.
+- GSC reads: `gsc inspect --url URL [--language]` returns the full `indexStatusResult`,
+  `richResultsResult` and `inspectionResultLink` for one URL (last crawl, not a live test; 2,000/day/site);
+  `gsc sitemaps [--sitemap-index URL]` and `gsc sitemap --path URL` map `type`, `isSitemapsIndex`,
+  `errors`, `warnings` and `contents[{type,submitted,indexed}]` (GSC's `indexed` count is deprecated;
+  child sitemap URLs of an index are not exposed); `gsc query` forwards `--type`, repeatable
+  `--filter`, `--filter-list`, `--data-state`, `--aggregation`, `--search-appearance` and `--branded`,
+  and returns `responseAggregationType` plus incomplete-data `metadata`. Sitemap submit/delete stay
+  `WRITE_DISABLED` (full `webmasters` scope; the engine signs `webmasters.readonly`).
 - Core Web Vitals writer: `lv24-seo cwv collect --url URL [--url URL ...] --device all --source crux`
   persists CrUX URL+device p75 rows (`metric_daily`: `source=crux`, `scope=<device>`, `key=<url>`)
   for the weekly `cwv` section; PSI lab rows are returned but never persisted. `--category` selects

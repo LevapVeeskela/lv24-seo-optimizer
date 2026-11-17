@@ -63,7 +63,8 @@ nginx log analysis with UA-only bot triage, CWV by template), per-provider `stat
 finding/task lifecycle, portable backup bundles with non-destructive and two-phase restore, a
 read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, Bing page/traffic/
 crawl/URL diagnostics, Bing sitemap and URL submission, one-click IndexNow from the project
-sitemap, the 23-command CLI, the MCP server
+sitemap, GSC URL inspection + sitemap reads + filtered search analytics, the 23-command CLI,
+the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
 enforced with regression tests. `0.10.0` is the current release: Bing URL submission,
@@ -97,6 +98,10 @@ lv24-seo init --property https://example.com   # writes seo.toml + data/
 lv24-seo auth set --provider gsc --stdin       # token to the OS keychain (needs lv24-seo[secrets])
 lv24-seo auth set --provider metrika --stdin   # Metrika has its own auth provider and token
 lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --dimensions query,page
+lv24-seo gsc query --start 2026-11-01 --end 2026-11-07 --type image --data-state all --filter country:equals:BLR
+lv24-seo gsc inspect --url https://lv24.by/ --language ru-RU --json   # one URL, last-crawl report
+lv24-seo gsc sitemaps --sitemap-index https://lv24.by/sitemap-seo.xml --json
+lv24-seo gsc sitemap --path https://lv24.by/sitemap.xml --json
 lv24-seo report weekly --days 7 --out reports/
 lv24-seo report diff --markdown                 # week-over-week diff of stored snapshots
 lv24-seo stats --days 7 --json                  # read-only per-provider dashboard snapshot
@@ -232,7 +237,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 
 | Source | Free tier | Used for | Write operations |
 |---|---|---|---|
-| Google Search Console | yes (OAuth access token or service-account JSON key) | queries, pages, countries, devices; URL Inspection adapter | sitemap submit disabled |
+| Google Search Console | yes (OAuth access token or service-account JSON key) | queries, pages, countries, devices; filtered search analytics; URL Inspection (one URL per call); sitemap list/get with contents | sitemap submit/delete disabled (needs full `webmasters` scope) |
 | Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics | recrawl disabled |
 | Yandex Metrika | yes | sessions and users; filtered reports through adapter; separate `metrika` auth provider (`yandex_metrika_token`) | — |
 | Bing Webmaster + IndexNow | yes | queries, pages, daily traffic, six-month crawl stats, query/page joins, URL index details, directory children, site roles, account sites, crawl issues (decoded bitmask), remaining URL quota, sitemap feeds, sitemap submit, URL submit, one-click IndexNow from the sitemap | sitemap submit + URL submit + IndexNow submit |
