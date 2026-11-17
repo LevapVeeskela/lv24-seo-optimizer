@@ -92,6 +92,7 @@ from lv24_seo.providers.gsc.auth import (
 )
 from lv24_seo.providers.psi import PsiClient
 from lv24_seo.providers.yandex_metrika import ORGANIC_FILTER, YandexMetrikaClient
+from lv24_seo.providers.yandex_oauth import ensure_fresh_access_token
 from lv24_seo.providers.yandex_webmaster import YandexWebmasterClient
 from lv24_seo.report.models import Report, ReportSection
 from lv24_seo.store.repositories import Store
@@ -4685,11 +4686,20 @@ class SeoService:
                 property_id=property_id,
             )
 
-        token = self._require_secret(name)
-        if name == "yandex_webmaster":
-            return YandexWebmasterClient(token=token)
-        if name == "yandex_metrika":
+        if name in {"yandex_webmaster", "yandex_metrika"}:
+            # The OAuth connector refreshes an expired access token from the stored refresh
+            # token. A static token without an expiry keeps working unchanged.
+            provider = "yandex" if name == "yandex_webmaster" else "metrika"
+            token = ensure_fresh_access_token(
+                self._secrets,
+                provider,
+                client_id=self._config.auth.yandex.client_id,
+            )
+            if name == "yandex_webmaster":
+                return YandexWebmasterClient(token=token)
             return YandexMetrikaClient(token=token)
+
+        token = self._require_secret(name)
         if name == "bing":
             bing = providers_cfg.bing
             return BingClient(
@@ -4728,6 +4738,18 @@ class SeoService:
         """
         if provider == "gsc" and self._gsc_service_account_file():
             return (self._gsc_service_account_problem() is None, "service_account_file")
+        if provider in {"yandex_webmaster", "yandex_metrika"}:
+            if self._secret_present(secret_name):
+                return (True, "secret")
+            refresh_name = (
+                "yandex_refresh_token"
+                if provider == "yandex_webmaster"
+                else "yandex_metrika_refresh_token"
+            )
+            if self._secret_present(refresh_name):
+                # A refresh token is a credential: the access token is minted on demand.
+                return (True, "refresh_token")
+            return (False, "missing")
         if self._secret_present(secret_name):
             return (True, "secret")
         return (False, "missing")
