@@ -3,6 +3,39 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.12.0] - 2026-11-17
+
+Release notes: [`docs/releases/0.12.0.md`](docs/releases/0.12.0.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-17); desktop `0.9.0` bundles engine `0.11.0` and desktop `0.9.1`
+follows. Minor release: quota-aware indexing automation across Bing, Yandex, IndexNow and GSC.
+The CLI now has **25 top-level commands** (18 groups + 7 commands), the MCP surface stays at
+**12 tools**, and the SQLite schema moves to **version 5**.
+
+### Added
+
+* `indexing status`, `indexing run` and `indexing history`: a sitemap-backed URL queue, priority by
+  `lastmod`/last check, quota-aware planning and idempotent submissions.
+* Quota guards: Bing remaining daily/monthly, Yandex recrawl remainder, a local GSC inspection cap
+  (2,000/day) and a local IndexNow cap (1,000/day).
+* Honest index checks: GSC URL Inspection per URL, the GSC sitemap `contents[].indexed` aggregate
+  (tagged deprecated), Bing `http_status`/`last_crawled_at`, and explicit unknown status for Yandex
+  and IndexNow.
+* Schema v5: `indexing_state`, `indexing_runs`, `quota_usage`.
+* `[indexing]` config: disabled by default, four providers, submit/inspect caps, stale/check cadence.
+* `schedule install --kind indexing`: a daily `lv24-seo-indexing` job at `0 4 * * *`; the host
+  scheduler must provide `LV24_SEO_WRITE_SECRET` in its environment.
+
+### Changed
+
+* CLI command count 24 → 25 (new `indexing` group).
+* `schedule --kind` accepts `weekly`, `daily` and `indexing`.
+* Docs add the quota/index-status matrix, the `[indexing]` section and the scheduler secret rules.
+
+### Not changed
+
+* MCP stays at 12 tools; indexing automation is CLI/scheduler-only.
+* Existing write gates for Bing URL/sitemap submit, IndexNow and Yandex recrawl are reused.
+
 ## [0.11.0] - 2026-11-17
 
 Release notes: [`docs/releases/0.11.0.md`](docs/releases/0.11.0.md). Status: **released** (PyPI,

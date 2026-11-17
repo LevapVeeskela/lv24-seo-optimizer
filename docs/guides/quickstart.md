@@ -1,8 +1,8 @@
 # Quickstart
 
-Verified against the 0.11.0 CLI (`lv24-seo <command> --help` is the authority when in doubt); the
-list has 24 top-level commands (17 groups + 7 commands). `0.11.0` is the latest published engine,
-and desktop `0.8.0` bundles engine `0.10.0`.
+Verified against the 0.12.0 CLI (`lv24-seo <command> --help` is the authority when in doubt); the
+list has 25 top-level commands (18 groups + 7 commands). `0.12.0` is the latest published engine,
+and desktop `0.9.0` bundles engine `0.11.0`.
 
 ## 1. Install
 

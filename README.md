@@ -55,7 +55,7 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.11.0).** Working today: six
+**Beta (v0.12.0).** Working today: six
 provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule
 crawler, SQLite history, analysis (deltas, opportunities, indexing triage, multi-engine fusion,
 nginx log analysis with UA-only bot triage, CWV by template), per-provider `stats`, report builders
@@ -64,13 +64,15 @@ finding/task lifecycle, portable backup bundles with non-destructive and two-pha
 read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, Bing page/traffic/
 crawl/URL diagnostics, Bing sitemap and URL submission, one-click IndexNow from the project
 sitemap, GSC URL inspection + sitemap reads + filtered search analytics, Yandex events/sitemaps/
-history/recrawl-queue reads, organic Metrika pages/goals/dimensions, the 25-command CLI,
+history/recrawl-queue reads, organic Metrika pages/goals/dimensions, quota-aware indexing automation
+(status/run/history with Bing, Yandex, IndexNow and GSC checks), the 25-command CLI,
 the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
-enforced with regression tests. `0.11.0` is the current release: full-platform read depth across
-GSC, Yandex, Bing, Metrika and CWV/IndexNow (PyPI, npm and the MCP Registry, 2026-11-17),
+enforced with regression tests. `0.12.0` is the current release: quota-aware indexing automation
+across Bing, Yandex, IndexNow and GSC (PyPI, npm and the MCP Registry, 2026-11-17),
 and desktop `0.9.0` bundles engine `0.11.0`. See
+[`docs/releases/0.12.0.md`](docs/releases/0.12.0.md),
 [`docs/releases/0.11.0.md`](docs/releases/0.11.0.md),
 [`docs/releases/0.10.0.md`](docs/releases/0.10.0.md),
 [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md),
@@ -268,6 +270,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
+* [Release notes 0.12.0](docs/releases/0.12.0.md) — quota-aware indexing automation: status/run/history, Bing/Yandex/IndexNow/GSC quotas, honest index counts
 * [Release notes 0.11.0](docs/releases/0.11.0.md) — full-platform read depth: GSC inspection/sitemaps, Yandex events/sitemaps/recrawl, Bing page/crawl/URL diagnostics, organic Metrika, CWV audits/history
 * [Release notes 0.10.0](docs/releases/0.10.0.md) — Bing URL submission, remaining quota, sitemap feeds, crawl-issue bitmask
 * [Release notes 0.9.0](docs/releases/0.9.0.md) — Bing sitemap submit, one-click IndexNow
