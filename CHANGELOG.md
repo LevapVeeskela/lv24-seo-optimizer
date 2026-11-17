@@ -5,11 +5,12 @@ All notable changes to this project are documented here. Format follows
 
 ## [0.10.0] - 2026-11-17
 
-Release notes: [`docs/releases/0.10.0.md`](docs/releases/0.10.0.md). Status: **release
-candidate**; `0.9.0` is still the latest published build. Minor release: Bing URL submission is a
-real gated write, and Bing quota, sitemap-feed and crawl-issue views are read-only commands. The
-CLI now has **23 top-level commands** (16 groups + 7 commands), the MCP surface stays at
-**12 tools**, and the SQLite schema stays at version 4. Bing URL submission is CLI/desktop-only.
+Release notes: [`docs/releases/0.10.0.md`](docs/releases/0.10.0.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-17); desktop `0.8.0` bundles engine `0.10.0`. Minor release:
+Bing URL submission is a real gated write, and Bing quota, sitemap-feed and crawl-issue views are
+read-only commands. The CLI now has **23 top-level commands** (16 groups + 7 commands), the MCP
+surface stays at **12 tools**, and the SQLite schema stays at version 4. Bing URL submission is
+CLI/desktop-only.
 
 ### Added
 
