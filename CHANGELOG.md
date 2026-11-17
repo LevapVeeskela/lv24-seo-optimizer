@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.12.1] - 2026-11-17
+
+Release notes: [`docs/releases/0.12.1.md`](docs/releases/0.12.1.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-17). Patch release.
+
+### Fixed
+
+* `indexing run` reported `internal_error` for Bing and Yandex because the indexing engine closed a
+  provider client between the quota read and the checks/submit phase while `SeoService` kept the
+  closed client cached. The service now owns the client for the whole run; a regression test covers
+  the cached-client failure. No API, CLI, schema or config changes.
+
 ## [0.12.0] - 2026-11-17
 
 Release notes: [`docs/releases/0.12.0.md`](docs/releases/0.12.0.md). Status: **released** (PyPI,

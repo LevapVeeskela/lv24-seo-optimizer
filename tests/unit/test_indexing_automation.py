@@ -568,3 +568,35 @@ def test_missing_write_secret_refuses_apply(store: Store) -> None:
         engine.run(_queue(URL_A), provider="bing")
 
     assert excinfo.value.code == WRITE_DISABLED
+
+
+class _ClosableFakeYandex(FakeYandex):
+    """Raises like httpx after ``close``; reproduces the cached-client bug."""
+
+    def __init__(self, *, remainder: int = 10) -> None:
+        super().__init__(remainder=remainder)
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    def recrawl_quota(self, host_id: str) -> ProviderResult:
+        if self.closed:
+            raise RuntimeError("Cannot send a request, as the client has been closed.")
+        return super().recrawl_quota(host_id)
+
+
+def test_service_cached_client_is_not_closed_between_indexing_phases(store: Store) -> None:
+    from lv24_seo.services import SeoService
+
+    fake = _ClosableFakeYandex(remainder=7)
+    service = SeoService(_config(), store=store, clients={"yandex_webmaster": fake})
+    engine = service._indexing_engine(warnings=[])
+    target = engine._select_targets("yandex")[0]
+
+    first = engine._quota_before(target)
+    second = engine._quota_before(target)
+
+    assert first[1] == 7
+    assert second[1] == 7
+    assert fake.closed is False

@@ -2806,19 +2806,15 @@ class SeoService:
         def client_for(name: str) -> object:
             return self._client_for(name, warnings)
 
-        def close_client(name: str, client: object) -> None:
-            if name in self._overrides:
-                return
-            close = getattr(client, "close", None)
-            if callable(close):
-                close()
-
+        # The service owns and caches provider clients for the whole run. Closing one
+        # between the quota read, checks and submit would leave a closed client in the
+        # cache, so the next phase would fail with "client has been closed". The engine
+        # drops its local reference; the service closes clients with the process.
         return IndexingEngine(
             config=self._config,
             store=self._store,
             targets=self._indexing_targets(),
             client_for=client_for,
-            close_client=close_client,
             allow_write=allow_write,
             force=force,
             max_submit=max_submit,
