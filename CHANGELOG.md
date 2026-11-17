@@ -17,8 +17,7 @@ npm and the MCP Registry, 2026-11-18). Patch release.
 ## [0.13.0] - 2026-11-18
 
 Release notes: [`docs/releases/0.13.0.md`](docs/releases/0.13.0.md). Status: **released** (PyPI,
-npm and the MCP Registry, 2026-11-18); desktop `0.9.0` bundles engine `0.11.0` and desktop `0.9.1`
-follows. Minor release: OAuth connectors for Google Search Console and Yandex Webmaster/Metrika.
+npm and the MCP Registry, 2026-11-18); desktop `0.9.1` bundles engine `0.13.1`. Minor release: OAuth connectors for Google Search Console and Yandex Webmaster/Metrika.
 
 ### Added
 
