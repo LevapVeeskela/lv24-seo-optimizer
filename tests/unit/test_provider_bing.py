@@ -9,7 +9,13 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from lv24_seo.core.errors import AUTH_REQUIRED, INVALID_INPUT, SeoError
+from lv24_seo.core.errors import (
+    AUTH_INVALID,
+    AUTH_REQUIRED,
+    INVALID_INPUT,
+    QUOTA_EXCEEDED,
+    SeoError,
+)
 from lv24_seo.core.http import HttpClient
 from lv24_seo.providers.bing import BingClient, indexnow_submit
 from lv24_seo.providers.bing import client as bing_client_module
@@ -506,7 +512,171 @@ def test_indexnow_payload_shape_and_202_accepted() -> None:
     assert result.source == "indexnow"
     assert result.property_id == "example.com"
     assert result.data_age_days == 0
-    assert result.rows == [{"submitted": 2, "host": "example.com", "status_code": 202}]
+    assert result.rows == [
+        {
+            "submitted": 2,
+            "host": "example.com",
+            "status_code": 202,
+            "status": "accepted_pending",
+        }
+    ]
+    assert result.warnings == (
+        "indexnow accepted pending: key validation is pending at the engine",
+    )
+    assert result.limitations == ("indexnow_accepted_pending",)
+
+
+def test_indexnow_200_is_accepted_without_a_warning() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    result = indexnow_submit(
+        host="example.com",
+        key="abc12345",
+        urls=["https://example.com/a"],
+        http=_http(handler),
+    )
+
+    assert result.rows == [
+        {
+            "submitted": 1,
+            "host": "example.com",
+            "status_code": 200,
+            "status": "accepted",
+        }
+    ]
+    assert result.warnings == ()
+    assert result.limitations == ()
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["short", "abc 12345", "abc_12345", "abc12345/extra", "a" * 129],
+)
+def test_indexnow_rejects_invalid_keys_before_the_network(key: str) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no request expected")
+
+    with pytest.raises(SeoError) as caught:
+        indexnow_submit(
+            host="example.com",
+            key=key,
+            urls=["https://example.com/a"],
+            http=_http(handler),
+        )
+
+    assert caught.value.code == INVALID_INPUT
+    assert "8-128" in caught.value.message
+    assert key not in str(caught.value)
+
+
+def test_indexnow_403_names_the_exact_key_url_without_echoing_the_key() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403)
+
+    with pytest.raises(SeoError) as caught:
+        indexnow_submit(
+            host="example.com",
+            key="abc12345",
+            urls=["https://example.com/a"],
+            http=_http(handler),
+        )
+
+    error = caught.value
+    assert error.code == AUTH_INVALID
+    assert "key file missing or mismatched" in error.message
+    assert error.next_action is not None
+    assert "https://example.com/abc12345.txt" in error.next_action
+    assert "abc12345" not in error.message
+    assert "abc12345" not in repr(error.detail)
+
+
+def test_indexnow_400_is_a_format_error() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400)
+
+    with pytest.raises(SeoError) as caught:
+        indexnow_submit(
+            host="example.com",
+            key="abc12345",
+            urls=["https://example.com/a"],
+            http=_http(handler),
+        )
+
+    assert caught.value.code == INVALID_INPUT
+    assert "invalid format" in caught.value.message
+
+
+def test_indexnow_429_is_spam_or_quota_and_retryable() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429)
+
+    with pytest.raises(SeoError) as caught:
+        indexnow_submit(
+            host="example.com",
+            key="abc12345",
+            urls=["https://example.com/a"],
+            http=_http(handler),
+        )
+
+    assert caught.value.code == QUOTA_EXCEEDED
+    assert caught.value.retryable is True
+    assert "spam" in caught.value.message
+
+
+def test_indexnow_key_location_prefix_is_enforced() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no request expected")
+
+    with pytest.raises(SeoError) as caught:
+        indexnow_submit(
+            host="example.com",
+            key="abc12345",
+            urls=["https://example.com/catalog/show", "https://example.com/help/x"],
+            key_location="https://example.com/catalog/abc12345.txt",
+            http=_http(handler),
+        )
+
+    assert caught.value.code == INVALID_INPUT
+    assert "/catalog/" in caught.value.message
+    assert "https://example.com/help/x" in repr(caught.value.detail)
+
+
+def test_indexnow_key_location_allows_urls_under_its_prefix() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200)
+
+    indexnow_submit(
+        host="example.com",
+        key="abc12345",
+        urls=["https://example.com/catalog/show", "https://example.com/catalog/42"],
+        key_location="https://example.com/catalog/abc12345.txt",
+        http=_http(handler),
+    )
+
+    assert json.loads(seen[0].content)["keyLocation"] == (
+        "https://example.com/catalog/abc12345.txt"
+    )
+
+
+def test_indexnow_key_location_must_be_on_the_submitted_host() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no request expected")
+
+    with pytest.raises(SeoError) as caught:
+        indexnow_submit(
+            host="example.com",
+            key="abc12345",
+            urls=["https://example.com/a"],
+            key_location="https://cdn.example.net/abc12345.txt",
+            http=_http(handler),
+        )
+
+    assert caught.value.code == INVALID_INPUT
+    assert "submitted host" in caught.value.message
 
 
 def test_indexnow_omits_key_location_when_not_given() -> None:

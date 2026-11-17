@@ -7,6 +7,7 @@ different way (see ``docs/data-sources.md``).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Generic, TypeVar
@@ -64,6 +65,9 @@ class ProviderResult(Generic[T]):
     truncated: bool = False
     limitations: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    # Provider-specific metadata (for example a collection period). Merged first so
+    # the honesty fields above always win.
+    extra: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def empty(self) -> bool:
@@ -71,13 +75,16 @@ class ProviderResult(Generic[T]):
 
     def to_meta(self) -> dict[str, Any]:
         """The ``meta`` block expected by the response envelope."""
-        meta: dict[str, Any] = {
-            "source": self.source,
-            "property_id": self.property_id,
-            "fetched_at": self.fetched_at.isoformat(),
-            "data_age_days": self.data_age_days,
-            "truncated": self.truncated,
-        }
+        meta: dict[str, Any] = dict(self.extra)
+        meta.update(
+            {
+                "source": self.source,
+                "property_id": self.property_id,
+                "fetched_at": self.fetched_at.isoformat(),
+                "data_age_days": self.data_age_days,
+                "truncated": self.truncated,
+            }
+        )
         if self.total is not None:
             meta["total"] = self.total
         if self.limitations:

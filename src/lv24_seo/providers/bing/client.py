@@ -30,6 +30,7 @@ policy instead of inventing its own.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from types import TracebackType
@@ -54,13 +55,23 @@ from lv24_seo.providers.base import (
     now_utc,
 )
 
-__all__ = ["BingClient", "indexnow_submit"]
+__all__ = [
+    "BingClient",
+    "indexnow_submit",
+    "validate_indexnow_key",
+    "validate_indexnow_key_location",
+]
 
 BING_API_KEY_ENV = "LV24_SEO_BING_API_KEY"
 DEFAULT_BASE_URL = "https://ssl.bing.com/webmaster/api.svc/json"
 DEFAULT_INDEXNOW_ENDPOINT = "https://api.indexnow.org/indexnow"
 SUBMIT_BATCH_LIMIT = 500
 INDEXNOW_URL_LIMIT = 10_000
+
+# The IndexNow protocol accepts 8-128 characters from A-Z, a-z, 0-9 and '-'.
+INDEXNOW_KEY_PATTERN = re.compile(r"[A-Za-z0-9-]{8,128}")
+INDEXNOW_KEY_RULE = "8-128 characters using only A-Z, a-z, 0-9 and '-'"
+INDEXNOW_ACCEPTED_PENDING = "indexnow_accepted_pending"
 
 # Stable warning codes: consumers must be able to detect a lossy parse without a schema.
 UNEXPECTED_SHAPE_WARNING = "unexpected_response_shape"
@@ -503,15 +514,16 @@ def indexnow_submit(
     http: HttpClient | None = None,
     endpoint: str = DEFAULT_INDEXNOW_ENDPOINT,
 ) -> ProviderResult[Row]:
-    """Ping IndexNow (Bing, Yandex and others; Google does not participate)."""
+    """Ping IndexNow (Bing, Yandex and others; Google does not participate).
+
+    The key is validated before any network call (8-128 ``[A-Za-z0-9-]``). When
+    ``key_location`` is set, every URL must share its host and start with its
+    directory prefix, as the protocol requires. Provider statuses are mapped to
+    actionable errors: 400 format, 403 key file missing/mismatched, 422 host/key
+    mismatch, 429 spam/quota; 202 is accepted-pending, never "indexed".
+    """
     host_value = _clean_host(host)
-    key_value = key.strip()
-    if not key_value:
-        raise SeoError(
-            code=AUTH_REQUIRED,
-            message="IndexNow key is empty",
-            next_action=f"host the key at https://{host_value}/<key>.txt and pass the same key",
-        )
+    key_value = validate_indexnow_key(key)
 
     batch = _collect_urls(
         urls,
@@ -528,6 +540,9 @@ def indexnow_submit(
         )
 
     key_file = (key_location or "").strip()
+    if key_file:
+        validate_indexnow_key_location(key_location=key_file, host=host_value, urls=batch)
+
     payload: dict[str, Any] = {"host": host_value, "key": key_value}
     if key_file:
         payload["keyLocation"] = key_file
@@ -535,20 +550,19 @@ def indexnow_submit(
 
     client = http if http is not None else HttpClient()
     try:
-        response = client.request(
-            "POST", target, json=payload, follow_redirects=True, rate_limit_key="bing"
-        )
-    except SeoError as exc:
-        if exc.code == INVALID_INPUT and exc.detail.get("status_code") == 422:
-            # 422 means the engine could not match the key to the key file at the host.
-            location = key_file or f"https://{host_value}/{key_value}.txt"
-            raise SeoError(
-                code=INVALID_INPUT,
-                message="IndexNow rejected the key (HTTP 422): key file missing or mismatched",
-                next_action=f"publish the key at {location} with exactly the key as the body",
-                detail={"status_code": 422},
-            ) from exc
-        raise
+        try:
+            response = client.request(
+                "POST", target, json=payload, follow_redirects=True, rate_limit_key="bing"
+            )
+        except SeoError as exc:
+            mapped = _indexnow_status_error(
+                exc.detail.get("status_code"), host=host_value, key_file=key_file, key=key_value
+            )
+            if mapped is not None:
+                raise mapped from exc
+            raise
+        status = response.status_code
+        response.close()
     finally:
         if http is None:
             client.close()
@@ -556,15 +570,157 @@ def indexnow_submit(
     row: Row = {
         "submitted": len(batch),
         "host": host_value,
-        "status_code": response.status_code,
+        "status_code": status,
+        "status": "accepted",
     }
+    warnings: tuple[str, ...] = ()
+    limitations: tuple[str, ...] = ()
+    if status == 202:
+        row["status"] = "accepted_pending"
+        warnings = ("indexnow accepted pending: key validation is pending at the engine",)
+        limitations = (INDEXNOW_ACCEPTED_PENDING,)
     return ProviderResult(
         source="indexnow",
         property_id=host_value,
         fetched_at=now_utc(),
         data_age_days=0,
         rows=[row],
+        limitations=limitations,
+        warnings=warnings,
     )
+
+
+def validate_indexnow_key(key: str) -> str:
+    """Return the stripped key or raise a non-leaking ``SeoError``."""
+    value = key.strip()
+    if not value:
+        raise SeoError(
+            code=AUTH_REQUIRED,
+            message="IndexNow key is empty",
+            next_action="host the key at https://<host>/<key>.txt and pass the same key",
+        )
+    if INDEXNOW_KEY_PATTERN.fullmatch(value) is None:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=f"IndexNow key must be {INDEXNOW_KEY_RULE}",
+            next_action=(
+                f"use the key from the published key file; it must match {INDEXNOW_KEY_RULE}"
+            ),
+            detail={"field": "key", "min_length": 8, "max_length": 128},
+        )
+    return value
+
+
+def validate_indexnow_key_location(
+    *,
+    key_location: str,
+    host: str,
+    urls: Sequence[str],
+) -> None:
+    """Enforce the IndexNow key-file scope: same host and directory prefix.
+
+    A key file at ``https://example.com/catalog/key.txt`` may only submit URLs
+    under ``https://example.com/catalog/``. The root location (``/key.txt``)
+    allows the whole host. Nothing here echoes the key.
+    """
+    location = key_location.strip()
+    if not location:
+        return
+    parts = urlsplit(location)
+    location_host = (parts.hostname or "").lower()
+    if parts.scheme not in {"http", "https"} or not location_host:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="IndexNow keyLocation must be an absolute http(s) URL",
+            next_action="set providers.bing.indexnow_key_location to https://<host>/<key>.txt",
+            detail={"field": "key_location"},
+        )
+    host_value = host.strip().lower()
+    if location_host != host_value:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message="IndexNow keyLocation must be on the submitted host",
+            next_action=(
+                f"host the key file on {host_value} or submit URLs from {location_host} only"
+            ),
+            detail={"key_location_host": location_host, "host": host_value},
+        )
+
+    prefix = parts.path.rsplit("/", 1)[0] + "/" if "/" in parts.path else "/"
+    wrong_host = [url for url in urls if (urlsplit(url).hostname or "").lower() != location_host]
+    if wrong_host:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=(
+                f"IndexNow keyLocation host {location_host} does not match "
+                f"{len(wrong_host)} submitted URL host(s)"
+            ),
+            next_action=(
+                f"submit URLs from {location_host} only, or publish a key file on their host"
+            ),
+            detail={"key_location_host": location_host, "urls": wrong_host[:3]},
+        )
+    outside = [url for url in urls if not urlsplit(url).path.startswith(prefix)]
+    if outside:
+        raise SeoError(
+            code=INVALID_INPUT,
+            message=(
+                f"IndexNow keyLocation allows only URLs under {prefix}; "
+                f"{len(outside)} submitted URL(s) are outside it"
+            ),
+            next_action=(
+                f"host the key file at https://{host_value}/<key>.txt (root) "
+                f"or submit only URLs under {prefix}"
+            ),
+            detail={"prefix": prefix, "count": len(outside), "urls": outside[:3]},
+        )
+
+
+def _indexnow_status_error(
+    status: object,
+    *,
+    host: str,
+    key_file: str,
+    key: str,
+) -> SeoError | None:
+    """Map an IndexNow HTTP status to an actionable, non-leaking error."""
+    if status == 400:
+        return SeoError(
+            code=INVALID_INPUT,
+            message="IndexNow rejected the request (HTTP 400): invalid format",
+            next_action=(
+                "check that every URL is absolute, the host is a bare hostname, "
+                f"and the key matches {INDEXNOW_KEY_RULE}"
+            ),
+            detail={"status_code": 400},
+        )
+    if status == 403:
+        location = key_file or f"https://{host}/{key}.txt"
+        return SeoError(
+            code=AUTH_INVALID,
+            message="IndexNow rejected the key (HTTP 403): key file missing or mismatched",
+            next_action=f"publish the key at {location} with exactly the key as the body",
+            retryable=False,
+            detail={"status_code": 403},
+        )
+    if status == 422:
+        # 422 means the engine could not match the key to the key file at the host.
+        location = key_file or f"https://{host}/{key}.txt"
+        return SeoError(
+            code=INVALID_INPUT,
+            message="IndexNow rejected the key (HTTP 422): key file missing or mismatched",
+            next_action=f"publish the key at {location} with exactly the key as the body",
+            detail={"status_code": 422},
+        )
+    if status == 429:
+        return SeoError(
+            code=QUOTA_EXCEEDED,
+            message="IndexNow rate limited the request (HTTP 429): potential spam",
+            next_action="wait before retrying and submit fewer URLs per batch",
+            retryable=True,
+            detail={"status_code": 429},
+        )
+    return None
 
 
 def _unwrap_items(payload: Any) -> tuple[list[Any], tuple[str, ...]]:

@@ -226,7 +226,11 @@ the equally long window immediately before it.
 
 ```bash
 lv24-seo cwv collect --url https://example.com/ --url https://example.com/pricing \
-  --device all --source crux --limit 10 [--config seo.toml] [--json]
+  --device all --source crux --limit 10 [--category performance ...] [--config seo.toml] [--json]
+lv24-seo cwv audits --url https://example.com/ [--strategy mobile|desktop] \
+  [--category performance|seo|accessibility|best-practices ...] [--config seo.toml] [--json]
+lv24-seo cwv history (--url https://example.com/page | --origin https://example.com) \
+  [--device phone|desktop|tablet] [--weeks 1..40] [--config seo.toml] [--json]
 ```
 
 `cwv collect` is the writer that makes the weekly `cwv` section populate in real runs. It queries
@@ -243,13 +247,18 @@ for `phone`) and stores each p75 as one `metric_daily` row:
 | `date` | fetch date in `report.timezone` |
 | `accuracy` | `crux_field_28d` |
 
-CrUX reports a 28-day rolling window, so `meta.data_age_days` is at least 2. A low-traffic URL is
+CrUX reports a 28-day rolling window, so `meta.data_age_days` is computed from the
+`collectionPeriod.lastDate` the provider returned, not from a fixed guess. Each CrUX row carries
+`first_date`/`last_date`, and `meta.collection_period` carries the same bounds; when the provider
+omits the period (including a 404) the old two-day heuristic is used and `crux_period_missing` says
+so. A low-traffic URL is
 `404` upstream; it becomes `low_traffic` in `limitations[]` and writes no row — never a zero. Metrics
 outside the five canonical names (for example deprecated FID) are skipped and named in
 `cwv_metric_unsupported`. `--limit` caps the number of URLs (1..50); `meta.total` counts requested
 URLs, `meta.processed` counts the URLs inside the cap, `meta.pairs_total`/`meta.pairs_processed`
 count the URL×device pairs, `meta.calls` counts provider requests actually made, and a capped run
-sets `meta.truncated: true` with `cwv_url_cap`. Duplicate URLs are queried once.
+sets `meta.truncated: true` with `cwv_url_cap`. Duplicate URLs are queried once. When CrUX
+normalizes the requested URL, the run carries a warning and `crux_url_normalized`.
 
 PSI is **lab** data. `--source psi` runs Lighthouse for diagnostics, but its rows are returned under
 `data.lab` and are never written to `metric_daily`: the CWV builder treats every stored p75 as field
@@ -258,6 +267,29 @@ data, so persisting a lab score would pollute the field series. Every run that i
 reported as `psi_tablet_unsupported`. PSI works without a key; CrUX requires one, and a missing CrUX
 key returns the standard `AUTH_REQUIRED` envelope with
 `next: lv24-seo auth login --provider crux` before any network call.
+
+`--category` (repeatable) selects the Lighthouse categories for the PSI path; the default stays
+`performance` + `seo`, and a crux-only run reports `cwv_categories_ignored` instead of pretending the
+flag applied.
+
+`cwv audits` is the read-only Lighthouse diagnostics surface for one URL. It returns at most 100
+audit rows (`meta.total`/`meta.truncated`/`psi_audits_cap` carry the bound) with `id`, `title`,
+`score`, `display_value`, `description`, `details_type`, `overall_savings_ms`,
+`overall_savings_bytes` and `items_count`; descriptions are plain text (HTML stripped) and item
+arrays are never included. Category scores are returned under `data.categories`. A provider
+`runtimeError` becomes `psi_runtime_error`, a CAPTCHA becomes `psi_captcha`, and a `finalUrl` that
+differs from the requested URL becomes `psi_final_url_differs` — a run is never called clean when
+Lighthouse reported a problem. `meta.analysis_utc_timestamp` and `meta.final_url` expose the run
+identity. Nothing is persisted.
+
+`cwv history` reads `records:queryHistoryRecord` and returns weekly p75 periods, newest last. Each
+row has `first_date`/`last_date`, an optional canonical `device`, and the metric keys `lcp`, `inp`,
+`cls`, `fcp`, `ttfb`, `fid` when present. `--weeks` (1..40) is sent as `collectionPeriodCount` and
+also enforced locally, so `meta.total`/`meta.truncated` stay honest if a provider returns more.
+Missing p75 cells are reported as `crux_history_gaps`, never filled; fewer periods than requested
+sets `crux_history_short`; non-CWV metrics are filtered and named in `crux_history_metrics_filtered`.
+A low-traffic target is `low_traffic`, and `data_age_days` comes from the newest period's
+`lastDate`. Nothing is persisted.
 
 `report weekly` and `seo_weekly_report` read the stored rows end-to-end. The CWV read includes today,
 not only the provider-lagged traffic window, so a collection is visible in the same weekly run.
@@ -516,13 +548,21 @@ a crawl/index status, and per-URL errors are not exposed. `--details FEED_URL` r
 
 `indexnow submit` resolves defaults from config: `providers.bing.site` supplies the host,
 `providers.bing.indexnow_key` the key, and `providers.bing.indexnow_key_location` the public
-key file (default `https://<host>/<key>.txt`). `--host`, `--key` and `--url` still work.
+key file (default `https://<host>/<key>.txt`). `--host`, `--key` and `--url` still work. The key
+must be 8–128 characters from `A-Z`, `a-z`, `0-9` and `-`; it is validated before the plan and
+before any network call, and never echoed in a message or detail. When `keyLocation` is set, every
+submitted URL must be on the same host and under its directory prefix (a key at
+`https://example.com/catalog/<key>.txt` allows only `https://example.com/catalog/...`); the dry run
+fails with `INVALID_INPUT` instead of discovering the mismatch at apply time.
 `--from-sitemap` reads a `<urlset>` or a bounded `<sitemapindex>` (root plus five child
 sitemaps, 10,000 URLs) during the plan, merges explicit `--url` values, deduplicates and
 skips URLs outside the host. `meta.truncated`, `meta.total` and `meta.limitations` report any
 cap or skipped URL. The apply re-fetches the sitemap; if its URL set changed, the plan token
-is invalidated with `CONFIRM_REQUIRED` and nothing is sent. A missing key is `AUTH_REQUIRED`;
-an HTTP 422 key-file mismatch is `INVALID_INPUT` with the exact key-file location.
+is invalidated with `CONFIRM_REQUIRED` and nothing is sent. A missing key is `AUTH_REQUIRED`.
+Provider statuses are actionable: `200` accepted, `202` accepted-pending (warning plus
+`indexnow_accepted_pending`, never "indexed"), `400` invalid format (`INVALID_INPUT`), `403` key file
+missing/mismatched (`AUTH_INVALID` with the exact key-file URL), `422` key/host mismatch
+(`INVALID_INPUT`) and `429` spam/quota (`QUOTA_EXCEEDED`, retryable).
 
 ## Scheduling
 
