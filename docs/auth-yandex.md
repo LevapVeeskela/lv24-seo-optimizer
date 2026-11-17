@@ -79,12 +79,13 @@ lv24-seo auth login --provider metrika
 
 Stored secret names:
 
-| Provider | Access token | Refresh token | Expiry |
-|---|---|---|---|
-| `yandex` | `yandex_webmaster_token` | `yandex_refresh_token` | `yandex_token_expires_at` |
-| `metrika` | `yandex_metrika_token` | `yandex_metrika_refresh_token` | `yandex_metrika_token_expires_at` |
+| Provider | Access token | Refresh token | Expiry | Scopes |
+|---|---|---|---|---|
+| `yandex` | `yandex_webmaster_token` | `yandex_refresh_token` | `yandex_token_expires_at` | `yandex_token_scopes` |
+| `metrika` | `yandex_metrika_token` | `yandex_metrika_refresh_token` | `yandex_metrika_token_expires_at` | `yandex_metrika_token_scopes` |
 
-The app secret (`yandex_oauth_client_secret`) is shared and survives `auth logout`.
+The app secret (`yandex_oauth_client_secret`) is shared and survives `auth logout`. Scopes
+are stored as one space-separated string and are deleted with the rest of the grant.
 
 ## 5. Automatic refresh
 
@@ -113,13 +114,20 @@ lv24-seo auth status --json
 ```
 
 `auth status` reports presence and source only; it never reads a value back into the
-output. `logout` removes the access token, refresh token and expiry for one provider and
-keeps the app secret:
+output. `logout` removes the access token, refresh token, recorded scopes and expiry for one
+provider and keeps the app secret:
 
 ```bash
 lv24-seo auth logout --provider yandex
 lv24-seo auth logout --provider metrika
 ```
+
+Both `auth status --json` and `doctor --json` classify each provider as `oauth_ready`,
+`oauth_client_missing`, `oauth_client_secret_missing`, `oauth_token_missing`,
+`oauth_token_expired`, `oauth_scope_missing`, `oauth_scope_unknown` or
+`oauth_redirect_invalid`; see [OAuth connectors](auth.md#readiness-diagnostics) for the fix
+behind each code. A configured `[auth.yandex].redirect_uri` must be exactly
+`https://oauth.yandex.ru/verification_code`; an empty value is the default and is valid.
 
 ## Troubleshooting
 

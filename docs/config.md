@@ -143,6 +143,13 @@ keeps the manual token flow.
 | `scopes` | provider default | requested scopes; Google defaults to `webmasters.readonly`, Yandex to `webmaster:hostinfo` + `metrika:read` |
 | `redirect_uri` | provider default | Google loopback `http://127.0.0.1:<port>/callback`; Yandex `https://oauth.yandex.ru/verification_code` |
 
+A configured `redirect_uri` is validated by `auth status` and `doctor`: Google must use
+`http://127.0.0.1:<port>/...` (not `localhost`, not HTTPS, not another host) and Yandex must
+be exactly `https://oauth.yandex.ru/verification_code`. An empty value means the provider
+default and is always valid. The granted scopes are recorded in the secret store
+(`gsc_token_scopes`, `yandex_token_scopes`, `yandex_metrika_token_scopes`) so the readiness
+check compares real data; see [OAuth connectors](auth.md#readiness-diagnostics).
+
 Environment overrides: `LV24_SEO_GSC_CLIENT_ID`, `LV24_SEO_GSC_REDIRECT_URI`,
 `LV24_SEO_YANDEX_CLIENT_ID`, `LV24_SEO_YANDEX_REDIRECT_URI`. See
 [auth-google.md](auth-google.md) and [auth-yandex.md](auth-yandex.md).

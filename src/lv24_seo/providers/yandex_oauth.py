@@ -65,6 +65,7 @@ __all__ = [
     "ensure_fresh_access_token",
     "exchange_code",
     "login_next_action",
+    "provider_scope_name",
     "provider_secret_names",
     "refresh_token",
     "store_tokens",
@@ -96,6 +97,11 @@ _PROVIDER_ALIASES: dict[str, str] = {
     "yandex_webmaster": "yandex",
     "metrika": "metrika",
     "yandex_metrika": "metrika",
+}
+#: Granted scopes, stored as one space-separated string (the token endpoint's shape).
+_SCOPE_KEYS: dict[str, str] = {
+    "yandex": "yandex_token_scopes",
+    "metrika": "yandex_metrika_token_scopes",
 }
 _PROVIDER_LABELS: dict[str, str] = {
     "yandex": "Yandex Webmaster",
@@ -235,6 +241,11 @@ def provider_secret_names(provider: str) -> tuple[str, str, str]:
     return _PROVIDER_KEYS[key]
 
 
+def provider_scope_name(provider: str) -> str:
+    """Return the secret name that stores the granted scopes for one provider entry."""
+    return _SCOPE_KEYS[_provider_key(provider)]
+
+
 def login_next_action(provider: str) -> str:
     """The exact command that re-authorizes one provider entry."""
     return f"lv24-seo auth login --provider {_provider_key(provider)}"
@@ -246,12 +257,17 @@ def store_tokens(
     tokens: OAuthTokens,
     *,
     keep_refresh: bool = True,
+    requested_scopes: Sequence[str] = (),
 ) -> None:
     """Persist a token response.
 
     ``keep_refresh`` is true for a refresh response, where Yandex may omit the refresh
     token and the existing one must survive. A fresh login passes ``False``: if the new
     grant has no refresh token, the previous grant's refresh token is stale and is removed.
+
+    Scopes are stored as one space-separated string. A response that omits ``scope`` keeps
+    the recorded list on a refresh; a fresh login records ``requested_scopes`` instead,
+    because the exchange that just succeeded proves which scopes were granted.
 
     Environment-provided secrets are read-only. A refresh still returns a usable token for
     this process, so a ``WRITE_DISABLED`` from one of the companion keys is ignored; every
@@ -267,6 +283,12 @@ def store_tokens(
         _delete_secret(store, expiry_name)
     else:
         _set_secret(store, expiry_name, tokens.expires_at.isoformat(timespec="seconds"))
+    _store_scopes(
+        store,
+        provider,
+        tokens.scope or tuple(scope.strip() for scope in requested_scopes if scope.strip()),
+        keep_existing=keep_refresh,
+    )
 
 
 def ensure_fresh_access_token(
@@ -556,6 +578,27 @@ def _set_secret(store: SecretStore, name: str, value: str) -> None:
     except SeoError as exc:
         if exc.code != WRITE_DISABLED:
             raise
+
+
+def _store_scopes(
+    store: SecretStore,
+    provider: str,
+    scopes: Sequence[str],
+    *,
+    keep_existing: bool,
+) -> None:
+    """Write the space-separated scope list, or keep/delete the previous one.
+
+    A refresh response may omit ``scope``; the previous list is still the best record.
+    A fresh login without any scope information deletes the stale list instead of
+    pretending the new grant covers it.
+    """
+    name = provider_scope_name(provider)
+    cleaned = tuple(scope.strip() for scope in scopes if scope.strip())
+    if cleaned:
+        _set_secret(store, name, " ".join(cleaned))
+    elif not keep_existing:
+        _delete_secret(store, name)
 
 
 def _delete_secret(store: SecretStore, name: str) -> None:

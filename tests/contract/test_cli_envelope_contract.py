@@ -172,9 +172,15 @@ def test_doctor_checks_stay_renderable(tmp_path: Path) -> None:
     checks = data["checks"]
     assert isinstance(checks, list) and checks
     for check in checks:
-        assert set(check) == {"detail", "id", "ok"}
+        required = {"detail", "id", "ok"}
+        assert required <= set(check)
+        assert set(check) <= required | {"code", "next_action"}
         assert isinstance(check["detail"], str)
         assert isinstance(check["ok"], bool)
+        if "code" in check:
+            assert isinstance(check["code"], str) and check["code"]
+        if "next_action" in check:
+            assert isinstance(check["next_action"], str)
     assert {"config", "platform", "python", "tokens"} <= {check["id"] for check in checks}
 
 

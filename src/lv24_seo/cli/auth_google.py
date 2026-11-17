@@ -43,6 +43,7 @@ from lv24_seo.providers.gsc.oauth import (
     CODE_VERIFIER_SECRET,
     EXPIRES_AT_SECRET,
     REFRESH_TOKEN_SECRET,
+    SCOPE_SECRET,
     TOKEN_ENDPOINT,
     authorization_url,
 )
@@ -148,11 +149,12 @@ def login_gsc(
 
 
 def logout_gsc(store: SecretStore) -> None:
-    """Remove the GSC OAuth tokens and expiry; the OAuth client secret is kept."""
+    """Remove the GSC OAuth tokens, scopes and expiry; the OAuth client secret is kept."""
     for name in (
         ACCESS_TOKEN_SECRET,
         REFRESH_TOKEN_SECRET,
         EXPIRES_AT_SECRET,
+        SCOPE_SECRET,
         CODE_VERIFIER_SECRET,
     ):
         store.delete(name)
@@ -179,7 +181,7 @@ def _complete_login(
         code_verifier,
         next_action="lv24-seo auth login --provider gsc",
     )
-    _persist(store, response)
+    _persist(store, response, scopes)
     store.delete(CODE_VERIFIER_SECRET)
     expires_at = _expires_at(response)
     return {
@@ -192,11 +194,21 @@ def _complete_login(
     }
 
 
-def _persist(store: SecretStore, response: TokenResponse) -> None:
+def _persist(
+    store: SecretStore,
+    response: TokenResponse,
+    requested_scopes: tuple[str, ...],
+) -> None:
     store.set(ACCESS_TOKEN_SECRET, response.access_token)
     if response.refresh_token:
         store.set(REFRESH_TOKEN_SECRET, response.refresh_token)
     store.set(EXPIRES_AT_SECRET, _expires_at(response))
+    # Google normally echoes the granted scope. When it does not, the request that just
+    # succeeded is the best record of the grant; an empty value would turn the scope check
+    # into a permanent "unknown".
+    scopes = tuple(part for part in response.scope.split() if part) or requested_scopes
+    if scopes:
+        store.set(SCOPE_SECRET, " ".join(scopes))
 
 
 def _expires_at(response: TokenResponse) -> str:

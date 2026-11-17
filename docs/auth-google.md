@@ -111,11 +111,19 @@ redirect URI, pin it in `[auth.gsc].redirect_uri` so the exchange can repeat it 
 | `gsc_access_token` | Bearer token, refreshed automatically. |
 | `gsc_refresh_token` | Long-lived grant from the first consent. |
 | `gsc_token_expires_at` | ISO-8601 UTC expiry of the access token. |
+| `gsc_token_scopes` | Granted scopes, one space-separated string. |
 | `gsc_oauth_client_secret` | Desktop client secret (set by `auth set`). |
 | `gsc_oauth_code_verifier` | Short-lived PKCE verifier for `--code`; deleted after use. |
 
-`lv24-seo auth logout --provider gsc` deletes the access token, refresh token, expiry and
-verifier and keeps the client secret, so a later login does not need the secret again.
+`lv24-seo auth logout --provider gsc` deletes the access token, refresh token, expiry,
+recorded scopes and verifier and keeps the client secret, so a later login does not need the
+secret again.
+
+`lv24-seo auth status` and `lv24-seo doctor` classify the grant as `oauth_ready`,
+`oauth_token_expired`, `oauth_scope_missing`, `oauth_scope_unknown` and so on; see
+[OAuth connectors](auth.md#readiness-diagnostics) for every code and its fix. Google's
+`[auth.gsc].redirect_uri`, when set, must be a loopback `http://127.0.0.1:<port>/...` URI;
+an empty value is the default and is valid.
 
 ## 6. Credential precedence
 

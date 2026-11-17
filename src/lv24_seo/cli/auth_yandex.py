@@ -34,6 +34,7 @@ from lv24_seo.providers.yandex_oauth import (
     VERIFICATION_CODE_REDIRECT_URI,
     authorization_url,
     exchange_code,
+    provider_scope_name,
     provider_secret_names,
     store_tokens,
 )
@@ -138,7 +139,7 @@ def login_yandex(
         provider=name,
         http=http,
     )
-    store_tokens(resolved_store, name, tokens, keep_refresh=False)
+    store_tokens(resolved_store, name, tokens, keep_refresh=False, requested_scopes=scopes)
 
     payload: dict[str, Any] = {
         "provider": name,
@@ -155,8 +156,8 @@ def login_yandex(
 
 
 def logout_yandex(store: SecretStore, provider: str) -> None:
-    """Remove the provider's access token, refresh token and expiry; keep the app secret."""
-    for name in provider_secret_names(provider):
+    """Remove the provider's access token, refresh token, scopes and expiry; keep the app secret."""
+    for name in (*provider_secret_names(provider), provider_scope_name(provider)):
         store.delete(name)
 
 
