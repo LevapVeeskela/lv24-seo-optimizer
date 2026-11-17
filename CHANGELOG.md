@@ -3,6 +3,28 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.14.0] - 2026-11-18
+
+Release notes: [`docs/releases/0.14.0.md`](docs/releases/0.14.0.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-18); desktop `0.9.1` bundles engine `0.13.1` and desktop `0.9.2`
+follows with this engine. Minor release: OAuth readiness diagnostics.
+
+### Added
+
+* `auth status --json` gains an `oauth` object per provider with `state`, presence booleans,
+  `expires_at`, `scopes_recorded`, `next_action` and `limitations`; existing fields are unchanged.
+* `doctor --json` adds `gsc_oauth`/`yandex_oauth`/`metrika_oauth` checks with stable codes; they are
+  non-fatal and never print a token.
+* Eight states: `oauth_client_missing`, `oauth_client_secret_missing`, `oauth_token_missing`,
+  `oauth_token_expired`, `oauth_scope_missing`, `oauth_scope_unknown`, `oauth_redirect_invalid`,
+  `oauth_ready`; precedence redirect → client → secret → token → scope.
+* Scope recording in `gsc_token_scopes`, `yandex_token_scopes`, `yandex_metrika_token_scopes`
+  (`OAUTH_SECRET_NAMES` only; `SECRET_NAMES` stays stable).
+
+### Not changed
+
+* MCP 12 tools, schema 5, CLI 25 commands, no new dependency, no live provider call in the checks.
+
 ## [0.13.1] - 2026-11-18
 
 Release notes: [`docs/releases/0.13.1.md`](docs/releases/0.13.1.md). Status: **released** (PyPI,

@@ -6,7 +6,7 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.13.1` (current; PyPI, npm and the MCP Registry, 2026-11-18): 6 provider
+- Engine `lv24-seo 0.14.0` (current; PyPI, npm and the MCP Registry, 2026-11-18): 6 provider
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
@@ -72,6 +72,13 @@
   provider writes — `seo_sitemap_submit` is wired for Bing submit, `seo_recrawl_request` is wired
   for Yandex recrawl, and the GSC/delete sitemap paths return `WRITE_DISABLED`), 3 resources,
   3 prompts.
+- New in 0.14.0: OAuth readiness diagnostics. `auth status --json` adds an `oauth` object per
+  provider; `doctor --json` adds `gsc_oauth`/`yandex_oauth`/`metrika_oauth` checks with stable codes
+  (`oauth_client_missing`, `oauth_client_secret_missing`, `oauth_token_missing`,
+  `oauth_token_expired`, `oauth_scope_missing`, `oauth_scope_unknown`, `oauth_redirect_invalid`,
+  `oauth_ready`). Scope lists are recorded in `gsc_token_scopes`/`yandex_token_scopes`/
+  `yandex_metrika_token_scopes` (`OAUTH_SECRET_NAMES` only). The checks are non-fatal and never
+  print a token; no live provider call is made.
 - New in 0.13.1: `auth login --provider yandex|metrika --url-only` returns the authorization URL
   without opening a browser, prompting for a code or writing a token; the desktop uses it for the
   Connect flow. Yandex-only; no API, MCP, schema or config change.
@@ -145,6 +152,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
+- [Release notes 0.14.0](docs/releases/0.14.0.md): OAuth readiness diagnostics
 - [Release notes 0.13.1](docs/releases/0.13.1.md): Yandex connector URL-only mode
 - [Release notes 0.13.0](docs/releases/0.13.0.md): OAuth connectors for Google Search Console and Yandex
 - [Release notes 0.12.2](docs/releases/0.12.2.md): Yandex recrawl 5xx mapping
