@@ -60,15 +60,15 @@ systemd-юниты или XML задачи и не пишет ничего бе�
 
 ## Десктоп
 
-Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.6.0** — оболочка Tauri v2 с
+Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.7.0** — оболочка Tauri v2 с
 дашбордом, просмотром недельного отчёта, редактором конфигурации и сценарием «рекомендации →
-агенту». Она несёт закреплённый сайдкар `lv24-seo` (`0.8.0` в текущей сборке десктопа) и не
-добавляет собственной логики провайдеров.
+агенту». Она несёт закреплённый сайдкар `lv24-seo` (`0.9.0` в текущей сборке десктопа), требует
+движок `>= 0.9.0` и не добавляет собственной логики провайдеров.
 
 | Платформа | Файлы | Автообновление |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.6.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.6.0_x64-portable.zip` | только NSIS |
-| Linux x64 | `LV24.SEO.Optimizer_0.6.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.6.0_amd64.deb`, `LV24.SEO.Optimizer-0.6.0-1.x86_64.rpm` | только AppImage |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.7.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.7.0_x64-portable.zip` | только NSIS |
+| Linux x64 | `LV24.SEO.Optimizer_0.7.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.7.0_amd64.deb`, `LV24.SEO.Optimizer-0.7.0-1.x86_64.rpm` | только AppImage |
 | macOS 13+ arm64/x64 | DMG, `.app.tar.gz` (+ `.sig`) | только `.app` |
 
 deb, rpm и portable ZIP ставятся вручную (MSI не выпускается); у `0.1.0` нет обновлятора. Релизы
@@ -86,12 +86,13 @@ Windows) общий только при одном и том же workspace/data
 
 ### MCP-инструменты
 
-Двенадцать инструментов, три ресурса и три промпта. Девять относятся к чтению: семь инструментов,
+Двенадцать инструментов, три ресурса и три промпта. Десять относятся к чтению: семь инструментов,
 доступных только для чтения, не меняют состояние провайдера и локальное состояние; `seo_crawl_site`,
 `seo_weekly_report` и `yandex_indexing_state` сохраняют локальные снимки или события индексации,
 поэтому у них `readOnlyHint: false` (они не destructive). Два write-инструмента требуют
-`allow_write=true`, помечены `destructiveHint: true` и в этой сборке отвечают `WRITE_DISABLED`, пока
-write-адаптеры не подключены.
+`allow_write=true`, помечены `destructiveHint: true` и используют тот же двухфазный поток
+`plan_hash` / `confirm_token` и `LV24_SEO_WRITE_SECRET`, что и CLI; Bing sitemap submit подключён,
+а GSC submit, Bing delete и Yandex recrawl отвечают `WRITE_DISABLED`, ничего не отправляя.
 
 | Инструмент | Тип | `readOnlyHint` | `destructiveHint` | Что делает |
 |---|---|---|---|---|
@@ -124,17 +125,17 @@ write-адаптеры не подключены.
 
 ## Статус
 
-Бета (v0.9.0). Открытые честные ограничения: GSC sitemap submit, Bing sitemap delete и
+Бета (v0.9.0). Текущий релиз — `0.9.0` (PyPI, npm и MCP Registry, 2026-11-17): Bing sitemap
+submit и one-click IndexNow. Десктоп `0.7.0` — текущий релиз десктопа, он несёт движок `0.9.0` и
+требует `>= 0.9.0`. Открытые честные ограничения: GSC sitemap submit, Bing sitemap delete и
 `recrawl` отвечают `WRITE_DISABLED` (Bing sitemap submit и IndexNow реально отправляют),
 `crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`), анализ логов
 определяет ботов только по User-Agent, `portfolio list` и `backup restore` доступны только в CLI,
 а CWV-секция строится лишь по сохранённым field-данным CrUX/PSI. GSC принимает и обычный OAuth
 access token, и JSON-ключ service account (файл читается один раз за процесс, access token
-обновляется автоматически). `0.9.0` — release candidate для Bing sitemap submit и one-click
-IndexNow; `0.8.0` остаётся текущей опубликованной сборкой (PyPI, npm и MCP Registry, 2026-11-16):
-writer CWV по URL и устройству, безопасный `backup restore --to`, планировщик с явным
-`--allow-write`. Десктоп `0.6.0` — текущий релиз десктопа, он несёт движок `0.8.0`. Новое в
-0.9.0 — в [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md); новое в 0.8.0 — в
+обновляется автоматически). `0.8.0` — предыдущий релиз: writer CWV по URL и устройству, безопасный
+`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.9.0 — в
+[`docs/releases/0.9.0.md`](docs/releases/0.9.0.md); новое в 0.8.0 — в
 [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md); новое в 0.7.0 — в
 [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
 

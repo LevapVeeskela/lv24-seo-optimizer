@@ -241,13 +241,14 @@ Metrika `/stat/v1/data`) are not retried at all.
 
 ## WRITE_DISABLED / CONFIRM_REQUIRED
 
-CLI writes use the ADR-0003 flow: a dry run returns a plan plus a short-lived confirm token, and
-applying the plan requires the same plan plus that token.
+CLI writes use the ADR-0003 flow: a plan (`--allow-write` plus `LV24_SEO_WRITE_SECRET`) returns the
+payload and a short-lived confirm token, and applying the plan requires the same plan plus that
+token.
 
-| Command | Dry run | Apply |
+| Command | Plan | Apply |
 |---|---|---|
 | `indexnow submit` | `--allow-write` + `LV24_SEO_WRITE_SECRET` → plan + token | Sends the URLs to IndexNow |
-| `sitemap submit` | same → plan + token | `WRITE_DISABLED`: `gsc sitemap submit is not wired yet` (no provider call) |
+| `sitemap submit` | same → plan + token | `--provider bing`: JSON `SubmitFeed`; GSC: `WRITE_DISABLED` (`gsc sitemap submit is not wired yet`, no provider call) |
 | `yandex recrawl` | same → plan + token | `WRITE_DISABLED`: `yandex recrawl is not wired yet` (no provider call) |
 
 `yandex recrawl` reads `providers.yandex_webmaster.host_id` from `seo.toml`; if it is blank, the
@@ -269,7 +270,7 @@ lv24-seo indexnow submit --host example.com --key YOUR_INDEXNOW_KEY \
 ```
 
 IndexNow also requires the key file to be live at `https://<host>/<key>.txt` before the apply step.
-The dry run never contacts IndexNow; only the apply with a valid token does.
+The plan never contacts IndexNow; only the apply with a valid token does.
 
 The token is an HMAC over the action, target, full plan hash and expiry. Changing the URLs, host,
 key, property or even the summary invalidates it:
@@ -281,7 +282,7 @@ key, property or even the summary invalidates it:
 Tokens live 300 seconds. With an initialised workspace the CLI attaches the SQLite idempotency
 ledger, so replaying the same token returns `status: skipped` / `reason: duplicate` and the provider
 is called once. Without a data directory the apply still runs, but the envelope warns that replay
-protection is off for the token's five-minute lifetime — run `lv24-seo init` to enable it. A dry run
+protection is off for the token's five-minute lifetime — run `lv24-seo init` to enable it. The plan
 opens no ledger and creates no database.
 
 An apply claims the slot as `pending`, promotes it to `sent` only after the provider confirms, and

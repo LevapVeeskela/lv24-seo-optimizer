@@ -65,9 +65,9 @@ read-only multi-site portfolio scan, SMTP/Telegram delivery with idempotency, Bi
 submission, one-click IndexNow from the project sitemap, the 22-command CLI, the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
-enforced with regression tests. `0.9.0` is the release candidate for Bing sitemap submit and
-one-click IndexNow; `0.8.0` remains the latest published build on PyPI, npm and the MCP Registry
-(2026-11-16). See [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md),
+enforced with regression tests. `0.9.0` is the current release: Bing sitemap submit and
+one-click IndexNow, published on PyPI, npm and the MCP Registry (2026-11-17); desktop `0.7.0`
+bundles engine `0.9.0`. See [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md),
 [`docs/releases/0.8.0.md`](docs/releases/0.8.0.md) and
 [`docs/releases/0.7.0.md`](docs/releases/0.7.0.md).
 
@@ -117,16 +117,16 @@ lv24-seo install --client claude|opencode|vscode|cursor
 
 ## Desktop app
 
-The same engine ships as **LV24 SEO Optimizer Desktop 0.6.0** — a Tauri v2 shell with a dashboard,
+The same engine ships as **LV24 SEO Optimizer Desktop 0.7.0** — a Tauri v2 shell with a dashboard,
 weekly report view, configuration editor/diff/validation and a recommendations-to-agent workflow. It
-bundles a pinned `lv24-seo` sidecar (`0.8.0` in the current desktop build) and adds no provider logic
-of its own.
+bundles a pinned `lv24-seo` sidecar (`0.9.0` in the current desktop build), requires engine
+`>= 0.9.0`, and adds no provider logic of its own.
 
 | Platform | Assets | Auto-update |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.6.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.6.0_x64-portable.zip` | NSIS only |
-| Linux x64 | `LV24.SEO.Optimizer_0.6.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.6.0_amd64.deb`, `LV24.SEO.Optimizer-0.6.0-1.x86_64.rpm` | AppImage only |
-| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.6.0_aarch64.dmg`, `LV24.SEO.Optimizer_0.6.0_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.7.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.7.0_x64-portable.zip` | NSIS only |
+| Linux x64 | `LV24.SEO.Optimizer_0.7.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.7.0_amd64.deb`, `LV24.SEO.Optimizer-0.7.0-1.x86_64.rpm` | AppImage only |
+| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.7.0_aarch64.dmg`, `LV24.SEO.Optimizer_0.7.0_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
 
 deb, rpm and the portable ZIP are manual-only (MSI is not produced); `0.1.0` has no updater. Releases
 publish `latest.json` and `SHA256SUMS.txt`.
@@ -245,12 +245,12 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
-* [Release notes 0.9.0](docs/releases/0.9.0.md) — Bing sitemap submit, one-click IndexNow (RC)
+* [Release notes 0.9.0](docs/releases/0.9.0.md) — Bing sitemap submit, one-click IndexNow
 * [Release notes 0.8.0](docs/releases/0.8.0.md) — CWV writer, Yandex indicators, safe restore, schedule lifecycle
 * [Release notes 0.7.0](docs/releases/0.7.0.md) — coverage release: portfolio, restore, indexing events, CWV
 * [Release notes 0.6.0](docs/releases/0.6.0.md) — insights release: logs, digest, tasks, backup
 * [Release notes 0.5.3](docs/releases/0.5.3.md) — P0 hardening release
-* [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop) — Tauri shell, 0.6.0 assets and update matrix
+* [Desktop app](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop) — Tauri shell, 0.7.0 assets and update matrix
 * [Desktop plan](docs/plans/2026-11-14-seo-desktop.md) — shell scope and milestones
 * [Security](SECURITY.md) — token handling, read-only defaults, write gating
 * [Research 2026](docs/research/2026-11-landscape.md) — API limits, existing MCP servers, tool landscape

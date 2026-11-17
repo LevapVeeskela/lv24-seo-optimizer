@@ -6,8 +6,8 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.9.0` (release candidate; `0.8.0` is the current published build on PyPI,
-  npm and the MCP Registry, 2026-11-16): 6 provider adapters (GSC, Yandex Webmaster, Yandex
+- Engine `lv24-seo 0.9.0` (current published build on PyPI, npm and the MCP Registry,
+  2026-11-17): 6 provider adapters (GSC, Yandex Webmaster, Yandex
   Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl. Yandex Metrika is a separate `metrika`
   auth provider (`yandex_metrika_token`), not the Webmaster token.
 - CLI: 22 top-level commands (15 groups + 7 commands), every command with `--json`.
@@ -39,9 +39,9 @@
   100 MiB cap, read-only), an attributed change digest in `report weekly`, the `tasks` finding
   lifecycle (schema v3), and `backup create` portable zip bundles.
 - Skills: `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit`.
-- Desktop `0.6.0` (current desktop release): Windows NSIS + portable ZIP, Linux AppImage/deb/rpm,
-  macOS arm64/x64 DMG; signed updates for NSIS, `.app` and AppImage; bundles engine `0.8.0`; asset
-  names use `0.6.0` / `-0.6.0-`.
+- Desktop `0.7.0` (current desktop release): Windows NSIS + portable ZIP, Linux AppImage/deb/rpm,
+  macOS arm64/x64 DMG; signed updates for NSIS, `.app` and AppImage; bundles engine `0.9.0` and
+  requires engine `>= 0.9.0`; asset names use `0.7.0` / `-0.7.0-`.
 - Desktop and CLI share one OS keychain entry per provider (service `lv24-seo`); the opt-in
   `<data-dir>/secrets.json` fallback is shared only with the same workspace/data directory.
 
@@ -58,7 +58,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
-- [Release notes 0.9.0](docs/releases/0.9.0.md): Bing sitemap submit and one-click IndexNow (RC)
+- [Release notes 0.9.0](docs/releases/0.9.0.md): Bing sitemap submit and one-click IndexNow
 - [Release notes 0.8.0](docs/releases/0.8.0.md): CWV writer, Yandex indicators, safe restore, schedule lifecycle
 - [Release notes 0.7.0](docs/releases/0.7.0.md): coverage release (portfolio, restore, indexing events, CWV)
 - [Release notes 0.6.0](docs/releases/0.6.0.md): insights release (logs, digest, tasks, backup)
@@ -70,10 +70,10 @@
 ## Examples
 
 ```bash
-lv24-seo sitemap submit --provider bing --config ./seo.toml --json   # dry run; site/sitemap from config
-lv24-seo sitemap submit --provider bing --allow-write --confirm TOKEN # JSON SubmitFeed
-lv24-seo indexnow submit --from-sitemap --config ./seo.toml --json    # host/key from [providers.bing]
-lv24-seo indexnow submit --from-sitemap --allow-write --confirm TOKEN # re-fetches; changed sitemap aborts
+lv24-seo sitemap submit --provider bing --allow-write --config ./seo.toml --json  # plan; site/sitemap from config
+lv24-seo sitemap submit --provider bing --allow-write --confirm TOKEN             # JSON SubmitFeed
+lv24-seo indexnow submit --from-sitemap --allow-write --config ./seo.toml --json  # plan; host/key from [providers.bing]
+lv24-seo indexnow submit --from-sitemap --allow-write --confirm TOKEN             # re-fetches; changed sitemap aborts
 lv24-seo schedule install --kind weekly --config ./seo.toml              # plan only: dry_run=true, installed=false
 lv24-seo schedule install --kind weekly --config ./seo.toml --allow-write  # writes the cron block / systemd units / task
 lv24-seo schedule status --kind weekly --config ./seo.toml --json        # read-only: state, paths, matches

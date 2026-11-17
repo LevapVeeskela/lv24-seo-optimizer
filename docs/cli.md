@@ -545,7 +545,8 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
 
 - Dates are ISO-8601 (`2026-11-10`); durations are `7d`, `28d`, `90d` where a flag accepts them.
 - Write operations (sitemap submit, recrawl queue, IndexNow submit) **are** exposed with gating:
-  a dry run first, then `--allow-write` plus the HMAC `confirm_token` from the plan (ADR-0003).
+  pass `--allow-write` (with `LV24_SEO_WRITE_SECRET` set) to get the plan and its HMAC
+  `confirm_token`, then apply with `--allow-write --confirm TOKEN` (ADR-0003).
   `backup restore --config` uses the same two-phase shape for a local destructive write: the
   plan's token is bound to the archive and target state, expires in 5 minutes and is not
   replayable. `backup restore --to` is not gated because it only creates a new directory that
@@ -557,7 +558,7 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
   `status: skipped` / `reason: duplicate` and the provider is called once. The ledger lives in the
   workspace selected by `--config`, so `--config /srv/site/seo.toml` opens `/srv/site/data` even
   when the shell is elsewhere; without a workspace the command still applies but warns that replay
-  protection is off for the token's five-minute lifetime. A dry run opens no ledger and creates no
+  protection is off for the token's five-minute lifetime. The plan opens no ledger and creates no
   database.
 - Storage failures are typed, not generic `INTERNAL`: `STORE_LOCKED` (another process holds the
   write lock; `retryable: true`), `STORE_CORRUPT` (the file is not SQLite; a byte copy is preserved

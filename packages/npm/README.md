@@ -20,10 +20,10 @@ into the unpinned (`latest`) lookup.
 
 ## Status
 
-Beta. `@lv24/seo 0.9.0` launches `lv24-seo 0.9.0` (release candidate; `0.8.0` is the
-current published engine) and ships 12 MCP tools (10 read-class: 8 pure read-only plus the two
-local-state writers annotated `readOnlyHint: false`), 3 resources, 3 prompts, 3 skills, the
-22-command CLI, scheduler generators and a product-grade weekly email. Recent additions:
+Beta. `@lv24/seo 0.9.0` launches `lv24-seo 0.9.0` (the current published engine) and ships
+12 MCP tools (10 read-class: 7 pure read-only plus the 3 local-state writers annotated
+`readOnlyHint: false`), 3 resources, 3 prompts, 3 skills, the 22-command CLI, scheduler
+generators and a product-grade weekly email. Recent additions:
 
 * **Bing sitemap submit and one-click IndexNow** — `sitemap submit --provider bing` calls the
   current JSON `SubmitFeed` endpoint through the two-phase write gate. `indexnow submit
@@ -33,7 +33,8 @@ local-state writers annotated `readOnlyHint: false`), 3 resources, 3 prompts, 3 
 * **Logs, digest, tasks and backup** — `logs analyze` / `seo_log_analysis` triage one local nginx
   JSON access log (UA-only bots, 100 MiB cap, read-only); `report weekly` adds an attributed change
   digest; `tasks` tracks findings through `open`/`in_progress`/`verified`/`dismissed` (schema v3);
-  `backup create` writes a portable zip with the config and SQLite history (restore not implemented).
+  `backup create` writes a portable zip with the config and SQLite history, and `backup restore`
+  offers a non-destructive `--to DIR` extraction plus the two-phase in-place `--config` mode.
 
 * **Localized product email** — `report weekly --send` renders a 600px inline-CSS digest in
   `ru`, `en` or `zh`: KPI cards for clicks/impressions/CTR/position, top-3 opportunities,
@@ -69,7 +70,7 @@ local-state writers annotated `readOnlyHint: false`), 3 resources, 3 prompts, 3 
 | `seo_recrawl_request` | write | Yandex recrawl queue, `allow_write=true` |
 | `seo_sitemap_submit` | write | GSC/Bing sitemap, `allow_write=true`; Bing submit wired |
 
-The two local-state tools are not destructive; the two provider writes are
+The three local-state tools are not destructive; the two provider writes are
 annotated `destructiveHint: true` and gated by `allow_write=true`. Bing sitemap submit is wired;
 GSC sitemap submit, Bing sitemap delete and Yandex recrawl return `WRITE_DISABLED` and nothing is
 sent. IndexNow is CLI/desktop-only. Yandex Metrika has its own auth provider:
@@ -100,8 +101,8 @@ npx @lv24/seo crawl --json                    # issues + sitemap↔crawl coverag
 npx @lv24/seo logs analyze --file /var/log/nginx/access.log --json   # bot rollups + crawl waste
 npx @lv24/seo tasks list --json               # local finding lifecycle
 npx @lv24/seo backup create --out "$PWD/backups" --json   # portable config + SQLite zip
-npx @lv24/seo sitemap submit --provider bing --json       # dry run; site/sitemap from config
-npx @lv24/seo indexnow submit --from-sitemap --json       # one-click; host/key from [providers.bing]
+npx @lv24/seo sitemap submit --provider bing --allow-write --json       # plan; site/sitemap from config
+npx @lv24/seo indexnow submit --from-sitemap --allow-write --json       # plan; host/key from [providers.bing]
 npx @lv24/seo mcp serve                       # stdio MCP server for Claude/OpenCode/Cursor
 npx @lv24/seo export skills --out ./skills    # packaged agent skills
 ```

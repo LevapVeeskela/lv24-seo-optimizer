@@ -5,20 +5,21 @@ All notable changes to this project are documented here. Format follows
 
 ## [0.9.0] - 2026-11-17
 
-Release notes: [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md). Status: **release
-candidate**; not published yet. Minor release: Bing sitemap submission is wired through the
-current JSON `SubmitFeed` endpoint, and IndexNow can read its URL list from the project
-sitemap and its host/key from `seo.toml`. The CLI still has **22 top-level commands**, the
-MCP surface stays at **12 tools**, and the SQLite schema stays at version 4.
+Release notes: [`docs/releases/0.9.0.md`](docs/releases/0.9.0.md). Status: **released**
+(PyPI, npm and the MCP Registry, 2026-11-17); desktop `0.7.0` bundles engine `0.9.0`. Minor
+release: Bing sitemap submission is wired through the current JSON `SubmitFeed` endpoint, and
+IndexNow can read its URL list from the project sitemap and its host/key from `seo.toml`. The CLI
+still has **22 top-level commands**, the MCP surface stays at **12 tools**, and the SQLite schema
+stays at version 4.
 
 ### Added
 
 - `sitemap submit --provider gsc|bing` (default `gsc`): Bing resolves the site from
   `providers.bing.site` or `--property`, the sitemap from `--url` or
   `<project.base_url>/sitemap.xml`, and the `bing_api_key` secret. The apply calls the JSON
-  `SubmitFeed` endpoint and returns `{provider, status, site_url, sitemap_url}`. The dry run
-  contacts no provider; the two-phase gate and idempotency ledger are shared with the other
-  writes. GSC keeps `--property`/`--url` required and still returns `WRITE_DISABLED` on
+  `SubmitFeed` endpoint and returns `{provider, status, site_url, sitemap_url}`. The plan
+  (`--allow-write`) contacts no provider; the two-phase gate and idempotency ledger are shared with
+  the other writes. GSC keeps `--property`/`--url` required and still returns `WRITE_DISABLED` on
   apply; Bing `delete` is also `WRITE_DISABLED`.
 - `indexnow submit --from-sitemap [--sitemap-url ABS] [--url ...]`: host, key and key
   location resolve from `providers.bing.site`, `providers.bing.indexnow_key` and

@@ -1,8 +1,8 @@
 # Quickstart
 
-Verified against the 0.8.0 CLI (`lv24-seo <command> --help` is the authority when
-in doubt); 0.9.0 adds sitemap/IndexNow options without changing the 22-command list.
-Desktop `0.6.0` bundles engine `0.8.0`.
+Verified against the 0.9.0 CLI (`lv24-seo <command> --help` is the authority when
+in doubt); the 22-command list is unchanged from 0.8.0. Desktop `0.7.0` bundles engine
+`0.9.0`.
 
 ## 1. Install
 
