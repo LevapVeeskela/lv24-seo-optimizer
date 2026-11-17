@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.13.1] - 2026-11-18
+
+Release notes: [`docs/releases/0.13.1.md`](docs/releases/0.13.1.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-18). Patch release.
+
+### Added
+
+* `auth login --provider yandex|metrika --url-only` returns the authorization URL without opening a
+  browser, prompting for a code or writing a token; the desktop uses it for the Connect flow.
+  Yandex-only; no API, MCP, schema or config change.
+
 ## [0.13.0] - 2026-11-18
 
 Release notes: [`docs/releases/0.13.0.md`](docs/releases/0.13.0.md). Status: **released** (PyPI,

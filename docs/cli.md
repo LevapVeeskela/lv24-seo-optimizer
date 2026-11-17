@@ -7,10 +7,10 @@ The CLI has 25 top-level commands: 18 groups (`auth`, `config`, `gsc`, `yandex`,
 
 Every read/report command supports `--json` (machine output) and a stable exit code; commands that
 use the workspace also accept `--config PATH`.
-Output envelope (`meta.version` is the package version, e.g. `0.13.0`):
+Output envelope (`meta.version` is the package version, e.g. `0.13.1`):
 
 ```json
-{ "ok": true, "data": {}, "meta": { "version": "0.13.0", "duration_ms": 812 }, "warnings": [] }
+{ "ok": true, "data": {}, "meta": { "version": "0.13.1", "duration_ms": 812 }, "warnings": [] }
 ```
 
 Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` strict truncation · `1` unexpected.
@@ -55,7 +55,7 @@ directory returns `ok: false` with `meta.healthy: false` and exit `1`, instead o
 lv24-seo auth status [--json]                                  # presence + source, never values
 lv24-seo auth set --provider gsc|yandex|metrika|bing|crux|psi|smtp|telegram [--stdin]
 lv24-seo auth set --provider gsc_oauth_secret|yandex_oauth_secret [--stdin]
-lv24-seo auth login --provider gsc|yandex|metrika [--no-browser] [--port N] [--code CODE] [--json]
+lv24-seo auth login --provider gsc|yandex|metrika [--no-browser] [--port N] [--code CODE] [--url-only] [--json]
 lv24-seo auth logout --provider <name>
 ```
 
@@ -128,6 +128,7 @@ scopes = ["webmaster:hostinfo", "metrika:read"]
 lv24-seo auth set --provider yandex_oauth_secret --stdin
 lv24-seo auth login --provider yandex --no-browser   # open the URL, approve, copy the code
 lv24-seo auth login --provider yandex --code <code>
+lv24-seo auth login --provider yandex --url-only --json   # URL for a desktop/web connector
 lv24-seo auth login --provider metrika               # same app, separate token slot
 ```
 

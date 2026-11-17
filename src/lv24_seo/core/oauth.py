@@ -33,10 +33,40 @@ import httpx
 
 from lv24_seo.core.errors import AUTH_INVALID, AUTH_REQUIRED, UPSTREAM_UNAVAILABLE, SeoError
 
+#: Values copied from docs/tests that are not real provider app ids. Rejecting them gives
+#: a CONFIG_INVALID with the registration link instead of a provider 400 page.
+PLACEHOLDER_CLIENT_IDS: frozenset[str] = frozenset(
+    {
+        "client-id",
+        "client_id",
+        "clientid",
+        "example",
+        "example-client-id",
+        "example_client_id",
+        "gsc-client-id",
+        "gsc_client_id",
+        "test",
+        "test-client-id",
+        "test_client_id",
+        "changeme",
+        "replace-me",
+        "your-client-id",
+        "yandex-client-id",
+        "yandex_client_id",
+    }
+)
+
+
+def is_placeholder_client_id(value: str) -> bool:
+    """True for a documented/test placeholder, not a real provider app id."""
+    return value.strip().lower() in PLACEHOLDER_CLIENT_IDS
+
+
 __all__ = [
     "CALLBACK_PATH",
     "DEFAULT_TIMEOUT_SECONDS",
     "LOOPBACK_HOST",
+    "PLACEHOLDER_CLIENT_IDS",
     "LoopbackServer",
     "TokenResponse",
     "exchange_code",

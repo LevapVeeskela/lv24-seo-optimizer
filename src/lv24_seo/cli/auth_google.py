@@ -24,7 +24,7 @@ from typing import Any
 import typer
 
 from lv24_seo.core.config import OAuthClientConfig, SeoConfig
-from lv24_seo.core.errors import AUTH_REQUIRED, INVALID_INPUT, SeoError
+from lv24_seo.core.errors import AUTH_REQUIRED, CONFIG_INVALID, INVALID_INPUT, SeoError
 from lv24_seo.core.oauth import (
     DEFAULT_TIMEOUT_SECONDS,
     LoopbackServer,
@@ -32,6 +32,7 @@ from lv24_seo.core.oauth import (
     exchange_code,
     generate_pkce,
     generate_state,
+    is_placeholder_client_id,
 )
 from lv24_seo.core.secrets import SecretStore
 from lv24_seo.core.timeutil import utc_now
@@ -69,6 +70,15 @@ def login_gsc(
             code=AUTH_REQUIRED,
             message="Google Search Console OAuth client_id is not configured",
             next_action=CLIENT_ID_NEXT_ACTION,
+        )
+    if is_placeholder_client_id(client_id):
+        raise SeoError(
+            code=CONFIG_INVALID,
+            message="Google Search Console OAuth client_id is a placeholder",
+            next_action=(
+                "create a Desktop app OAuth client in Google Cloud and set [auth.gsc] client_id "
+                "or LV24_SEO_GSC_CLIENT_ID"
+            ),
         )
 
     store = SecretStore(data_dir=config.storage.data_dir)

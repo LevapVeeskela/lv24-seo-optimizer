@@ -210,7 +210,7 @@ Exactly three resources — there is no `seo://property/{id}/baseline`.
 | `content_opportunities` | opportunities → prioritised backlog |
 
 Total: 12 tools, 3 resources, 3 prompts. `schemas/tools.json` is generated from
-`lv24_seo/mcp/registry.py` - never edit it by hand. The 0.13.0 release adds no MCP tool: the
+`lv24_seo/mcp/registry.py` - never edit it by hand. The 0.13.1 release adds no MCP tool: the
 surface stays at 12. Bing URL submission, quota, sitemap-feed and crawl-issue views are
 CLI/desktop-only; `seo_sitemap_submit` still submits a sitemap, not a URL batch. The 0.9.0 release
 added optional `provider`/`property`/`sitemap_url` inputs to `seo_sitemap_submit` and wired Bing

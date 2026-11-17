@@ -24,8 +24,9 @@ from typing import Any
 import typer
 
 from lv24_seo.core.config import SeoConfig
-from lv24_seo.core.errors import AUTH_REQUIRED, INVALID_INPUT, SeoError
+from lv24_seo.core.errors import AUTH_REQUIRED, CONFIG_INVALID, INVALID_INPUT, SeoError
 from lv24_seo.core.http import HttpClient
+from lv24_seo.core.oauth import is_placeholder_client_id
 from lv24_seo.core.secrets import SecretStore
 from lv24_seo.providers.yandex_oauth import (
     CLIENT_SECRET_NAME,
@@ -53,6 +54,7 @@ def login_yandex(
     *,
     code: str = "",
     no_browser: bool = False,
+    url_only: bool = False,
     store: SecretStore | None = None,
     http: HttpClient | None = None,
 ) -> dict[str, Any]:
@@ -70,6 +72,15 @@ def login_yandex(
             message="Yandex OAuth client_id is not configured",
             next_action=_CLIENT_ID_NEXT_ACTION,
         )
+    if is_placeholder_client_id(client_id):
+        raise SeoError(
+            code=CONFIG_INVALID,
+            message="Yandex OAuth client_id is a placeholder",
+            next_action=(
+                "create an app at https://oauth.yandex.ru/ and set [auth.yandex] client_id "
+                "or LV24_SEO_YANDEX_CLIENT_ID"
+            ),
+        )
 
     resolved_store = store if store is not None else SecretStore(data_dir=config.storage.data_dir)
     client_secret = _client_secret(resolved_store)
@@ -81,6 +92,16 @@ def login_yandex(
         secrets.token_urlsafe(24),
         redirect_uri=redirect_uri,
     )
+
+    if url_only:
+        # Desktop/web clients need the URL without starting a blocking code prompt.
+        return {
+            "provider": name,
+            "flow": "oauth",
+            "authorization_url": url,
+            "scopes": list(scopes),
+            "target": _target(name, config),
+        }
 
     if no_browser:
         typer.echo(url, err=True)

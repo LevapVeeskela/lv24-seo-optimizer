@@ -30,11 +30,13 @@ from lv24_seo.core.config import (
 from lv24_seo.core.errors import (
     AUTH_INVALID,
     AUTH_REQUIRED,
+    CONFIG_INVALID,
     INVALID_INPUT,
     UPSTREAM_UNAVAILABLE,
     SeoError,
 )
 from lv24_seo.core.http import HttpClient
+from lv24_seo.core.oauth import is_placeholder_client_id
 from lv24_seo.core.secrets import SecretStore
 from lv24_seo.providers.yandex_oauth import (
     AUTHORIZE_URL,
@@ -52,7 +54,7 @@ from lv24_seo.services import SeoService
 
 RUNNER = CliRunner()
 NOW = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
-CLIENT_ID = "yandex-client-id"
+CLIENT_ID = "0123456789abcdef0123456789abcdef"
 CLIENT_SECRET = "yandex-client-secret"
 ACCESS = "access-token-value"
 REFRESH = "refresh-token-value"
@@ -484,6 +486,40 @@ def test_login_requires_the_client_secret() -> None:
 
     assert excinfo.value.code == AUTH_REQUIRED
     assert "auth set --provider yandex_oauth_secret --stdin" in (excinfo.value.next_action or "")
+
+
+def test_login_rejects_a_placeholder_client_id() -> None:
+    store = MemoryStore({"yandex_oauth_client_secret": CLIENT_SECRET})
+
+    with pytest.raises(SeoError) as excinfo:
+        auth_yandex.login_yandex(
+            "yandex",
+            _config(client_id="yandex-client-id"),
+            url_only=True,
+            store=store,
+        )
+
+    assert excinfo.value.code == CONFIG_INVALID
+    assert "placeholder" in excinfo.value.message
+    assert "oauth.yandex.ru" in (excinfo.value.next_action or "")
+
+
+def test_placeholder_client_ids_are_rejected_by_the_helper() -> None:
+    assert is_placeholder_client_id("yandex-client-id")
+    assert is_placeholder_client_id("gsc-client-id")
+    assert not is_placeholder_client_id(CLIENT_ID)
+
+
+def test_login_url_only_returns_the_authorization_url() -> None:
+    store = MemoryStore({"yandex_oauth_client_secret": CLIENT_SECRET})
+
+    result = auth_yandex.login_yandex("yandex", _config(), url_only=True, store=store)
+
+    assert result["provider"] == "yandex"
+    assert result["flow"] == "oauth"
+    assert result["authorization_url"].startswith(AUTHORIZE_URL)
+    assert "access_token" not in result
+    assert "yandex_webmaster_token" not in store.values
 
 
 def test_login_without_a_code_and_no_tty_is_invalid_input(

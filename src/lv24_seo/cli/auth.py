@@ -172,6 +172,13 @@ def auth_login(
             help="Loopback callback port for GSC (0=auto).",
         ),
     ] = 0,
+    url_only: Annotated[
+        bool,
+        typer.Option(
+            "--url-only",
+            help="Return the Yandex authorization URL without exchanging a code.",
+        ),
+    ] = False,
     code: Annotated[
         str,
         typer.Option("--code", help="Authorization code for a manual/no-browser exchange."),
@@ -199,7 +206,9 @@ def auth_login(
         if not manual and name in {"yandex", "metrika"} and config.auth.yandex.client_id.strip():
             from lv24_seo.cli.auth_yandex import login_yandex
 
-            return ok(login_yandex(name, config, code=code, no_browser=no_browser))
+            return ok(
+                login_yandex(name, config, code=code, no_browser=no_browser, url_only=url_only)
+            )
         if name not in _LOGIN_STEPS:
             raise SeoError(
                 code=INVALID_INPUT,
