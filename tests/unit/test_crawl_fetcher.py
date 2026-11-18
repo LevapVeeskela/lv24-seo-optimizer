@@ -475,3 +475,5 @@ def test_fetch_preserves_every_set_cookie_header() -> None:
 
     assert result.set_cookie == ["a=1; Path=/", "b=2; Secure"]
     assert result.tls is None
+    assert result.fetched_at is not None
+    assert result.fetched_at.endswith("+00:00")
