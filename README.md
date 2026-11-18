@@ -55,7 +55,7 @@ No paid SEO platform required. Everything in the default path has a free tier.
 
 ## Status
 
-**Beta (v0.14.0).** Working today: six
+**Beta (v0.14.1).** Working today: six
 provider adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI), a 30-rule
 crawler, SQLite history, analysis (deltas, opportunities, indexing triage, multi-engine fusion,
 nginx log analysis with UA-only bot triage, CWV by template), per-provider `stats`, report builders
@@ -70,10 +70,12 @@ Console and Yandex Webmaster/Metrika, the 25-command CLI,
 the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
-enforced with regression tests. `0.14.0` is the current release: OAuth readiness diagnostics,
-OAuth connectors for Google and Yandex, quota-aware indexing automation and full-platform read
-depth (PyPI, npm and the MCP Registry, 2026-11-18), and desktop `0.9.3` bundles engine `0.14.0`,
-with the read-only Indexing automation card and OAuth readiness in the Connect card. See
+enforced with regression tests. `0.14.1` is the current release: hidden Windows scheduled jobs,
+OAuth readiness diagnostics, OAuth connectors for Google and Yandex, quota-aware indexing automation
+and full-platform read depth (PyPI, npm and the MCP Registry, 2026-11-18), and desktop `0.9.3`
+bundles engine `0.14.0`, with the read-only Indexing automation card and OAuth readiness in the
+Connect card. See
+[`docs/releases/0.14.1.md`](docs/releases/0.14.1.md),
 [`docs/releases/0.14.0.md`](docs/releases/0.14.0.md),
 [`docs/releases/0.13.1.md`](docs/releases/0.13.1.md),
 [`docs/releases/0.13.0.md`](docs/releases/0.13.0.md),
@@ -279,6 +281,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
+* [Release notes 0.14.1](docs/releases/0.14.1.md) — hidden Windows scheduled jobs
 * [Release notes 0.14.0](docs/releases/0.14.0.md) — OAuth readiness diagnostics
 * [Release notes 0.13.1](docs/releases/0.13.1.md) — Yandex connector URL-only mode
 * [Release notes 0.13.0](docs/releases/0.13.0.md) — OAuth connectors for Google Search Console and Yandex

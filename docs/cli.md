@@ -7,10 +7,10 @@ The CLI has 25 top-level commands: 18 groups (`auth`, `config`, `gsc`, `yandex`,
 
 Every read/report command supports `--json` (machine output) and a stable exit code; commands that
 use the workspace also accept `--config PATH`.
-Output envelope (`meta.version` is the package version, e.g. `0.14.0`):
+Output envelope (`meta.version` is the package version, e.g. `0.14.1`):
 
 ```json
-{ "ok": true, "data": {}, "meta": { "version": "0.14.0", "duration_ms": 812 }, "warnings": [] }
+{ "ok": true, "data": {}, "meta": { "version": "0.14.1", "duration_ms": 812 }, "warnings": [] }
 ```
 
 Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` strict truncation · `1` unexpected.
@@ -943,5 +943,8 @@ lv24-seo export tools [--out schemas/tools.json]                    # registry f
 ## Windows notes
 
 - `schedule install --target windows --allow-write` writes a UTF-16 Task Scheduler XML (what
-  `schtasks` expects) and registers the task; without `--allow-write` only the XML is printed.
+  `schtasks` expects) and a UTF-16 `<name>.vbs` launcher, then registers the task; without
+  `--allow-write` only the files are printed. The task action is
+  `wscript.exe //B //Nologo "<name>.vbs"`, so scheduled runs do not open a console window. Reinstall
+  a task created by engine `0.14.0` or older once to replace the console action.
 - Paths are handled with `pathlib`; no POSIX-only assumptions in user-facing commands.

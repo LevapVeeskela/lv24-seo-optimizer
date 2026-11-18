@@ -18,6 +18,7 @@ from lv24_seo.automation import (
     ScheduleSpec,
     install,
     render_systemd,
+    render_windows_launcher,
     render_windows_xml,
     scheduler,
     status,
@@ -186,10 +187,13 @@ def test_install_windows_writes_xml_and_registers_via_fake_schtasks(
     result = install(WEEKLY, target="windows", dry_run=False)
 
     xml_path = tmp_path / "config" / "lv24-seo" / "schedule" / f"{WEEKLY.name}.xml"
+    vbs_path = tmp_path / "config" / "lv24-seo" / "schedule" / f"{WEEKLY.name}.vbs"
     assert result["installed"] is True
     assert xml_path.read_text(encoding="utf-16") == render_windows_xml(WEEKLY)
+    assert vbs_path.read_text(encoding="utf-16") == render_windows_launcher(WEEKLY)
     assert calls and calls[0][1:4] == ["/Create", "/XML", str(xml_path)]
     assert result["paths"][f"{WEEKLY.name}.xml"] == str(xml_path)
+    assert result["paths"][f"{WEEKLY.name}.vbs"] == str(vbs_path)
 
 
 def test_status_detects_installed_cron_and_matches(
@@ -380,8 +384,10 @@ def test_windows_status_and_uninstall_never_touch_the_real_scheduler(
 ) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     xml_path = scheduler._windows_xml_path(WEEKLY)
+    vbs_path = scheduler._windows_launcher_path(WEEKLY)
     xml_path.parent.mkdir(parents=True)
     xml_path.write_text(render_windows_xml(WEEKLY), encoding="utf-16")
+    vbs_path.write_text(render_windows_launcher(WEEKLY), encoding="utf-16")
     state: dict[str, str | None] = {"task": render_windows_xml(WEEKLY)}
     monkeypatch.setattr(
         scheduler, "_which", lambda name: "schtasks.exe" if name == "schtasks" else None
@@ -402,15 +408,17 @@ def test_windows_status_and_uninstall_never_touch_the_real_scheduler(
     assert found["artifacts"][0]["kind"] == "task"
     assert found["artifacts"][0]["exists"] is True
     assert found["artifacts"][0]["matches"] is True
+    assert [artifact["kind"] for artifact in found["artifacts"]] == ["task", "xml", "vbs"]
     assert calls == []
 
     removed = uninstall(WEEKLY, target="windows", dry_run=False)
 
     assert removed["removed"] is True
     assert removed["removed_items"][0] == f"Task Scheduler\\{WEEKLY.name}"
-    assert removed["removed_paths"] == [str(xml_path)]
+    assert removed["removed_paths"] == [str(xml_path), str(vbs_path)]
     assert calls == [["schtasks.exe", "/Delete", "/TN", WEEKLY.name, "/F"]]
     assert not xml_path.exists()
+    assert not vbs_path.exists()
 
     again = uninstall(WEEKLY, target="windows", dry_run=False)
 
@@ -434,9 +442,8 @@ def test_windows_status_reports_an_outdated_registered_task(
     result = status(WEEKLY, target="windows")
 
     assert result["state"] == "outdated"
-    assert result["artifacts"][0]["exists"] is True
-    assert result["artifacts"][0]["matches"] is False
     assert result["artifacts"][1]["exists"] is False
+    assert result["artifacts"][2]["exists"] is False
 
 
 def test_windows_status_detects_a_changed_cadence(

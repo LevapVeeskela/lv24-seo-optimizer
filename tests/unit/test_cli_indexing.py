@@ -339,6 +339,7 @@ def test_schedule_print_kind_indexing_renders_all_targets(workspace: Path, token
         ("cron", "lv24-seo-indexing.cron"),
         ("systemd", "lv24-seo-indexing.timer"),
         ("windows", "lv24-seo-indexing.xml"),
+        ("windows", "lv24-seo-indexing.vbs"),
     ):
         result = _invoke(
             "schedule",

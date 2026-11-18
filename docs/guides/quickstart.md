@@ -1,7 +1,7 @@
 # Quickstart
 
-Verified against the 0.14.0 CLI (`lv24-seo <command> --help` is the authority when in doubt); the
-list has 25 top-level commands (18 groups + 7 commands). `0.14.0` is the latest published engine,
+Verified against the 0.14.1 CLI (`lv24-seo <command> --help` is the authority when in doubt); the
+list has 25 top-level commands (18 groups + 7 commands). `0.14.1` is the latest published engine,
 and desktop `0.9.3` bundles engine `0.14.0`.
 
 ## 1. Install
@@ -128,7 +128,8 @@ the plan.
 Timezone notes: `CRON_TZ` is a real assignment but only Vixie/ISC cron honours
 it; systemd timers run on the system clock; Task Scheduler gets an aware
 `StartBoundary` with a UTC offset when the zone resolves, host-local time
-otherwise. Each backend prints its limits as warnings.
+otherwise. Each backend prints its limits as warnings. On Windows the task starts
+a generated `.vbs` launcher through `wscript.exe`, so scheduled runs stay hidden.
 
 ## 9. Use it from an agent
 

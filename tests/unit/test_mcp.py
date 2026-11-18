@@ -837,7 +837,8 @@ def test_write_apply_calls_the_provider_once_and_rejects_a_replay(
     assert service.recrawl == ("https:example.com:443", ["https://example.com/a"])
 
 
-def test_write_apply_needs_the_write_secret() -> None:
+def test_write_apply_needs_the_write_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LV24_SEO_WRITE_SECRET", raising=False)
     service = WriteService()
     result = _call(
         create_server(service),

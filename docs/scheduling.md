@@ -75,7 +75,14 @@ and reported as a warning where it does not.
 |---|---|---|
 | `cron` | one crontab line + `CRON_TZ=<zone>` assignment | confirm that the installed cron daemon supports `CRON_TZ`; otherwise it uses host time |
 | `systemd` | `<name>.service` + `<name>.timer` (user units) | `OnCalendar` includes the configured IANA zone explicitly |
-| `windows` | Task Scheduler XML via `schtasks /Create /XML` | aware `StartBoundary` carries the resolved UTC offset; seasonal IANA zones produce a DST warning |
+| `windows` | Task Scheduler XML + hidden `<name>.vbs` launcher via `wscript.exe //B //Nologo` | aware `StartBoundary` carries the resolved UTC offset; seasonal IANA zones produce a DST warning |
+
+The Windows action starts the generated WScript launcher, not the console executable, so a scheduled
+run never opens a console window in the signed-in session. The launcher runs the real command hidden
+(`WScript.Shell.Run(command, 0, True)`), waits for it and forwards its exit code with
+`WScript.Quit`. `schedule status` lists the task, the XML and the launcher; a missing or changed
+launcher is reported as `outdated`/`partial`. Tasks installed by engine `0.14.0` or older keep the
+console action until they are reinstalled once.
 
 Only simple daily/weekly cron shapes convert to systemd/Windows; anything else
 is rejected instead of silently rescheduled. An unknown/unavailable timezone is rejected
