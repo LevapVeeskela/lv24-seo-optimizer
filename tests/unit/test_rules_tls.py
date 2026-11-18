@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -11,13 +10,8 @@ import pytest
 from lv24_seo.crawl.models import Issue, PageData, RuleContext
 from lv24_seo.crawl.rules import load_rules, rule_tls_certificate
 
-_NOW = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
 _UNSET: Any = object()
-
-
-@pytest.fixture(autouse=True)
-def _freeze_clock(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rule_tls_certificate, "_utcnow", lambda: _NOW)
+_FETCHED_AT = "2026-11-18T12:00:00+00:00"
 
 
 def _tls(**overrides: Any) -> dict[str, Any]:
@@ -40,6 +34,7 @@ def _page(
     content_type: str = "text/html",
     final_url: str | None = None,
     tls: Any = _UNSET,
+    fetched_at: str | None = _FETCHED_AT,
 ) -> PageData:
     return PageData(
         url=url,
@@ -47,6 +42,7 @@ def _page(
         final_url=url if final_url is None else final_url,
         content_type=content_type,
         tls=_tls() if tls is _UNSET else tls,
+        fetched_at=fetched_at,
     )
 
 
@@ -58,6 +54,19 @@ def _run(*pages: PageData) -> list[Issue]:
 
 def _details(issues: list[Issue]) -> list[dict[str, Any]]:
     return [issue.detail for issue in issues]
+
+
+def test_missing_fetched_at_skips_relative_expiry_but_keeps_other_checks() -> None:
+    page = _page(
+        tls=_tls(not_after="2020-01-01T00:00:00+00:00", version="TLSv1"),
+        fetched_at=None,
+    )
+
+    checks = {detail["check"] for detail in _details(_run(page))}
+
+    assert "protocol" in checks
+    assert "expired" not in checks
+    assert "expiring" not in checks
 
 
 def test_rule_contract_and_discovery() -> None:

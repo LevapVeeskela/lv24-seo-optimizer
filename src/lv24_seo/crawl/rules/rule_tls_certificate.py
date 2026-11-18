@@ -38,9 +38,15 @@ def _issue(url: str, detail: dict[str, Any]) -> Issue:
     return Issue(rule_id=_RULE_ID, severity=_SEVERITY, url=url, detail=detail)
 
 
-def _utcnow() -> datetime:
-    """Current UTC time; isolated so tests can freeze it without patching ``datetime``."""
-    return datetime.now(UTC)
+def _fetched_at(page: PageData) -> datetime | None:
+    """Parse the crawl timestamp; a missing value skips only the relative expiry checks."""
+    if not page.fetched_at:
+        return None
+    try:
+        parsed = datetime.fromisoformat(page.fetched_at)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _is_html_page(page: PageData) -> bool:
@@ -147,7 +153,7 @@ def _cipher_issue(url: str, cipher: object) -> Issue | None:
     return None
 
 
-def _page_issues(page: PageData, now: datetime) -> list[Issue]:
+def _page_issues(page: PageData, now: datetime | None) -> list[Issue]:
     if not _is_html_page(page):
         return []
     effective_url = page.final_url or page.url
@@ -156,8 +162,14 @@ def _page_issues(page: PageData, now: datetime) -> list[Issue]:
     tls = page.tls
     if tls is None:
         return [_issue(page.url, {"check": "unknown"})]
+    if now is not None:
+        expiry = _expiry_issue(page.url, tls.get("not_after"), now)
+    elif _parse_not_after(tls.get("not_after")) is None:
+        expiry = _issue(page.url, {"check": "unknown_expiry"})
+    else:
+        expiry = None
     findings = [
-        _expiry_issue(page.url, tls.get("not_after"), now),
+        expiry,
         _protocol_issue(page.url, tls.get("version")),
         _hostname_issue(effective_url, tls),
         _cipher_issue(page.url, tls.get("cipher")),
@@ -166,10 +178,9 @@ def _page_issues(page: PageData, now: datetime) -> list[Issue]:
 
 
 def _check(ctx: RuleContext) -> list[Issue]:
-    now = _utcnow()
     issues: list[Issue] = []
     for page in ctx.pages:
-        issues.extend(_page_issues(page, now))
+        issues.extend(_page_issues(page, _fetched_at(page)))
     return issues
 
 
