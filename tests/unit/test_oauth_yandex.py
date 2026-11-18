@@ -54,7 +54,7 @@ from lv24_seo.services import SeoService
 
 RUNNER = CliRunner()
 NOW = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
-CLIENT_ID = "0123456789abcdef0123456789abcdef"
+CLIENT_ID = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
 CLIENT_SECRET = "yandex-client-secret"
 ACCESS = "access-token-value"
 REFRESH = "refresh-token-value"
@@ -507,7 +507,18 @@ def test_login_rejects_a_placeholder_client_id() -> None:
 def test_placeholder_client_ids_are_rejected_by_the_helper() -> None:
     assert is_placeholder_client_id("yandex-client-id")
     assert is_placeholder_client_id("gsc-client-id")
+    assert is_placeholder_client_id("0123456789abcdef0123456789abcdef")
+    assert is_placeholder_client_id("1234567890-abc.apps.googleusercontent.com")
     assert not is_placeholder_client_id(CLIENT_ID)
+
+
+def test_authorization_url_rejects_the_docs_placeholder() -> None:
+    with pytest.raises(SeoError) as excinfo:
+        authorization_url("0123456789abcdef0123456789abcdef", ["webmaster:hostinfo"], "state")
+
+    assert excinfo.value.code == CONFIG_INVALID
+    assert "placeholder" in excinfo.value.message
+    assert "oauth.yandex.ru" in (excinfo.value.next_action or "")
 
 
 def test_login_url_only_returns_the_authorization_url() -> None:

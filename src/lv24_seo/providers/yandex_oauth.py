@@ -45,12 +45,14 @@ from urllib.parse import quote, urlencode
 from lv24_seo.core.errors import (
     AUTH_INVALID,
     AUTH_REQUIRED,
+    CONFIG_INVALID,
     INVALID_INPUT,
     UPSTREAM_UNAVAILABLE,
     WRITE_DISABLED,
     SeoError,
 )
 from lv24_seo.core.http import HttpClient
+from lv24_seo.core.oauth import is_placeholder_client_id
 from lv24_seo.core.secrets import SecretStore
 from lv24_seo.core.timeutil import utc_now
 
@@ -149,6 +151,15 @@ def authorization_url(
             next_action=(
                 "set [auth.yandex] client_id in seo.toml or LV24_SEO_YANDEX_CLIENT_ID, "
                 "then rerun `lv24-seo auth login --provider yandex`"
+            ),
+        )
+    if is_placeholder_client_id(cid):
+        raise SeoError(
+            code=CONFIG_INVALID,
+            message="Yandex OAuth client_id is a documented placeholder",
+            next_action=(
+                "create an app at https://oauth.yandex.ru/ and set [auth.yandex] client_id "
+                "or LV24_SEO_YANDEX_CLIENT_ID to its real ClientID"
             ),
         )
     state_value = state.strip()

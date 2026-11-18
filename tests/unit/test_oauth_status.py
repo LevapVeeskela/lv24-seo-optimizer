@@ -66,7 +66,7 @@ from lv24_seo.providers.yandex_oauth import (
 RUNNER = CliRunner()
 NOW = datetime.now(UTC).replace(microsecond=0)
 GSC_CLIENT_ID = "1234567890-synthetic.apps.googleusercontent.com"
-YANDEX_CLIENT_ID = "0123456789abcdef0123456789abcdef"
+YANDEX_CLIENT_ID = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
 CLIENT_SECRET = "synthetic-client-secret"
 ACCESS = "synthetic-access-token"
 REFRESH = "synthetic-refresh-token"

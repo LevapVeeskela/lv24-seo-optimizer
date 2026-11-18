@@ -37,6 +37,8 @@ from lv24_seo.core.errors import AUTH_INVALID, AUTH_REQUIRED, UPSTREAM_UNAVAILAB
 #: a CONFIG_INVALID with the registration link instead of a provider 400 page.
 PLACEHOLDER_CLIENT_IDS: frozenset[str] = frozenset(
     {
+        "0123456789abcdef0123456789abcdef",
+        "1234567890-abc.apps.googleusercontent.com",
         "client-id",
         "client_id",
         "clientid",
@@ -51,6 +53,8 @@ PLACEHOLDER_CLIENT_IDS: frozenset[str] = frozenset(
         "changeme",
         "replace-me",
         "your-client-id",
+        "your-google-client-id",
+        "your-yandex-client-id",
         "yandex-client-id",
         "yandex_client_id",
     }
