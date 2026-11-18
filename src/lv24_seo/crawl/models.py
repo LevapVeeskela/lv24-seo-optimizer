@@ -21,6 +21,8 @@ class FetchResult:
     redirect_chain: list[str] = field(default_factory=list)
     error: str | None = None
     downgraded: bool = False
+    tls: dict[str, Any] | None = None
+    set_cookie: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -43,11 +45,19 @@ class PageData:
     jsonld: list[dict[str, Any]] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
     images: list[dict[str, str]] = field(default_factory=list)
+    link_details: list[dict[str, Any]] = field(default_factory=list)
+    inputs: list[dict[str, Any]] = field(default_factory=list)
+    buttons: list[dict[str, Any]] = field(default_factory=list)
+    headings: list[dict[str, Any]] = field(default_factory=list)
+    has_main: bool = False
+    has_skip_link: bool = False
     text: str = ""
     word_count: int = 0
     redirect_chain: list[str] = field(default_factory=list)
     error: str | None = None
     downgraded: bool = False
+    tls: dict[str, Any] | None = None
+    set_cookie: list[str] = field(default_factory=list)
 
     @property
     def robots_directives(self) -> set[str]:

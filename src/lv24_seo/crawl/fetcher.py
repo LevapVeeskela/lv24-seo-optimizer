@@ -25,14 +25,16 @@ import ipaddress
 import math
 import re
 import socket
+import ssl
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from itertools import pairwise
 from types import TracebackType
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -237,6 +239,12 @@ class Fetcher:
                     body = self._read_body(response, limit)
                     if body is None:
                         return self._failure(url, current, chain, "too_large", started)
+                    network_stream = response.extensions.get("network_stream")
+                    ssl_object = (
+                        network_stream.get_extra_info("ssl_object")
+                        if network_stream is not None
+                        else None
+                    )
                     self._last_end = time.perf_counter()
                     return FetchResult(
                         url=url,
@@ -247,6 +255,8 @@ class Fetcher:
                         elapsed_ms=_elapsed_ms(started),
                         redirect_chain=list(chain),
                         downgraded=_is_downgrade(chain),
+                        tls=_tls_info(ssl_object),
+                        set_cookie=response.headers.get_list("set-cookie"),
                     )
         except httpx.TimeoutException:
             return self._failure(url, current, chain, "timeout", started)
@@ -624,6 +634,60 @@ def _is_downgrade(chain: list[str]) -> bool:
 
 def _elapsed_ms(started: float) -> float:
     return (time.perf_counter() - started) * 1000.0
+
+
+def _tls_info(ssl_object: object) -> dict[str, Any] | None:
+    """Return certificate facts from an ``ssl.SSLObject``, or None for plain HTTP.
+
+    The fetcher only records data the socket already negotiated; it never opens a second
+    connection. A certificate that cannot be inspected is omitted instead of failing the
+    crawl, and the TLS rule then reports ``tls_unknown`` from the missing value.
+    """
+    if ssl_object is None:
+        return None
+    try:
+        certificate = ssl_object.getpeercert() or {}  # type: ignore[attr-defined]
+        cipher = ssl_object.cipher()  # type: ignore[attr-defined]
+        not_after = certificate.get("notAfter")
+        not_after_iso: str | None = None
+        if isinstance(not_after, str):
+            try:
+                not_after_iso = datetime.fromtimestamp(
+                    ssl.cert_time_to_seconds(not_after), UTC
+                ).isoformat()
+            except (ValueError, OverflowError):
+                not_after_iso = None
+        return {
+            "version": ssl_object.version(),  # type: ignore[attr-defined]
+            "cipher": cipher[0] if isinstance(cipher, tuple) and cipher else None,
+            "not_after": not_after_iso,
+            "issuer": _certificate_name(certificate.get("issuer")),
+            "subject": _certificate_name(certificate.get("subject")),
+            "san": _certificate_san(certificate.get("subjectAltName")),
+        }
+    except Exception:
+        return None
+
+
+def _certificate_name(value: object) -> dict[str, str]:
+    if not isinstance(value, (tuple, list)):
+        return {}
+    names: dict[str, str] = {}
+    for relative_name in value:
+        if not isinstance(relative_name, (tuple, list)):
+            continue
+        for pair in relative_name:
+            if isinstance(pair, (tuple, list)) and len(pair) == 2 and isinstance(pair[0], str):
+                names[pair[0]] = str(pair[1])
+    return names
+
+
+def _certificate_san(value: object) -> list[str]:
+    if not isinstance(value, (tuple, list)):
+        return []
+    return [
+        str(entry[1]) for entry in value if isinstance(entry, (tuple, list)) and len(entry) == 2
+    ]
 
 
 def _positive_limit(value: int) -> int:

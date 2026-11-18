@@ -420,3 +420,58 @@ def test_per_request_max_bytes_must_be_positive() -> None:
         fetcher.fetch("https://example.com/", max_bytes=0)
 
     assert excinfo.value.code == INVALID_INPUT
+
+
+class _FakeSsl:
+    def getpeercert(self) -> dict[str, object]:
+        return {
+            "notAfter": "Nov 18 12:00:00 2027 GMT",
+            "issuer": ((("commonName", "R11"),), (("organizationName", "Let's Encrypt"),)),
+            "subject": ((("commonName", "example.com"),),),
+            "subjectAltName": (("DNS", "example.com"), ("DNS", "www.example.com")),
+        }
+
+    def version(self) -> str:
+        return "TLSv1.3"
+
+    def cipher(self) -> tuple[str, str, int]:
+        return ("TLS_AES_128_GCM_SHA256", "TLSv1.3", 128)
+
+
+def test_tls_info_captures_certificate_facts() -> None:
+    from lv24_seo.crawl.fetcher import _tls_info
+
+    info = _tls_info(_FakeSsl())
+
+    assert info is not None
+    assert info["version"] == "TLSv1.3"
+    assert info["cipher"] == "TLS_AES_128_GCM_SHA256"
+    assert info["not_after"] == "2027-11-18T12:00:00+00:00"
+    assert info["issuer"]["commonName"] == "R11"
+    assert info["san"] == ["example.com", "www.example.com"]
+
+
+def test_tls_info_is_none_for_plain_http_and_broken_objects() -> None:
+    from lv24_seo.crawl.fetcher import _tls_info
+
+    class Broken:
+        def getpeercert(self) -> dict[str, object]:
+            raise RuntimeError("no certificate")
+
+    assert _tls_info(None) is None
+    assert _tls_info(Broken()) is None
+
+
+def test_fetch_preserves_every_set_cookie_header() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers=[("Set-Cookie", "a=1; Path=/"), ("Set-Cookie", "b=2; Secure")],
+            content=b"ok",
+        )
+
+    with _fetcher(handler) as fetcher:
+        result = fetcher.fetch("https://example.com/")
+
+    assert result.set_cookie == ["a=1; Path=/", "b=2; Secure"]
+    assert result.tls is None
