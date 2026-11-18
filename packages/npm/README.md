@@ -20,7 +20,7 @@ into the unpinned (`latest`) lookup.
 
 ## Status
 
-Beta. `@lv24/seo 0.15.1` launches `lv24-seo 0.15.1` (published 2026-11-18; the current engine) and
+Beta. `@lv24/seo 0.15.2` launches `lv24-seo 0.15.2` (published 2026-11-18; the current engine) and
 ships 12 MCP tools (10 read-class: 7 pure read-only plus the 3 local-state
 writers annotated `readOnlyHint: false`), 3 resources, 3 prompts, 3 skills, the 25-command CLI,
 scheduler generators and a product-grade weekly email. Recent additions:

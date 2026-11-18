@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.15.2] - 2026-11-18
+
+Release notes: [`docs/releases/0.15.2.md`](docs/releases/0.15.2.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-18); desktop `0.9.7` bundles this engine. Patch release:
+data-access status per provider.
+
+### Added
+
+* `auth status --json` gains `access` per provider with `mode` (`service_account`, `token`, `oauth`
+  or `none`) and `ready`; existing `providers`/`present`/`missing`/`oauth` fields are unchanged.
+* Desktop `0.9.7` uses `access` for the Connected badge, so saved Yandex/Metrika tokens and the GSC
+  service account are no longer shown as "not connected" just because OAuth is optional.
+
 ## [0.15.1] - 2026-11-18
 
 Release notes: [`docs/releases/0.15.1.md`](docs/releases/0.15.1.md). Status: **released** (PyPI,

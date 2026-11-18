@@ -80,6 +80,53 @@ _LOGIN_STEPS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _access_summary(
+    config: SeoConfig, by_name: dict[str, SecretStatus]
+) -> dict[str, dict[str, Any]]:
+    """How each provider is actually authenticated for data access.
+
+    This is separate from ``oauth`` readiness: a stored Webmaster/Metrika token, a GSC
+    service account or a Bing API key already works without an OAuth app.
+    """
+
+    def present(name: str) -> bool:
+        status = by_name.get(name)
+        return bool(status is not None and status.present)
+
+    gsc_sa = bool(
+        config.providers.gsc is not None and config.providers.gsc.service_account_file.strip()
+    )
+    modes = {
+        "gsc": (
+            "service_account"
+            if gsc_sa
+            else "token"
+            if present("gsc_token")
+            else "oauth"
+            if present("gsc_refresh_token")
+            else "none"
+        ),
+        "yandex": (
+            "token"
+            if present("yandex_webmaster_token")
+            else "oauth"
+            if present("yandex_refresh_token")
+            else "none"
+        ),
+        "metrika": (
+            "token"
+            if present("yandex_metrika_token")
+            else "oauth"
+            if present("yandex_refresh_token") or present("yandex_metrika_refresh_token")
+            else "none"
+        ),
+        "bing": "token" if present("bing_api_key") else "none",
+        "crux": "token" if present("crux_api_key") else "none",
+        "psi": "token" if present("psi_api_key") else "none",
+    }
+    return {provider: {"mode": mode, "ready": mode != "none"} for provider, mode in modes.items()}
+
+
 @auth_app.command("status")
 def auth_status(
     config_path: Annotated[
@@ -109,6 +156,7 @@ def auth_status(
                 "present": present,
                 "missing": missing,
                 "oauth": {key: readiness[key].as_dict() for key in OAUTH_PROVIDERS},
+                "access": _access_summary(config, by_name),
             }
         )
 

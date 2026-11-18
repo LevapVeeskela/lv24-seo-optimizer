@@ -7,10 +7,10 @@ The CLI has 25 top-level commands: 18 groups (`auth`, `config`, `gsc`, `yandex`,
 
 Every read/report command supports `--json` (machine output) and a stable exit code; commands that
 use the workspace also accept `--config PATH`.
-Output envelope (`meta.version` is the package version, e.g. `0.15.1`):
+Output envelope (`meta.version` is the package version, e.g. `0.15.2`):
 
 ```json
-{ "ok": true, "data": {}, "meta": { "version": "0.15.1", "duration_ms": 812 }, "warnings": [] }
+{ "ok": true, "data": {}, "meta": { "version": "0.15.2", "duration_ms": 812 }, "warnings": [] }
 ```
 
 Exit codes: `0` ok · `2` usage/config · `3` auth · `4` quota/upstream · `5` strict truncation · `1` unexpected.
@@ -128,6 +128,12 @@ and neither prints the key.
 [OAuth connectors](auth.md#readiness-diagnostics); `oauth_scope_unknown` is a limitation, not
 a pass. The `providers`, `present` and `missing` fields keep their previous shape and values,
 and no token or client secret is printed.
+
+`auth status --json` also returns `access` per provider (`gsc`, `yandex`, `metrika`, `bing`, `crux`,
+`psi`) with `mode` (`service_account`, `token`, `oauth` or `none`) and `ready`. This describes how
+data access is authenticated and is independent of `oauth`: a saved Webmaster/Metrika token, a GSC
+`service_account_file` or a Bing API key already works without an OAuth app. The field reports
+configuration/presence only; it does not inspect the service-account file or make a provider call.
 
 ### Yandex Webmaster and Metrika credentials
 

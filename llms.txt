@@ -6,7 +6,7 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.15.1` (current; PyPI, npm and the MCP Registry, 2026-11-18): 6 provider
+- Engine `lv24-seo 0.15.2` (current; PyPI, npm and the MCP Registry, 2026-11-18): 6 provider
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
@@ -72,6 +72,10 @@
   provider writes — `seo_sitemap_submit` is wired for Bing submit, `seo_recrawl_request` is wired
   for Yandex recrawl, and the GSC/delete sitemap paths return `WRITE_DISABLED`), 3 resources,
   3 prompts.
+- New in 0.15.2: `auth status --json` gains `access` per provider with `mode`
+  (`service_account`, `token`, `oauth` or `none`) and `ready`; desktop `0.9.7` uses it for the
+  Connected badge, so saved Yandex/Metrika tokens and the GSC service account are not shown as
+  "not connected" just because OAuth is optional.
 - New in 0.15.1: documented placeholder OAuth client ids (`0123456789abcdef0123456789abcdef`,
   `1234567890-abc.apps.googleusercontent.com`, `your-*-client-id`) are rejected with
   `CONFIG_INVALID` before a consent URL is built; `yandex_oauth.authorization_url()` enforces the
@@ -168,6 +172,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
+- [Release notes 0.15.2](docs/releases/0.15.2.md): data-access status per provider
 - [Release notes 0.15.1](docs/releases/0.15.1.md): reject placeholder OAuth client IDs
 - [Release notes 0.15.0](docs/releases/0.15.0.md): security, TLS, Schema.org and accessibility rules
 - [Release notes 0.14.1](docs/releases/0.14.1.md): hidden Windows scheduled jobs
