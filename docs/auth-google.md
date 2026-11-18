@@ -38,6 +38,9 @@ client_id = "1234567890-abc.apps.googleusercontent.com"
 # redirect_uri = "http://127.0.0.1:8123/callback"
 ```
 
+The value above is the documented example. It is rejected as a placeholder (`CONFIG_INVALID`)
+before a consent URL is built; paste the client id shown for your own Desktop app.
+
 Or through the environment:
 
 ```bash

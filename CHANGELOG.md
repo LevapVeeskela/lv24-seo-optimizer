@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.15.1] - 2026-11-18
+
+Release notes: [`docs/releases/0.15.1.md`](docs/releases/0.15.1.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-18); desktop `0.9.5` bundles this engine. Patch release: reject
+documented placeholder OAuth client ids.
+
+### Fixed
+
+* The docs example `0123456789abcdef0123456789abcdef` (Yandex) and
+  `1234567890-abc.apps.googleusercontent.com` (Google), plus `your-*-client-id`, are rejected with
+  `CONFIG_INVALID` before a consent URL is built.
+* `yandex_oauth.authorization_url()` enforces the same guard for every caller.
+* Desktop `0.9.5` disables Connect while the OAuth client is missing/misconfigured and ignores a
+  second Open click while the first is in flight.
+
 ## [0.15.0] - 2026-11-18
 
 Release notes: [`docs/releases/0.15.0.md`](docs/releases/0.15.0.md). Status: **released** (PyPI,

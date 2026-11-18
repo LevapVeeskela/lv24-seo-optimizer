@@ -70,13 +70,14 @@ Console and Yandex Webmaster/Metrika, the 25-command CLI,
 the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
-enforced with regression tests. `0.15.0` is the current release: four new crawl rule packs
-(security headers, TLS certificate, Schema.org required fields, accessibility basics), hidden
-Windows scheduled jobs, OAuth readiness diagnostics, OAuth connectors for Google and Yandex,
-quota-aware indexing automation and full-platform read depth (PyPI, npm and the MCP Registry,
-2026-11-18); desktop `0.9.4` bundles engine `0.14.1`. See
+enforced with regression tests. `0.15.1` is the current release: documented placeholder OAuth
+client ids are rejected before a consent URL is built; four new crawl rule packs (security headers,
+TLS certificate, Schema.org required fields, accessibility basics), hidden Windows scheduled jobs,
+OAuth readiness diagnostics, OAuth connectors for Google and Yandex, quota-aware indexing automation
+and full-platform read depth (PyPI, npm and the MCP Registry, 2026-11-18); desktop `0.9.5` bundles
+engine `0.15.1`. See
+[`docs/releases/0.15.1.md`](docs/releases/0.15.1.md),
 [`docs/releases/0.15.0.md`](docs/releases/0.15.0.md),
-[`docs/releases/0.14.1.md`](docs/releases/0.14.1.md),
 [`docs/releases/0.14.0.md`](docs/releases/0.14.0.md),
 [`docs/releases/0.13.1.md`](docs/releases/0.13.1.md),
 [`docs/releases/0.13.0.md`](docs/releases/0.13.0.md),
@@ -282,6 +283,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
+* [Release notes 0.15.1](docs/releases/0.15.1.md) — reject placeholder OAuth client IDs
 * [Release notes 0.15.0](docs/releases/0.15.0.md) — security, TLS, Schema.org and accessibility rules
 * [Release notes 0.14.1](docs/releases/0.14.1.md) — hidden Windows scheduled jobs
 * [Release notes 0.14.0](docs/releases/0.14.0.md) — OAuth readiness diagnostics

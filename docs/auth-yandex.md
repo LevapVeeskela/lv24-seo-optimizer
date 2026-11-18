@@ -26,6 +26,9 @@ scopes = ["webmaster:hostinfo", "metrika:read"]
 # redirect_uri = "https://oauth.yandex.ru/verification_code"
 ```
 
+The value above is the documented example. It is rejected as a placeholder (`CONFIG_INVALID`)
+before a consent URL is built; paste the ClientID shown for your own app.
+
 Environment overrides (they win over `seo.toml`):
 
 ```bash
