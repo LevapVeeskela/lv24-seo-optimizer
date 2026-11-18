@@ -65,7 +65,7 @@ systemd-юниты или XML задачи и не пишет ничего бе�
 
 ## Десктоп
 
-Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.9.5** — оболочка Tauri v2 с
+Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.9.6** — оболочка Tauri v2 с
 дашбордом, просмотром недельного отчёта, редактором конфигурации, сценарием «рекомендации →
 агенту», read-only экраном Diagnostics, OAuth-кнопками Connect с состояниями готовности и read-only
 карточкой Indexing automation. Она несёт закреплённый сайдкар `lv24-seo` (`0.15.1` в текущей сборке
@@ -73,8 +73,8 @@ systemd-юниты или XML задачи и не пишет ничего бе�
 
 | Платформа | Файлы | Автообновление |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.5_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.5_x64-portable.zip` | только NSIS |
-| Linux x64 | `LV24.SEO.Optimizer_0.9.5_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.5_amd64.deb`, `LV24.SEO.Optimizer-0.9.5-1.x86_64.rpm` | только AppImage |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.6_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.6_x64-portable.zip` | только NSIS |
+| Linux x64 | `LV24.SEO.Optimizer_0.9.6_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.6_amd64.deb`, `LV24.SEO.Optimizer-0.9.6-1.x86_64.rpm` | только AppImage |
 | macOS 13+ arm64/x64 | DMG, `.app.tar.gz` (+ `.sig`) | только `.app` |
 
 deb, rpm и portable ZIP ставятся вручную (MSI не выпускается); у `0.1.0` нет обновлятора. Релизы
