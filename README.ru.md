@@ -65,16 +65,16 @@ systemd-юниты или XML задачи и не пишет ничего бе�
 
 ## Десктоп
 
-Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.9.3** — оболочка Tauri v2 с
+Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.9.4** — оболочка Tauri v2 с
 дашбордом, просмотром недельного отчёта, редактором конфигурации, сценарием «рекомендации →
 агенту», read-only экраном Diagnostics, OAuth-кнопками Connect с состояниями готовности и read-only
-карточкой Indexing automation. Она несёт закреплённый сайдкар `lv24-seo` (`0.14.0` в текущей сборке
-десктопа), требует движок `>= 0.14.0` и не добавляет собственной логики провайдеров.
+карточкой Indexing automation. Она несёт закреплённый сайдкар `lv24-seo` (`0.14.1` в текущей сборке
+десктопа), требует движок `>= 0.14.1` и не добавляет собственной логики провайдеров.
 
 | Платформа | Файлы | Автообновление |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.3_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.3_x64-portable.zip` | только NSIS |
-| Linux x64 | `LV24.SEO.Optimizer_0.9.3_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.3_amd64.deb`, `LV24.SEO.Optimizer-0.9.3-1.x86_64.rpm` | только AppImage |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.4_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.4_x64-portable.zip` | только NSIS |
+| Linux x64 | `LV24.SEO.Optimizer_0.9.4_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.4_amd64.deb`, `LV24.SEO.Optimizer-0.9.4-1.x86_64.rpm` | только AppImage |
 | macOS 13+ arm64/x64 | DMG, `.app.tar.gz` (+ `.sig`) | только `.app` |
 
 deb, rpm и portable ZIP ставятся вручную (MSI не выпускается); у `0.1.0` нет обновлятора. Релизы
@@ -140,8 +140,8 @@ Yandex Webmaster/Metrika (`auth login`, refresh-токены в keychain, `--url
 Bing/Yandex/IndexNow/GSC и честные счётчики проиндексированного, плюс полная глубина чтения
 по платформам (GSC URL
 Inspection/sitemap/фильтры, Yandex events/sitemaps/история/очередь recrawl, Bing
-page/traffic/crawl/URL/joins, органическая Метрика, CrUX-история и PSI-аудиты). Десктоп `0.9.3` — текущий
-релиз десктопа, он несёт движок `0.14.0`, требует `>= 0.14.0`, добавляет read-only карточку
+page/traffic/crawl/URL/joins, органическая Метрика, CrUX-история и PSI-аудиты). Десктоп `0.9.4` — текущий
+релиз десктопа, он несёт движок `0.14.1`, требует `>= 0.14.1`, добавляет read-only карточку
 Indexing automation и показывает готовность OAuth в Connect card. Открытые честные ограничения: GSC
 sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing sitemap/URL submit, IndexNow
 и Yandex recrawl реально отправляют),
