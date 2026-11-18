@@ -3,6 +3,25 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.14.1] - 2026-11-18
+
+Release notes: [`docs/releases/0.14.1.md`](docs/releases/0.14.1.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-18); desktop `0.9.3` bundles engine `0.14.0` and desktop `0.9.4`
+follows with this engine. Patch release: hidden Windows scheduled jobs.
+
+### Fixed
+
+* Windows Task Scheduler jobs no longer open a console window: `schedule install --target windows`
+  registers a generated `.vbs` launcher via `wscript.exe //B //Nologo`; the launcher runs the engine
+  hidden (`WScript.Shell.Run(..., 0, True)`) and forwards the exit code.
+* `schedule status --target windows` lists the `task`, `xml` and `vbs` artefacts; a missing or
+  changed launcher is `outdated`/`partial`, and `schedule uninstall` removes it.
+* Existing Windows tasks must be reinstalled once; `schedule status` reports them as `outdated`.
+
+### Not changed
+
+* MCP 12 tools, schema 5, CLI 25 commands, no new dependency, no write-gate change.
+
 ## [0.14.0] - 2026-11-18
 
 Release notes: [`docs/releases/0.14.0.md`](docs/releases/0.14.0.md). Status: **released** (PyPI,
