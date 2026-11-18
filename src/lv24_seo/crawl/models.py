@@ -23,6 +23,7 @@ class FetchResult:
     downgraded: bool = False
     tls: dict[str, Any] | None = None
     set_cookie: list[str] = field(default_factory=list)
+    fetched_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -58,6 +59,7 @@ class PageData:
     downgraded: bool = False
     tls: dict[str, Any] | None = None
     set_cookie: list[str] = field(default_factory=list)
+    fetched_at: str | None = None
 
     @property
     def robots_directives(self) -> set[str]:

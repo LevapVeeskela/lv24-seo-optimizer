@@ -179,6 +179,7 @@ class Fetcher:
         """
         limit = self._max_bytes if max_bytes is None else _positive_limit(max_bytes)
         started = time.perf_counter()
+        fetched_at = datetime.now(UTC).isoformat()
         chain = [url]
         current = url
         rate_limit_retries = 0
@@ -257,6 +258,7 @@ class Fetcher:
                         downgraded=_is_downgrade(chain),
                         tls=_tls_info(ssl_object),
                         set_cookie=response.headers.get_list("set-cookie"),
+                        fetched_at=fetched_at,
                     )
         except httpx.TimeoutException:
             return self._failure(url, current, chain, "timeout", started)
@@ -362,6 +364,7 @@ class Fetcher:
             elapsed_ms=_elapsed_ms(started),
             redirect_chain=list(chain),
             error=error,
+            fetched_at=datetime.now(UTC).isoformat(),
         )
 
 

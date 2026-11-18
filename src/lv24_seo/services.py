@@ -5280,6 +5280,7 @@ def _page_from_fetch(url: str, result: object) -> PageData:
     downgraded = bool(getattr(result, "downgraded", False))
     tls = getattr(result, "tls", None)
     set_cookie = list(getattr(result, "set_cookie", ()) or ())
+    fetched_at = getattr(result, "fetched_at", None)
     if error:
         return PageData(
             url=url,
@@ -5291,6 +5292,7 @@ def _page_from_fetch(url: str, result: object) -> PageData:
             downgraded=downgraded,
             tls=tls if isinstance(tls, dict) else None,
             set_cookie=set_cookie,
+            fetched_at=fetched_at if isinstance(fetched_at, str) else None,
         )
     body = getattr(result, "body", b"")
     page = parse_html(
@@ -5304,6 +5306,7 @@ def _page_from_fetch(url: str, result: object) -> PageData:
     page.downgraded = downgraded
     page.tls = tls if isinstance(tls, dict) else None
     page.set_cookie = set_cookie
+    page.fetched_at = fetched_at if isinstance(fetched_at, str) else None
     return page
 
 
