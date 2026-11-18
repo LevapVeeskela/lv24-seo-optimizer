@@ -6,7 +6,7 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.14.1` (current; PyPI, npm and the MCP Registry, 2026-11-18): 6 provider
+- Engine `lv24-seo 0.15.0` (current; PyPI, npm and the MCP Registry, 2026-11-18): 6 provider
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
@@ -72,6 +72,13 @@
   provider writes — `seo_sitemap_submit` is wired for Bing submit, `seo_recrawl_request` is wired
   for Yandex recrawl, and the GSC/delete sitemap paths return `WRITE_DISABLED`), 3 resources,
   3 prompts.
+- New in 0.15.0: four crawl rule packs. `security-headers` checks HSTS, CSP, X-Frame-Options,
+  X-Content-Type-Options, Referrer-Policy, Permissions-Policy and cookie flags; `tls-certificate`
+  checks expiry, protocol, SAN/CN and weak ciphers from fetcher-captured TLS facts; `schema-required`
+  checks required fields for Product, Offer, BreadcrumbList, FAQPage, Recipe, JobPosting,
+  VideoObject, LocalBusiness, Course and SoftwareApplication; `a11y-basics` checks input labels,
+  button/link names, `<main>`, skip link and heading order. `FetchResult`/`PageData` carry `tls`,
+  every `set_cookie` value and `fetched_at`.
 - New in 0.14.1: Windows Task Scheduler jobs no longer open a console window. `schedule install
   --target windows` registers a generated `<name>.vbs` launcher via `wscript.exe //B //Nologo`; the
   launcher runs the engine hidden (`WScript.Shell.Run(command, 0, True)`) and forwards the exit code.
@@ -157,6 +164,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
+- [Release notes 0.15.0](docs/releases/0.15.0.md): security, TLS, Schema.org and accessibility rules
 - [Release notes 0.14.1](docs/releases/0.14.1.md): hidden Windows scheduled jobs
 - [Release notes 0.14.0](docs/releases/0.14.0.md): OAuth readiness diagnostics
 - [Release notes 0.13.1](docs/releases/0.13.1.md): Yandex connector URL-only mode

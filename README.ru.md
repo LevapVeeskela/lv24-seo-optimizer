@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.14.1).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.15.0).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -132,8 +132,10 @@ URL submit и Yandex recrawl подключены,
 
 ## Статус
 
-Бета (v0.14.1). `0.14.1` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-18): скрытые
-Windows-задачи планировщика (`.vbs`-лаунчер через `wscript`, без окна консоли), OAuth readiness
+Бета (v0.15.0). `0.15.0` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-18): четыре новых
+набора crawl-правил (security headers, TLS-сертификат, обязательные поля Schema.org, базовая
+доступность), скрытые Windows-задачи планировщика (`.vbs`-лаунчер через `wscript`, без окна
+консоли), OAuth readiness
 diagnostics (8 состояний, `auth status`/`doctor`), OAuth-коннекторы для Google Search Console и
 Yandex Webmaster/Metrika (`auth login`, refresh-токены в keychain, `--url-only` для desktop),
 квото-зависимая автоматизация индексации — `indexing status/run/history`, лимиты
@@ -151,7 +153,8 @@ sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing si
 обычный access token и JSON-ключ service account (файл читается один раз за процесс, access token
 обновляется автоматически). `0.9.0` — предыдущий релиз: Bing sitemap submit и one-click
 IndexNow; `0.8.0` — до него: writer CWV по URL и устройству, безопасный
-`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.14.1 — в
+`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.15.0 — в
+[`docs/releases/0.15.0.md`](docs/releases/0.15.0.md); новое в 0.14.1 — в
 [`docs/releases/0.14.1.md`](docs/releases/0.14.1.md); новое в 0.14.0 — в
 [`docs/releases/0.14.0.md`](docs/releases/0.14.0.md); новое в 0.13.1 — в
 [`docs/releases/0.13.1.md`](docs/releases/0.13.1.md); новое в 0.13.0 — в

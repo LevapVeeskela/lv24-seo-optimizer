@@ -3,6 +3,29 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.15.0] - 2026-11-18
+
+Release notes: [`docs/releases/0.15.0.md`](docs/releases/0.15.0.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-18); desktop `0.9.5` bundles this engine. Minor release: four new
+crawl rule packs.
+
+### Added
+
+* `security-headers` (medium): HSTS, CSP, X-Frame-Options, X-Content-Type-Options,
+  Referrer-Policy, Permissions-Policy and cookie flags (`Secure`, `HttpOnly`, `SameSite=None`).
+* `tls-certificate` (high): expiry, protocol, SAN/CN hostname and weak ciphers, using TLS facts
+  captured by the fetcher and the page `fetched_at` timestamp.
+* `schema-required` (medium): required fields for Product, Offer, BreadcrumbList, FAQPage, Recipe,
+  JobPosting, VideoObject, LocalBusiness, Course and SoftwareApplication.
+* `a11y-basics` (medium): input labels, button/link accessible names, `<main>`, skip link and
+  heading order, backed by new parser fields.
+* `FetchResult`/`PageData` carry `tls`, every `set_cookie` value and `fetched_at`; `PageData` also
+  carries the accessibility fields.
+
+### Not changed
+
+* MCP 12 tools, schema 5, CLI 25 commands, no new dependency, no scraping, no write-gate change.
+
 ## [0.14.1] - 2026-11-18
 
 Release notes: [`docs/releases/0.14.1.md`](docs/releases/0.14.1.md). Status: **released** (PyPI,
