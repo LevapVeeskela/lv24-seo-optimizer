@@ -29,6 +29,7 @@ def _page(
     content_type: str = "text/html",
     headers: dict[str, str] | None = None,
     set_cookie: list[str] | None = None,
+    fetched_at: str | None = "2026-11-18T12:00:00+00:00",
 ) -> PageData:
     return PageData(
         url=url,
@@ -37,6 +38,7 @@ def _page(
         content_type=content_type,
         headers=_clean_headers() if headers is None else headers,
         set_cookie=[] if set_cookie is None else set_cookie,
+        fetched_at=fetched_at,
     )
 
 
@@ -280,6 +282,20 @@ def test_expired_cookies_are_ignored() -> None:
     ]
 
     assert _RULE.run(_ctx(_page(set_cookie=cookies))) == []
+
+
+def test_expiry_needs_the_crawl_timestamp() -> None:
+    # Without fetched_at the rule cannot prove the cookie expired, so it stays conservative
+    # and reports the missing flags instead of silently skipping it.
+    page = _page(
+        set_cookie=["gone=1; Expires=Thu, 01 Jan 1970 00:00:00 GMT"],
+        fetched_at=None,
+    )
+
+    issues = _RULE.run(_ctx(page))
+
+    assert len(issues) == 1
+    assert issues[0].detail["cookie"] == "gone"
 
 
 def test_future_expiry_keeps_cookie_checks() -> None:

@@ -6,8 +6,9 @@ the headers protect documents rather than assets. Every finding is a separate is
 report can be filtered per header, and a page is capped at
 :data:`_MAX_ISSUES_PER_PAGE` issues so a response with many weak cookies cannot flood it.
 
-Cookie expiry is the one time-dependent input: :func:`_utcnow` isolates the clock, so the
-rule is deterministic for a fixed page and the comparison can be tested with fixed dates.
+Cookie expiry uses the page's ``fetched_at`` timestamp (captured by the fetcher) instead of
+the rule-time clock, so a crawl stays deterministic and the comparison can be tested with
+fixed dates.
 """
 
 from __future__ import annotations
@@ -36,9 +37,15 @@ def _issue(url: str, detail: dict[str, Any]) -> Issue:
     return Issue(rule_id=_RULE_ID, severity=_SEVERITY, url=url, detail=detail)
 
 
-def _utcnow() -> datetime:
-    """Current UTC time, isolated so tests can freeze cookie-expiry comparisons."""
-    return datetime.now(UTC)
+def _fetched_at(page: PageData) -> datetime | None:
+    """Parse the crawl timestamp; a missing or malformed value disables expiry filtering."""
+    if not page.fetched_at:
+        return None
+    try:
+        parsed = datetime.fromisoformat(page.fetched_at)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _is_html_page(page: PageData) -> bool:
@@ -101,7 +108,7 @@ def _parse_cookie(raw: str) -> tuple[str, dict[str, str]] | None:
     return name, attributes
 
 
-def _is_expired(attributes: dict[str, str]) -> bool:
+def _is_expired(attributes: dict[str, str], reference: datetime | None) -> bool:
     """``Max-Age`` wins over ``Expires`` (RFC 6265); unparseable dates are not expired."""
     max_age = attributes.get("max-age")
     if max_age is not None:
@@ -110,14 +117,14 @@ def _is_expired(attributes: dict[str, str]) -> bool:
         except ValueError:
             pass
     expires = attributes.get("expires")
-    if expires:
+    if expires and reference is not None:
         try:
             when = parsedate_to_datetime(expires)
         except (TypeError, ValueError):
             return False
         if when.tzinfo is None:
             when = when.replace(tzinfo=UTC)
-        return when <= _utcnow()
+        return when <= reference
     return False
 
 
@@ -197,6 +204,7 @@ def _header_issues(page: PageData, headers: dict[str, str]) -> list[Issue]:
 
 def _cookie_issues(page: PageData) -> list[Issue]:
     https = _is_https(page)
+    reference = _fetched_at(page)
     issues: list[Issue] = []
     for raw in page.set_cookie:
         if len(issues) >= _MAX_ISSUES_PER_PAGE:
@@ -205,7 +213,7 @@ def _cookie_issues(page: PageData) -> list[Issue]:
         if parsed is None:
             continue
         name, attributes = parsed
-        if _is_expired(attributes):
+        if _is_expired(attributes, reference):
             continue
         missing: list[str] = []
         if https and "secure" not in attributes:
