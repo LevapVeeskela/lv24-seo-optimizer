@@ -65,16 +65,16 @@ systemd-юниты или XML задачи и не пишет ничего бе�
 
 ## Десктоп
 
-Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.9.6** — оболочка Tauri v2 с
+Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.9.8** — оболочка Tauri v2 с
 дашбордом, просмотром недельного отчёта, редактором конфигурации, сценарием «рекомендации →
 агенту», read-only экраном Diagnostics, OAuth-кнопками Connect с состояниями готовности и read-only
-карточкой Indexing automation. Она несёт закреплённый сайдкар `lv24-seo` (`0.15.1` в текущей сборке
-десктопа), требует движок `>= 0.15.1` и не добавляет собственной логики провайдеров.
+карточкой Indexing automation. Она несёт закреплённый сайдкар `lv24-seo` (`0.15.2` в текущей сборке
+десктопа), требует движок `>= 0.15.2` и не добавляет собственной логики провайдеров.
 
 | Платформа | Файлы | Автообновление |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.6_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.6_x64-portable.zip` | только NSIS |
-| Linux x64 | `LV24.SEO.Optimizer_0.9.6_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.6_amd64.deb`, `LV24.SEO.Optimizer-0.9.6-1.x86_64.rpm` | только AppImage |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.8_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.8_x64-portable.zip` | только NSIS |
+| Linux x64 | `LV24.SEO.Optimizer_0.9.8_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.8_amd64.deb`, `LV24.SEO.Optimizer-0.9.8-1.x86_64.rpm` | только AppImage |
 | macOS 13+ arm64/x64 | DMG, `.app.tar.gz` (+ `.sig`) | только `.app` |
 
 deb, rpm и portable ZIP ставятся вручную (MSI не выпускается); у `0.1.0` нет обновлятора. Релизы
@@ -146,7 +146,7 @@ Bing/Yandex/IndexNow/GSC и честные счётчики проиндекси
 по платформам (GSC URL
 Inspection/sitemap/фильтры, Yandex events/sitemaps/история/очередь recrawl, Bing
 page/traffic/crawl/URL/joins, органическая Метрика, CrUX-история и PSI-аудиты). Десктоп `0.9.5` — текущий
-релиз десктопа, он несёт движок `0.15.1`, требует `>= 0.15.1`, добавляет read-only карточку
+релиз десктопа, он несёт движок `0.15.2`, требует `>= 0.15.2`, добавляет read-only карточку
 Indexing automation и показывает готовность OAuth в Connect card. Открытые честные ограничения: GSC
 sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing sitemap/URL submit, IndexNow
 и Yandex recrawl реально отправляют),
