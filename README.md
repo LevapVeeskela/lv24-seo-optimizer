@@ -70,16 +70,19 @@ Console and Yandex Webmaster/Metrika, the 25-command CLI,
 the MCP server
 (12 tools, 3 resources, 3 prompts) and a plan-by-default scheduler lifecycle. Canonical source ids,
 GSC-only headline deltas, partial provider isolation and window/daily storage separation are
-enforced with regression tests. `0.15.3` is the current release: crawl TLS facts are captured
-before the response body is consumed, CJK ideographs count as words in thin-content/soft-404
-checks, and the weekly report email uses the LV24 dark-gradient/orange visual language with KPI
-cards, section accent bars, rounded tables and status pills. `0.15.2` added per-provider data
+enforced with regression tests. `0.15.4` is the current release: `crawl.title_max_length` makes the
+`title-length` threshold configurable (default 60) and `crawl.csp_allow_style_attr_inline` (default
+off) tolerates exactly `style-src-attr 'unsafe-inline'` for map popups that cannot be
+nonce-controlled; the CSP check now parses directives and merges duplicates. `0.15.3` captured crawl
+TLS facts before the response body is consumed and counted CJK ideographs as words in
+thin-content/soft-404 checks; `0.15.2` added per-provider data
 access (token/service account/OAuth) so saved credentials are not mistaken for "not connected",
 rejected documented placeholder OAuth client ids before a consent URL was built, and shipped four
 new crawl rule packs (security headers, TLS certificate, Schema.org required fields, accessibility
 basics), hidden Windows scheduled jobs, OAuth readiness diagnostics, OAuth connectors for Google
 and Yandex, quota-aware indexing automation and full-platform read depth (PyPI, npm and the MCP
-Registry, 2026-11-18); desktop `0.9.8` bundles engine `0.15.2`. See
+Registry, 2026-11-18); desktop `0.9.9` bundles engine `0.15.3`. See
+[`docs/releases/0.15.4.md`](docs/releases/0.15.4.md),
 [`docs/releases/0.15.3.md`](docs/releases/0.15.3.md),
 [`docs/releases/0.15.2.md`](docs/releases/0.15.2.md),
 [`docs/releases/0.15.1.md`](docs/releases/0.15.1.md),
@@ -159,17 +162,17 @@ lv24-seo install --client claude|opencode|vscode|cursor
 
 ## Desktop app
 
-The same engine ships as **LV24 SEO Optimizer Desktop 0.9.8** — a Tauri v2 shell with a dashboard,
+The same engine ships as **LV24 SEO Optimizer Desktop 0.9.9** — a Tauri v2 shell with a dashboard,
 weekly report view, configuration editor/diff/validation, a recommendations-to-agent workflow, a
 read-only Diagnostics screen, OAuth Connect buttons with readiness states, and a read-only Indexing
-automation card. It bundles a pinned `lv24-seo` sidecar (`0.15.2` in the current desktop build),
-requires engine `>= 0.15.2`, and adds no provider logic of its own.
+automation card. It bundles a pinned `lv24-seo` sidecar (`0.15.3` in the current desktop build),
+requires engine `>= 0.15.3`, and adds no provider logic of its own.
 
 | Platform | Assets | Auto-update |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.8_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.8_x64-portable.zip` | NSIS only |
-| Linux x64 | `LV24.SEO.Optimizer_0.9.8_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.8_amd64.deb`, `LV24.SEO.Optimizer-0.9.8-1.x86_64.rpm` | AppImage only |
-| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.9.8_aarch64.dmg`, `LV24.SEO.Optimizer_0.9.8_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.9_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.9_x64-portable.zip` | NSIS only |
+| Linux x64 | `LV24.SEO.Optimizer_0.9.9_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.9_amd64.deb`, `LV24.SEO.Optimizer-0.9.9-1.x86_64.rpm` | AppImage only |
+| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.9.9_aarch64.dmg`, `LV24.SEO.Optimizer_0.9.9_x64.dmg`, `.app.tar.gz` (+ `.sig`) | `.app` only |
 
 deb, rpm and the portable ZIP are manual-only (MSI is not produced); `0.1.0` has no updater. Releases
 publish `latest.json` and `SHA256SUMS.txt`.
@@ -300,6 +303,7 @@ Resources: `seo://config`, `seo://report/latest`, `seo://docs/tools`. Prompts: `
 * [Configuration](docs/config.md) — `seo.toml`, env vars, secret storage
 * [Scheduling & delivery](docs/scheduling.md) — cron/systemd/Task Scheduler, SMTP, Telegram
 * [Agent skills](docs/skills.md) — skill format and mirrors
+* [Release notes 0.15.4](docs/releases/0.15.4.md) — configurable title threshold, documented CSP exception
 * [Release notes 0.15.3](docs/releases/0.15.3.md) — crawl TLS facts, CJK word counts, weekly email restyle
 * [Release notes 0.15.2](docs/releases/0.15.2.md) — data-access status per provider
 * [Release notes 0.15.1](docs/releases/0.15.1.md) — reject placeholder OAuth client IDs

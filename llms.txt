@@ -6,7 +6,7 @@
 
 ## Surface
 
-- Engine `lv24-seo 0.15.3` (current; PyPI, npm and the MCP Registry, 2026-11-19): 6 provider
+- Engine `lv24-seo 0.15.4` (current; PyPI, npm and the MCP Registry, 2026-11-20): 6 provider
   adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
@@ -72,6 +72,11 @@
   provider writes — `seo_sitemap_submit` is wired for Bing submit, `seo_recrawl_request` is wired
   for Yandex recrawl, and the GSC/delete sitemap paths return `WRITE_DISABLED`), 3 resources,
   3 prompts.
+- New in 0.15.4: `crawl.title_max_length` (default 60, minimum 15) sets the upper bound of the
+  `title-length` rule; `crawl.csp_allow_style_attr_inline` (default false) tolerates exactly
+  `style-src-attr 'unsafe-inline'` while every other `unsafe-inline` and `unsafe-eval` is still
+  reported; the CSP check parses directives and merges repeated names. Defaults reproduce the
+  previous findings.
 - New in 0.15.3: crawl TLS facts are captured before the response body is consumed, so the
   `tls-certificate` rule sees protocol, cipher and certificate on normal responses; CJK
   ideographs count as words in thin-content/soft-404 checks; the weekly report email uses the
@@ -177,6 +182,7 @@
 - [Configuration](docs/config.md): seo.toml, env vars, secrets
 - [Scheduling and delivery](docs/scheduling.md): cron, systemd, Task Scheduler, SMTP, Telegram
 - [Skills](docs/skills.md): skill format and mirrors
+- [Release notes 0.15.4](docs/releases/0.15.4.md): configurable title threshold, documented CSP exception
 - [Release notes 0.15.3](docs/releases/0.15.3.md): crawl TLS facts, CJK word counts, weekly email restyle
 - [Release notes 0.15.2](docs/releases/0.15.2.md): data-access status per provider
 - [Release notes 0.15.1](docs/releases/0.15.1.md): reject placeholder OAuth client IDs

@@ -3,6 +3,33 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.15.4] - 2026-11-20
+
+Release notes: [`docs/releases/0.15.4.md`](docs/releases/0.15.4.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-20); desktop `0.9.9` bundles engine `0.15.3`. Patch release: two
+crawl-rule options that keep the previous findings by default.
+
+### Added
+
+* `crawl.title_max_length` (default `60`, minimum `15`) sets the upper bound of the `title-length`
+  rule. A CMS that intentionally produces longer titles can raise it without patching the rule.
+* `crawl.csp_allow_style_attr_inline` (default `false`) tolerates exactly
+  `style-src-attr 'unsafe-inline'` in the `security-headers` rule, for SPAs whose map popups carry
+  literal `style` attributes. `style-src`, `style-src-elem`, `script-src`, `default-src`,
+  `unsafe-eval` and every other unsafe token are still reported.
+
+### Fixed
+
+* The `security-headers` CSP check parses directives instead of substring-matching the raw header
+  and merges repeated directive names, so an unsafe token in a duplicated directive no longer hides
+  from the finding.
+
+### Not changed
+
+* MCP 12 tools, schema 5, CLI 25 commands, no new dependency, no provider call, no write-gate
+  change. Defaults reproduce the previous results: 60-character titles and every `unsafe-inline`
+  or `unsafe-eval` are still reported.
+
 ## [0.15.3] - 2026-11-19
 
 Release notes: [`docs/releases/0.15.3.md`](docs/releases/0.15.3.md). Status: **released** (PyPI,

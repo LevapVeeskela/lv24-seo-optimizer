@@ -7,10 +7,11 @@ The pipeline is **release plumbing only**: it verifies the exact tagged commit (
 offline tests, schema drift, installed-wheel smoke), builds the sdist/wheel, publishes them to
 PyPI with OIDC Trusted Publishing, publishes the thin `@lv24/seo` npm launcher with npm OIDC
 trusted publishing, and publishes `server.json` to the MCP Registry. No long-lived NPM_TOKEN or
-PyPI token exists. `0.15.3` is the current published build (2026-11-19, notes:
-[`releases/0.15.3.md`](releases/0.15.3.md)) on PyPI, npm and the MCP Registry. Desktop `0.9.8` is
-the current desktop release, bundles engine `0.15.2`, requires engine `>= 0.15.2`, adds the
-read-only Indexing automation card and shows OAuth readiness in the Connect card. `0.15.2` was
+PyPI token exists. `0.15.4` is the current published build (2026-11-20, notes:
+[`releases/0.15.4.md`](releases/0.15.4.md)) on PyPI, npm and the MCP Registry. Desktop `0.9.9` is
+the current desktop release, bundles engine `0.15.3`, requires engine `>= 0.15.3`, adds the
+read-only Indexing automation card and shows OAuth readiness in the Connect card. `0.15.3` was
+the crawl TLS/CJK/email release (2026-11-19, [`releases/0.15.3.md`](releases/0.15.3.md)); `0.15.2` was
 the data-access status release (2026-11-18, [`releases/0.15.2.md`](releases/0.15.2.md)); `0.15.1` was
 the placeholder client-id guard release (2026-11-18, [`releases/0.15.1.md`](releases/0.15.1.md));
 `0.15.0` was

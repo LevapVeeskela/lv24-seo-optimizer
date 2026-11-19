@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.15.3).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.15.4).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -65,16 +65,16 @@ systemd-юниты или XML задачи и не пишет ничего бе�
 
 ## Десктоп
 
-Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.9.8** — оболочка Tauri v2 с
+Тот же движок поставляется как **LV24 SEO Optimizer Desktop 0.9.9** — оболочка Tauri v2 с
 дашбордом, просмотром недельного отчёта, редактором конфигурации, сценарием «рекомендации →
 агенту», read-only экраном Diagnostics, OAuth-кнопками Connect с состояниями готовности и read-only
-карточкой Indexing automation. Она несёт закреплённый сайдкар `lv24-seo` (`0.15.2` в текущей сборке
-десктопа), требует движок `>= 0.15.2` и не добавляет собственной логики провайдеров.
+карточкой Indexing automation. Она несёт закреплённый сайдкар `lv24-seo` (`0.15.3` в текущей сборке
+десктопа), требует движок `>= 0.15.3` и не добавляет собственной логики провайдеров.
 
 | Платформа | Файлы | Автообновление |
 |---|---|---|
-| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.8_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.8_x64-portable.zip` | только NSIS |
-| Linux x64 | `LV24.SEO.Optimizer_0.9.8_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.8_amd64.deb`, `LV24.SEO.Optimizer-0.9.8-1.x86_64.rpm` | только AppImage |
+| Windows 10/11 x64 | NSIS `LV24.SEO.Optimizer_0.9.9_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.9.9_x64-portable.zip` | только NSIS |
+| Linux x64 | `LV24.SEO.Optimizer_0.9.9_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.9.9_amd64.deb`, `LV24.SEO.Optimizer-0.9.9-1.x86_64.rpm` | только AppImage |
 | macOS 13+ arm64/x64 | DMG, `.app.tar.gz` (+ `.sig`) | только `.app` |
 
 deb, rpm и portable ZIP ставятся вручную (MSI не выпускается); у `0.1.0` нет обновлятора. Релизы
@@ -132,11 +132,13 @@ URL submit и Yandex recrawl подключены,
 
 ## Статус
 
-Бета (v0.15.3). `0.15.3` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-19): TLS-факты
-краулера снимаются до чтения тела ответа, иероглифы CJK считаются словами в проверках
-thin-content/soft-404, а письмо недельного отчёта использует визуальный язык LV24 — тёмный
-градиентный заголовок, оранжевый акцент, KPI-карточки, акцентные полосы секций, скруглённые
-таблицы и статус-пилюли. `0.15.2` добавил режим доступа к данным по каждому провайдеру
+Бета (v0.15.4). `0.15.4` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-20): порог длины
+title в crawl-правиле настраивается через `crawl.title_max_length` (по умолчанию 60), а
+`crawl.csp_allow_style_attr_inline` (по умолчанию выключен) допускает ровно
+`style-src-attr 'unsafe-inline'` для попапов карты, которые нельзя перевести на nonce;
+CSP-проверка теперь разбирает директивы и объединяет повторяющиеся. `0.15.3` снимал TLS-факты
+краулера до чтения тела ответа, считал иероглифы CJK словами и перевёл письмо недельного отчёта
+на визуальный язык LV24. `0.15.2` добавил режим доступа к данным по каждому провайдеру
 (токен/service account/OAuth), поэтому сохранённые ключи больше не выглядят как «не
 подключено»; примеры client_id из документации отклоняются до построения consent-URL, четыре
 новых набора crawl-правил (security headers, TLS-сертификат, обязательные поля Schema.org,
@@ -147,8 +149,8 @@ refresh-токены в keychain, `--url-only` для desktop), квото-за�
 — `indexing status/run/history`, лимиты Bing/Yandex/IndexNow/GSC и честные счётчики
 проиндексированного, плюс полная глубина чтения по платформам (GSC URL
 Inspection/sitemap/фильтры, Yandex events/sitemaps/история/очередь recrawl, Bing
-page/traffic/crawl/URL/joins, органическая Метрика, CrUX-история и PSI-аудиты). Десктоп `0.9.8` —
-текущий релиз десктопа, он несёт движок `0.15.2`, требует `>= 0.15.2`, добавляет read-only
+page/traffic/crawl/URL/joins, органическая Метрика, CrUX-история и PSI-аудиты). Десктоп `0.9.9` —
+текущий релиз десктопа, он несёт движок `0.15.3`, требует `>= 0.15.3`, добавляет read-only
 карточку Indexing automation и показывает готовность OAuth в Connect card. Открытые честные ограничения: GSC
 sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing sitemap/URL submit, IndexNow
 и Yandex recrawl реально отправляют),
@@ -158,7 +160,8 @@ sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing si
 обычный access token и JSON-ключ service account (файл читается один раз за процесс, access token
 обновляется автоматически). `0.9.0` — предыдущий релиз: Bing sitemap submit и one-click
 IndexNow; `0.8.0` — до него: writer CWV по URL и устройству, безопасный
-`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.15.3 — в
+`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.15.4 — в
+[`docs/releases/0.15.4.md`](docs/releases/0.15.4.md); новое в 0.15.3 — в
 [`docs/releases/0.15.3.md`](docs/releases/0.15.3.md); новое в 0.15.2 — в
 [`docs/releases/0.15.2.md`](docs/releases/0.15.2.md); новое в 0.15.1 — в
 [`docs/releases/0.15.1.md`](docs/releases/0.15.1.md); новое в 0.15.0 — в
