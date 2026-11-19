@@ -20,7 +20,7 @@ into the unpinned (`latest`) lookup.
 
 ## Status
 
-Beta. `@lv24/seo 0.15.2` launches `lv24-seo 0.15.2` (published 2026-11-18; the current engine) and
+Beta. `@lv24/seo 0.15.3` launches `lv24-seo 0.15.3` (published 2026-11-19; the current engine) and
 ships 12 MCP tools (10 read-class: 7 pure read-only plus the 3 local-state
 writers annotated `readOnlyHint: false`), 3 resources, 3 prompts, 3 skills, the 25-command CLI,
 scheduler generators and a product-grade weekly email. Recent additions:
@@ -55,9 +55,10 @@ scheduler generators and a product-grade weekly email. Recent additions:
   offers a non-destructive `--to DIR` extraction plus the two-phase in-place `--config` mode.
 
 * **Localized product email** — `report weekly --send` renders a 600px inline-CSS digest in
-  `ru`, `en` or `zh`: KPI cards for clicks/impressions/CTR/position, top-3 opportunities,
-  issue severities, merged sources, data notes and a property/UTC footer. Plain-text fallback
-  and subject are localized too; JSON/MCP payloads stay canonical English. Unknown values stay
+  `ru`, `en` or `zh`: a dark gradient header with an orange accent, KPI cards, top-3
+  opportunities, issue severities as status pills, rounded source tables, data notes and a
+  property/UTC footer. Plain-text fallback and sentence case subject are localized too; JSON/MCP
+  payloads stay canonical English. Unknown values stay
   unknown, CTR changes are shown in percentage points, and Metrika is labelled as sessions,
   never as clicks. Set the language once with `report.locale`.
 * **Week-over-week report diff** — `report diff` and the `seo_report_diff` MCP tool compare two

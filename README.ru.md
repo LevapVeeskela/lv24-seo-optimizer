@@ -2,7 +2,7 @@
 
 # lv24-seo-optimizer
 
-**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.15.2).**
+**Бесплатный SEO-пульт для людей и ИИ-агентов (v0.15.3).**
 
 Собирает Google Search Console, Яндекс.Вебмастер, Яндекс.Метрику, Bing/IndexNow, CrUX и
 PageSpeed Insights в одну нормализованную модель, краулит сайт на технические регрессии и отдаёт
@@ -132,22 +132,24 @@ URL submit и Yandex recrawl подключены,
 
 ## Статус
 
-Бета (v0.15.2). `0.15.2` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-18): `auth status`
-показывает режим доступа к данным по каждому провайдеру (токен/service account/OAuth), поэтому
-сохранённые ключи больше не выглядят как «не подключено»; примеры client_id из документации
-отклоняются до построения consent-URL, четыре новых
-набора crawl-правил (security headers, TLS-сертификат, обязательные поля Schema.org, базовая
-доступность), скрытые Windows-задачи планировщика (`.vbs`-лаунчер через `wscript`, без окна
-консоли), OAuth readiness
-diagnostics (8 состояний, `auth status`/`doctor`), OAuth-коннекторы для Google Search Console и
-Yandex Webmaster/Metrika (`auth login`, refresh-токены в keychain, `--url-only` для desktop),
-квото-зависимая автоматизация индексации — `indexing status/run/history`, лимиты
-Bing/Yandex/IndexNow/GSC и честные счётчики проиндексированного, плюс полная глубина чтения
-по платформам (GSC URL
+Бета (v0.15.3). `0.15.3` — текущий релиз (PyPI, npm и MCP Registry, 2026-11-19): TLS-факты
+краулера снимаются до чтения тела ответа, иероглифы CJK считаются словами в проверках
+thin-content/soft-404, а письмо недельного отчёта использует визуальный язык LV24 — тёмный
+градиентный заголовок, оранжевый акцент, KPI-карточки, акцентные полосы секций, скруглённые
+таблицы и статус-пилюли. `0.15.2` добавил режим доступа к данным по каждому провайдеру
+(токен/service account/OAuth), поэтому сохранённые ключи больше не выглядят как «не
+подключено»; примеры client_id из документации отклоняются до построения consent-URL, четыре
+новых набора crawl-правил (security headers, TLS-сертификат, обязательные поля Schema.org,
+базовая доступность), скрытые Windows-задачи планировщика (`.vbs`-лаунчер через `wscript`, без
+окна консоли), OAuth readiness diagnostics (8 состояний, `auth status`/`doctor`),
+OAuth-коннекторы для Google Search Console и Yandex Webmaster/Metrika (`auth login`,
+refresh-токены в keychain, `--url-only` для desktop), квото-зависимая автоматизация индексации
+— `indexing status/run/history`, лимиты Bing/Yandex/IndexNow/GSC и честные счётчики
+проиндексированного, плюс полная глубина чтения по платформам (GSC URL
 Inspection/sitemap/фильтры, Yandex events/sitemaps/история/очередь recrawl, Bing
-page/traffic/crawl/URL/joins, органическая Метрика, CrUX-история и PSI-аудиты). Десктоп `0.9.5` — текущий
-релиз десктопа, он несёт движок `0.15.2`, требует `>= 0.15.2`, добавляет read-only карточку
-Indexing automation и показывает готовность OAuth в Connect card. Открытые честные ограничения: GSC
+page/traffic/crawl/URL/joins, органическая Метрика, CrUX-история и PSI-аудиты). Десктоп `0.9.8` —
+текущий релиз десктопа, он несёт движок `0.15.2`, требует `>= 0.15.2`, добавляет read-only
+карточку Indexing automation и показывает готовность OAuth в Connect card. Открытые честные ограничения: GSC
 sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing sitemap/URL submit, IndexNow
 и Yandex recrawl реально отправляют),
 `crawl.concurrency` зарезервирован (краулер последовательный с `Crawl-delay`), анализ логов
@@ -156,7 +158,8 @@ sitemap submit и Bing sitemap delete отвечают `WRITE_DISABLED` (Bing si
 обычный access token и JSON-ключ service account (файл читается один раз за процесс, access token
 обновляется автоматически). `0.9.0` — предыдущий релиз: Bing sitemap submit и one-click
 IndexNow; `0.8.0` — до него: writer CWV по URL и устройству, безопасный
-`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.15.2 — в
+`backup restore --to`, планировщик с явным `--allow-write`. Новое в 0.15.3 — в
+[`docs/releases/0.15.3.md`](docs/releases/0.15.3.md); новое в 0.15.2 — в
 [`docs/releases/0.15.2.md`](docs/releases/0.15.2.md); новое в 0.15.1 — в
 [`docs/releases/0.15.1.md`](docs/releases/0.15.1.md); новое в 0.15.0 — в
 [`docs/releases/0.15.0.md`](docs/releases/0.15.0.md); новое в 0.14.1 — в

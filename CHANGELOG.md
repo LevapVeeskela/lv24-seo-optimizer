@@ -3,6 +3,33 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is [SemVer](https://semver.org/).
 
+## [0.15.3] - 2026-11-19
+
+Release notes: [`docs/releases/0.15.3.md`](docs/releases/0.15.3.md). Status: **released** (PyPI,
+npm and the MCP Registry, 2026-11-19); desktop `0.9.8` bundles engine `0.15.2`. Patch release:
+crawl TLS facts, CJK word counts and the weekly email visual refresh.
+
+### Fixed
+
+* Crawl TLS facts are captured before the response body is consumed. httpcore clears the SSL
+  peer certificate when the stream closes, so `tls-certificate` and `FetchResult.tls` now see
+  protocol, cipher and certificate on normal responses.
+* CJK ideographs count as words in thin-content/soft-404 checks, so a substantial Chinese page
+  such as `/games?lang=zh` is no longer reported as thin; Latin and Cyrillic tokens still count
+  once.
+
+### Changed
+
+* The weekly report email HTML uses the LV24 visual language: dark gradient header, orange accent,
+  KPI cards, section accent bars, rounded tables and status pills. Text, Markdown, subject and
+  every report value/label are unchanged; the document stays inline-CSS only with no external
+  assets and keeps a solid dark fallback where gradients are unsupported.
+
+### Not changed
+
+* MCP 12 tools, schema 5, CLI 25 commands, no new dependency, no provider call, no write-gate
+  change.
+
 ## [0.15.2] - 2026-11-18
 
 Release notes: [`docs/releases/0.15.2.md`](docs/releases/0.15.2.md). Status: **released** (PyPI,
