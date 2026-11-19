@@ -236,6 +236,17 @@ audit → plan → fix → verify.
 | **Skills** | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` — decision trees + tool recipes + output contracts (install from the wheel: `lv24-seo export skills --out ./skills`) |
 | **Automation** | cron / systemd timer / Windows Task Scheduler generators with plan-first `schedule install` (`--allow-write` to apply), read-only `schedule status`, exact and idempotent `schedule uninstall`, a daily `indexing run` job, plus a GitHub Actions recipe |
 
+### Report emails
+
+The weekly report email uses the same LV24 visual system as the scheduled daily reports. Real
+messages from the LV24 deployment:
+
+[![LV24 SEO report emails](docs/assets/email-reports.png)](docs/assets/email-reports.png)
+
+<sub>Yandex Webmaster · Google Search Console · Yandex Metrika — real Gmail inbox screenshots.
+Full-size: [Yandex](docs/assets/email-yandex.png) · [GSC](docs/assets/email-gsc.png) ·
+[Metrika](docs/assets/email-metrika.png).</sub>
+
 ### MCP tools
 
 Twelve tools, three resources and three prompts. Ten are read-class: seven pure read-only tools that
