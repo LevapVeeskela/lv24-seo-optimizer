@@ -70,6 +70,7 @@ max_urls = 500
 concurrency = 4   # reserved for a future bounded worker pool; the crawler is serial today
 respect_robots = true
 user_agent = "lv24-seo/0.1 (+https://example.com/bot)"
+title_max_length = 60   # upper bound for the title-length rule; must be >= 15
 
 [storage]
 data_dir = "./data"      # relative to this file; absolute values and LV24_SEO_DATA_DIR are used as-is

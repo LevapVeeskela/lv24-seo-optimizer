@@ -205,12 +205,17 @@ class CrawlConfig(_StrictModel):
     Crawling is serial with polite pacing (robots ``Crawl-delay`` between
     requests); ``concurrency`` is reserved for a future bounded worker pool and
     currently has no effect on execution.
+
+    ``title_max_length`` is the upper bound used by the ``title-length`` rule.
+    The 60-character default matches Google's truncation guidance; a site with a
+    deliberately longer CMS template can raise it.
     """
 
     max_urls: int = Field(default=500, ge=1)
     concurrency: int = Field(default=4, ge=1)
     respect_robots: bool = True
     user_agent: str = "lv24-seo/0.1"
+    title_max_length: int = Field(default=60, ge=15)
 
 
 class StorageConfig(_StrictModel):

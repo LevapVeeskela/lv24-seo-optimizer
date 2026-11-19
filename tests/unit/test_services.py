@@ -68,6 +68,7 @@ def _config(
     base_url: str = BASE_URL,
     data_dir: Path | None = None,
     locale: str = "ru",
+    title_max_length: int = 60,
 ) -> SeoConfig:
     return SeoConfig(
         project=ProjectConfig(
@@ -81,7 +82,7 @@ def _config(
             yandex_metrika=(YandexMetrikaConfig(counter=counter) if counter else None),
         ),
         report=ReportConfig(locale=locale),
-        crawl=CrawlConfig(max_urls=50),
+        crawl=CrawlConfig(max_urls=50, title_max_length=title_max_length),
         storage=StorageConfig(data_dir=Path(data_dir or "data")),
     )
 
@@ -1880,6 +1881,37 @@ def test_crawl_and_store_without_store_still_returns_results(
     assert response["ok"] is True
     assert response["meta"]["pages_stored"] == 0
     assert "store: not configured; crawl results were not persisted" in response["warnings"]
+
+
+def test_crawl_title_length_uses_configured_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    title = "x" * 65
+    body = f"<html><head><title>{title}</title></head><body>Page</body></html>".encode()
+
+    class LongTitleFetcher(FakeFetcher):
+        def fetch(self, url: str) -> FetchResult:
+            return FetchResult(
+                url=url,
+                status=200,
+                final_url=url,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                body=body,
+            )
+
+    monkeypatch.setattr(services, "Fetcher", LongTitleFetcher)
+
+    def title_length_issues(title_max_length: int) -> list[dict[str, Any]]:
+        service = SeoService(
+            _config(title_max_length=title_max_length),
+            secrets=_secrets(),
+        )
+        response = service.crawl_and_store(start_url=BASE_URL, max_urls=1)
+        assert response["ok"] is True
+        return [issue for issue in response["data"]["issues"] if issue["rule_id"] == "title-length"]
+
+    assert title_length_issues(70) == []
+    assert [issue["detail"]["length"] for issue in title_length_issues(60)] == [65]
 
 
 def test_combined_meta_total_is_unknown_unless_every_dataset_reports_one() -> None:

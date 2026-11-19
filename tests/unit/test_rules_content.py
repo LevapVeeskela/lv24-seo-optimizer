@@ -146,6 +146,21 @@ def test_title_length_skips_missing_titles() -> None:
     assert run(TITLE_LENGTH, *pages) == []
 
 
+def test_title_length_honours_configured_max_length() -> None:
+    at_61 = make_page(f"{SITE}/61", title="a" * 61)
+    at_70 = make_page(f"{SITE}/70", title="b" * 70)
+    at_71 = make_page(f"{SITE}/71", title="c" * 71)
+    ctx = RuleContext(
+        pages=[at_61, at_70, at_71],
+        site_url=SITE,
+        title_max_length=70,
+    )
+
+    issues = TITLE_LENGTH.run(ctx)
+
+    assert [(issue.url, issue.detail["length"]) for issue in issues] == [(at_71.url, 71)]
+
+
 # --- meta-description-missing ----------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""title-length: <title> outside the 15..60 character recommendation."""
+"""title-length: <title> outside the configured 15..N character recommendation."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from lv24_seo.crawl.rules.base import Rule
 _RULE_ID = "title-length"
 _SEVERITY: Severity = "low"
 _MIN_LENGTH = 15
-_MAX_LENGTH = 60
+_DEFAULT_MAX_LENGTH = 60
 
 
 def _issue(url: str, detail: dict[str, Any] | None = None) -> Issue:
@@ -35,7 +35,7 @@ def _check(ctx: RuleContext) -> list[Issue]:
             # Missing titles are reported by title-missing; do not double-report.
             continue
         length = len(title)
-        if _MIN_LENGTH <= length <= _MAX_LENGTH:
+        if _MIN_LENGTH <= length <= ctx.title_max_length:
             continue
         issues.append(_issue(page.url, {"length": length, "title": title}))
     return issues
@@ -46,7 +46,8 @@ RULE = Rule(
     severity=_SEVERITY,
     title="Title length",
     description=(
-        "Titles shorter than 15 or longer than 60 characters lose relevance or get "
+        "Titles shorter than 15 or longer than the configured title_max_length "
+        f"(default {_DEFAULT_MAX_LENGTH}) characters lose relevance or get "
         "truncated in search results."
     ),
     check=_check,

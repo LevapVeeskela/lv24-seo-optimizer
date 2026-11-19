@@ -92,3 +92,4 @@ class RuleContext:
     robots_sitemaps: list[str] = field(default_factory=list)
     robots_disallow: list[str] = field(default_factory=list)
     robots_allow: list[str] = field(default_factory=list)
+    title_max_length: int = 60

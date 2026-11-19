@@ -72,6 +72,7 @@ def test_defaults_without_any_file(tmp_path: Path) -> None:
     assert cfg.crawl.concurrency == 4
     assert cfg.crawl.respect_robots is True
     assert cfg.crawl.user_agent.startswith("lv24-seo/")
+    assert cfg.crawl.title_max_length == 60
 
     assert cfg.storage.data_dir == Path("data")
     assert cfg.storage.raw_retention_days == 90
@@ -177,6 +178,7 @@ def test_values_from_toml(tmp_path: Path) -> None:
         concurrency = 2
         respect_robots = false
         user_agent = "test-agent"
+        title_max_length = 70
 
         [storage]
         data_dir = "./var/seo"
@@ -227,6 +229,7 @@ def test_values_from_toml(tmp_path: Path) -> None:
     assert cfg.crawl.concurrency == 2
     assert cfg.crawl.respect_robots is False
     assert cfg.crawl.user_agent == "test-agent"
+    assert cfg.crawl.title_max_length == 70
 
     # A relative [storage].data_dir is anchored to the config file's own directory.
     assert cfg.storage.data_dir == tmp_path / "var" / "seo"

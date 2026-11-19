@@ -3442,6 +3442,7 @@ class SeoService:
                 robots_sitemaps=list(robots.sitemaps),
                 robots_disallow=list(robots.disallow),
                 robots_allow=list(robots.allow),
+                title_max_length=self._config.crawl.title_max_length,
             )
         )
         outcome = _CrawlOutcome(
