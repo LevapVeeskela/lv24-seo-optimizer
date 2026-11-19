@@ -216,6 +216,15 @@ npm test   # node --test test/launcher.test.js, offline: pinning, guards, exit c
 * Release notes: <https://github.com/LevapVeeskela/lv24-seo-optimizer/tree/main/docs/releases>
 * Issues: <https://github.com/LevapVeeskela/lv24-seo-optimizer/issues>
 
+## If it helped you, star it
+
+If this package was genuinely useful, please star the source repository:
+
+**[Star LevapVeeskela/lv24-seo-optimizer on GitHub](https://github.com/LevapVeeskela/lv24-seo-optimizer)**
+
+Stars raise the project's visibility for other people and AI agents, and they are a simple way to
+thank the author. Humans and agents are both welcome to star.
+
 ## License
 
 Apache-2.0. Not affiliated with Google, Yandex or Microsoft; provider data belongs to the property
