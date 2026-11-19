@@ -209,6 +209,10 @@ class CrawlConfig(_StrictModel):
     ``title_max_length`` is the upper bound used by the ``title-length`` rule.
     The 60-character default matches Google's truncation guidance; a site with a
     deliberately longer CMS template can raise it.
+
+    ``csp_allow_style_attr_inline`` permits ``style-src-attr 'unsafe-inline'``
+    when ``style-src`` itself is strict. It exists for the documented map-popup
+    exception; every other unsafe token is still reported.
     """
 
     max_urls: int = Field(default=500, ge=1)
@@ -216,6 +220,7 @@ class CrawlConfig(_StrictModel):
     respect_robots: bool = True
     user_agent: str = "lv24-seo/0.1"
     title_max_length: int = Field(default=60, ge=15)
+    csp_allow_style_attr_inline: bool = False
 
 
 class StorageConfig(_StrictModel):

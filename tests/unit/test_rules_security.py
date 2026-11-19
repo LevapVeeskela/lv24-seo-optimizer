@@ -42,8 +42,12 @@ def _page(
     )
 
 
-def _ctx(*pages: PageData) -> RuleContext:
-    return RuleContext(pages=list(pages), site_url="https://example.com/")
+def _ctx(*pages: PageData, csp_allow_style_attr_inline: bool = False) -> RuleContext:
+    return RuleContext(
+        pages=list(pages),
+        site_url="https://example.com/",
+        csp_allow_style_attr_inline=csp_allow_style_attr_inline,
+    )
 
 
 def _find(issues: list[Issue], header: str, status: str | None = None) -> list[Issue]:
@@ -158,6 +162,53 @@ def test_csp_unsafe_tokens_are_reported_in_stable_order() -> None:
         "status": "weak",
         "directives": ["unsafe-inline", "unsafe-eval"],
     }
+
+
+_LV24_CSP = "default-src 'self'; style-src 'self' 'nonce-abc'; style-src-attr 'unsafe-inline'"
+
+
+def _csp_page(csp: str) -> PageData:
+    headers = _clean_headers()
+    headers["content-security-policy"] = csp
+    return _page(headers=headers)
+
+
+def test_style_attr_unsafe_inline_is_weak_by_default() -> None:
+    issues = _RULE.run(_ctx(_csp_page(_LV24_CSP)))
+
+    assert _find(issues, "content-security-policy")[0].detail == {
+        "header": "content-security-policy",
+        "status": "weak",
+        "directives": ["unsafe-inline"],
+    }
+
+
+def test_style_attr_unsafe_inline_exception_is_opt_in() -> None:
+    assert _RULE.run(_ctx(_csp_page(_LV24_CSP), csp_allow_style_attr_inline=True)) == []
+
+
+def test_style_attr_exception_does_not_hide_script_src_unsafe_inline() -> None:
+    csp = f"{_LV24_CSP}; script-src 'unsafe-inline'"
+
+    issues = _RULE.run(_ctx(_csp_page(csp), csp_allow_style_attr_inline=True))
+
+    assert _find(issues, "content-security-policy")[0].detail["directives"] == ["unsafe-inline"]
+
+
+def test_style_attr_exception_does_not_hide_style_src_unsafe_inline() -> None:
+    csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'"
+
+    issues = _RULE.run(_ctx(_csp_page(csp), csp_allow_style_attr_inline=True))
+
+    assert _find(issues, "content-security-policy")[0].detail["directives"] == ["unsafe-inline"]
+
+
+def test_style_attr_exception_never_hides_unsafe_eval() -> None:
+    csp = "default-src 'self'; style-src 'self'; style-src-attr 'unsafe-eval'"
+
+    issues = _RULE.run(_ctx(_csp_page(csp), csp_allow_style_attr_inline=True))
+
+    assert _find(issues, "content-security-policy")[0].detail["directives"] == ["unsafe-eval"]
 
 
 def test_csp_frame_ancestors_satisfies_x_frame_options() -> None:

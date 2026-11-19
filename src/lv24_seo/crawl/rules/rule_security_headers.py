@@ -77,13 +77,42 @@ def _hsts_max_age(value: str) -> int | None:
     return None
 
 
-def _csp_directive_names(value: str) -> set[str]:
-    names: set[str] = set()
+def _parse_csp(value: str) -> dict[str, list[str]]:
+    """Map directive names to lower-cased source expressions.
+
+    Repeated names are merged rather than overwritten so an unsafe token in a
+    duplicate directive cannot hide from the check.
+    """
+    directives: dict[str, list[str]] = {}
     for directive in value.split(";"):
         tokens = directive.split()
-        if tokens:
-            names.add(tokens[0].lower())
-    return names
+        if not tokens:
+            continue
+        name = tokens[0].lower()
+        directives.setdefault(name, []).extend(token.lower() for token in tokens[1:])
+    return directives
+
+
+def _csp_unsafe_tokens(
+    directives: dict[str, list[str]],
+    *,
+    allow_style_attr_inline: bool,
+) -> list[str]:
+    """Unsafe tokens found in the policy, in the stable report order.
+
+    ``style-src-attr 'unsafe-inline'`` is the only tolerated form when the
+    caller opts in; ``unsafe-eval`` and every other directive stay reportable.
+    """
+    found: set[str] = set()
+    for name, sources in directives.items():
+        for source in sources:
+            keyword = source.strip("'\"")
+            if keyword not in _CSP_UNSAFE_TOKENS:
+                continue
+            if allow_style_attr_inline and keyword == "unsafe-inline" and name == "style-src-attr":
+                continue
+            found.add(keyword)
+    return [keyword for keyword in _CSP_UNSAFE_TOKENS if keyword in found]
 
 
 def _parse_cookie(raw: str) -> tuple[str, dict[str, str]] | None:
@@ -128,7 +157,12 @@ def _is_expired(attributes: dict[str, str], reference: datetime | None) -> bool:
     return False
 
 
-def _header_issues(page: PageData, headers: dict[str, str]) -> list[Issue]:
+def _header_issues(
+    page: PageData,
+    headers: dict[str, str],
+    *,
+    allow_style_attr_inline: bool,
+) -> list[Issue]:
     issues: list[Issue] = []
 
     if _is_https(page):
@@ -155,11 +189,16 @@ def _header_issues(page: PageData, headers: dict[str, str]) -> list[Issue]:
                 )
 
     csp = headers.get("content-security-policy", "").strip()
-    csp_directives = _csp_directive_names(csp)
+    csp_directives: set[str] = set()
     if not csp:
         issues.append(_issue(page.url, {"header": "content-security-policy", "status": "missing"}))
     else:
-        unsafe = [token for token in _CSP_UNSAFE_TOKENS if token in csp.lower()]
+        directives = _parse_csp(csp)
+        csp_directives = set(directives)
+        unsafe = _csp_unsafe_tokens(
+            directives,
+            allow_style_attr_inline=allow_style_attr_inline,
+        )
         if unsafe:
             issues.append(
                 _issue(
@@ -243,7 +282,11 @@ def _check(ctx: RuleContext) -> list[Issue]:
     for page in ctx.pages:
         if not _is_html_page(page):
             continue
-        page_issues = _header_issues(page, _headers_lower(page))
+        page_issues = _header_issues(
+            page,
+            _headers_lower(page),
+            allow_style_attr_inline=ctx.csp_allow_style_attr_inline,
+        )
         page_issues.extend(_cookie_issues(page))
         issues.extend(page_issues[:_MAX_ISSUES_PER_PAGE])
     return issues
@@ -255,9 +298,9 @@ RULE = Rule(
     title="Missing or weak HTTP security headers",
     description=(
         "HTML pages should send HSTS, a Content-Security-Policy without unsafe-inline or "
-        "unsafe-eval, framing protection, nosniff, a safe Referrer-Policy and a "
-        "Permissions-Policy; cookies should be Secure, HttpOnly and never SameSite=None "
-        "without Secure."
+        "unsafe-eval (unless the documented style-src-attr exception is enabled), framing "
+        "protection, nosniff, a safe Referrer-Policy and a Permissions-Policy; cookies should "
+        "be Secure, HttpOnly and never SameSite=None without Secure."
     ),
     check=_check,
 )

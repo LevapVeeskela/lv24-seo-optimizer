@@ -93,3 +93,4 @@ class RuleContext:
     robots_disallow: list[str] = field(default_factory=list)
     robots_allow: list[str] = field(default_factory=list)
     title_max_length: int = 60
+    csp_allow_style_attr_inline: bool = False

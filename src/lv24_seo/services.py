@@ -3443,6 +3443,7 @@ class SeoService:
                 robots_disallow=list(robots.disallow),
                 robots_allow=list(robots.allow),
                 title_max_length=self._config.crawl.title_max_length,
+                csp_allow_style_attr_inline=self._config.crawl.csp_allow_style_attr_inline,
             )
         )
         outcome = _CrawlOutcome(

@@ -71,6 +71,7 @@ concurrency = 4   # reserved for a future bounded worker pool; the crawler is se
 respect_robots = true
 user_agent = "lv24-seo/0.1 (+https://example.com/bot)"
 title_max_length = 60   # upper bound for the title-length rule; must be >= 15
+csp_allow_style_attr_inline = false   # permit style-src-attr 'unsafe-inline' only
 
 [storage]
 data_dir = "./data"      # relative to this file; absolute values and LV24_SEO_DATA_DIR are used as-is
@@ -107,6 +108,17 @@ store it with `lv24-seo auth set --provider bing` or set `LV24_SEO_BING_API_KEY`
 command. `goals` lists numeric goal ids used by `lv24-seo metrika goals`; an empty list is valid and
 produces a warning instead of a provider call. At most five goal ids are queried per request
 (Metrika's 20-metric cap), and a longer list is reported as truncated.
+
+## `[crawl]`
+
+`title_max_length` sets the upper bound of the `title-length` rule (default `60`, minimum `15`).
+Raise it only when the CMS intentionally produces longer titles.
+
+`csp_allow_style_attr_inline = true` permits `style-src-attr 'unsafe-inline'` while every other
+`unsafe-inline` (including `style-src`, `style-src-elem`, `script-src` and `default-src`) and every
+`unsafe-eval` is still reported. It exists for SPAs whose map popups and markers are rendered with
+inline `style` attributes and cannot be nonce-controlled. Enable it only when `style-src` itself is
+strict; otherwise the finding is real, not noise. Default: `false`.
 
 ## `[indexing]`
 

@@ -69,6 +69,7 @@ def _config(
     data_dir: Path | None = None,
     locale: str = "ru",
     title_max_length: int = 60,
+    csp_allow_style_attr_inline: bool = False,
 ) -> SeoConfig:
     return SeoConfig(
         project=ProjectConfig(
@@ -82,7 +83,11 @@ def _config(
             yandex_metrika=(YandexMetrikaConfig(counter=counter) if counter else None),
         ),
         report=ReportConfig(locale=locale),
-        crawl=CrawlConfig(max_urls=50, title_max_length=title_max_length),
+        crawl=CrawlConfig(
+            max_urls=50,
+            title_max_length=title_max_length,
+            csp_allow_style_attr_inline=csp_allow_style_attr_inline,
+        ),
         storage=StorageConfig(data_dir=Path(data_dir or "data")),
     )
 
@@ -1912,6 +1917,51 @@ def test_crawl_title_length_uses_configured_threshold(
 
     assert title_length_issues(70) == []
     assert [issue["detail"]["length"] for issue in title_length_issues(60)] == [65]
+
+
+def test_crawl_csp_style_attr_exception_reaches_the_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csp = "default-src 'self'; style-src 'self' 'nonce-abc'; style-src-attr 'unsafe-inline'"
+    headers = {
+        "Content-Type": "text/html; charset=utf-8",
+        "Strict-Transport-Security": "max-age=31536000",
+        "Content-Security-Policy": csp,
+        "X-Frame-Options": "DENY",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "geolocation=()",
+    }
+    body = b"<html><head><title>Page</title></head><body>Page</body></html>"
+
+    class CspFetcher(FakeFetcher):
+        def fetch(self, url: str) -> FetchResult:
+            return FetchResult(
+                url=url,
+                status=200,
+                final_url=url,
+                headers=headers,
+                body=body,
+            )
+
+    monkeypatch.setattr(services, "Fetcher", CspFetcher)
+
+    def csp_issues(allow_style_attr_inline: bool) -> list[dict[str, Any]]:
+        service = SeoService(
+            _config(csp_allow_style_attr_inline=allow_style_attr_inline),
+            secrets=_secrets(),
+        )
+        response = service.crawl_and_store(start_url=BASE_URL, max_urls=1)
+        assert response["ok"] is True
+        return [
+            issue
+            for issue in response["data"]["issues"]
+            if issue["rule_id"] == "security-headers"
+            and issue["detail"]["header"] == "content-security-policy"
+        ]
+
+    assert [issue["detail"]["status"] for issue in csp_issues(False)] == ["weak"]
+    assert csp_issues(True) == []
 
 
 def test_combined_meta_total_is_unknown_unless_every_dataset_reports_one() -> None:
