@@ -237,15 +237,18 @@ class Fetcher:
                         self._last_end = time.perf_counter()
                         continue
 
-                    body = self._read_body(response, limit)
-                    if body is None:
-                        return self._failure(url, current, chain, "too_large", started)
+                    # Capture TLS facts before the body is consumed: httpcore clears the
+                    # SSL object's peer certificate once the stream is closed.
                     network_stream = response.extensions.get("network_stream")
                     ssl_object = (
                         network_stream.get_extra_info("ssl_object")
                         if network_stream is not None
                         else None
                     )
+                    tls = _tls_info(ssl_object)
+                    body = self._read_body(response, limit)
+                    if body is None:
+                        return self._failure(url, current, chain, "too_large", started)
                     self._last_end = time.perf_counter()
                     return FetchResult(
                         url=url,
@@ -256,7 +259,7 @@ class Fetcher:
                         elapsed_ms=_elapsed_ms(started),
                         redirect_chain=list(chain),
                         downgraded=_is_downgrade(chain),
-                        tls=_tls_info(ssl_object),
+                        tls=tls,
                         set_cookie=response.headers.get_list("set-cookie"),
                         fetched_at=fetched_at,
                     )
