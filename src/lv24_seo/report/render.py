@@ -49,20 +49,28 @@ _SUBJECT_LIMIT = 78
 _PROPERTY_LIMIT = 24
 _LIMITATIONS_TITLE = "Data limitations"
 
-# Email palette: neon is only ever used on the dark header/footer.
+# Email palette: LV24 "Sunset" light stone surfaces, a dark gradient header and
+# one orange accent. Clients that drop gradients keep the solid dark fallback.
 _DARK = "#080D12"
-_NEON = "#5FD4C4"
-_ON_DARK = "#E4E7EC"
-_ON_DARK_MUTED = "#98A2B3"
-_PAGE_BG = "#EEF2F5"
+_DARK_RAISED = "#151A21"
+_DARK_WARM = "#2A160F"
+_ORANGE = "#FB6E4A"
+_ORANGE_TEXT = "#B8420F"
+_ORANGE_WASH = "#FFF1EA"
+_ORANGE_BORDER = "#FFD9CC"
+_ON_DARK = "#F4F1EC"
+_ON_DARK_MUTED = "#A8A29E"
+_PAGE_BG = "#F4F1EC"
 _CARD_BG = "#FFFFFF"
-_CARD_ALT = "#F7F9FB"
-_BORDER = "#E4E7EC"
-_TEXT = "#101828"
-_MUTED = "#667085"
-_SOFT = "#475467"
+_CARD_ALT = "#FBF8F4"
+_BORDER = "#EEE9E2"
+_BORDER_SOFT = "#F1ECE5"
+_TEXT = "#1C1917"
+_MUTED = "#78716C"
+_SOFT = "#57534E"
 _GREEN = "#067647"
 _RED = "#B42318"
+_RED_WASH = "#FEF3F2"
 
 _FONT_STACK = (
     "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,"
@@ -77,37 +85,72 @@ _PREHEADER_STYLE = (
     "opacity:0;overflow:hidden;mso-hide:all;"
 )
 _H1_STYLE = (
-    f"margin:0;font-size:26px;line-height:1.25;font-weight:700;color:{_TEXT};word-break:break-word;"
+    f"margin:0;font-size:28px;line-height:1.2;font-weight:800;letter-spacing:-0.02em;"
+    f"color:{_TEXT};word-break:break-word;"
 )
 _HERO_META_STYLE = f"margin:8px 0 0 0;font-size:14px;line-height:1.5;color:{_MUTED};"
-_VERDICT_STYLE = f"margin:10px 0 0 0;font-size:15px;line-height:1.5;color:{_SOFT};"
-_H2_STYLE = f"margin:28px 0 10px 0;font-size:16px;line-height:1.35;font-weight:700;color:{_TEXT};"
+_VERDICT_STYLE = (
+    f"margin:12px 0 0 0;padding:2px 0 2px 10px;border-left:3px solid {_ORANGE};"
+    f"font-size:15px;line-height:1.5;color:{_SOFT};"
+)
+_H2_STYLE = (
+    f"margin:26px 0 12px 0;padding-left:10px;border-left:4px solid {_ORANGE};"
+    f"font-size:16px;line-height:1.35;font-weight:800;letter-spacing:0.01em;color:{_TEXT};"
+)
 _P_STYLE = f"margin:0 0 10px 0;font-size:14px;line-height:1.55;color:{_SOFT};"
 _SMALL_STYLE = f"margin:0;font-size:12px;line-height:1.5;color:{_MUTED};"
 _UL_STYLE = f"margin:0 0 4px 0;padding-left:18px;font-size:13px;line-height:1.55;color:{_SOFT};"
 _CARD_TABLE_STYLE = (
-    f"width:100%;border-collapse:separate;background-color:{_CARD_ALT};"
-    f"border:1px solid {_BORDER};border-radius:10px;"
+    f"width:100%;border-collapse:separate;border-spacing:0;background-color:{_CARD_BG};"
+    f"border:1px solid {_BORDER};border-radius:14px;"
 )
-_CARD_CELL_STYLE = "padding:14px 14px 12px 14px;"
+_CARD_CELL_STYLE = "padding:14px 16px 13px 16px;"
 _KPI_LABEL_STYLE = (
-    f"font-size:11px;line-height:1.3;font-weight:700;letter-spacing:0.06em;"
-    f"text-transform:uppercase;color:{_MUTED};"
+    f"font-size:10px;line-height:1.3;font-weight:700;letter-spacing:0.09em;"
+    f"text-transform:uppercase;color:{_ORANGE_TEXT};"
 )
-_KPI_VALUE_STYLE = f"margin-top:6px;font-size:24px;line-height:1.2;font-weight:700;color:{_TEXT};"
-_KPI_DELTA_STYLE = "margin-top:4px;font-size:12px;line-height:1.4;"
+_KPI_VALUE_STYLE = f"margin-top:6px;font-size:26px;line-height:1.15;font-weight:800;color:{_TEXT};"
+_KPI_DELTA_STYLE = "margin-top:4px;font-size:12px;line-height:1.4;font-weight:600;"
 _KPI_PREV_STYLE = f"margin-top:2px;font-size:12px;line-height:1.4;color:{_MUTED};"
 _BADGE_STYLE = (
-    "display:inline-block;margin-top:8px;padding:2px 7px;border-radius:999px;"
-    f"background-color:{_TEXT};color:#FFFFFF;font-size:10px;line-height:1.5;"
-    "font-weight:600;"
+    "display:inline-block;margin-top:8px;padding:3px 9px;border-radius:999px;"
+    f"background-color:{_ORANGE_WASH};border:1px solid {_ORANGE_BORDER};"
+    f"color:{_ORANGE_TEXT};font-size:10px;line-height:1.4;font-weight:700;"
+    "letter-spacing:0.04em;"
 )
-_DATA_TABLE_STYLE = f"width:100%;border-collapse:collapse;font-size:13px;color:{_SOFT};"
+_DATA_TABLE_STYLE = (
+    f"width:100%;border-collapse:separate;border-spacing:0;background-color:{_CARD_BG};"
+    f"border:1px solid {_BORDER};border-radius:14px;overflow:hidden;"
+    f"font-size:13px;color:{_SOFT};"
+)
 _TH_STYLE = (
-    f"padding:6px 0;border-bottom:1px solid {_BORDER};text-align:left;"
-    f"font-size:11px;line-height:1.4;font-weight:700;color:{_MUTED};"
+    f"padding:9px 14px;background-color:{_CARD_ALT};border-bottom:1px solid {_BORDER};"
+    f"text-align:left;font-size:10px;line-height:1.4;font-weight:700;"
+    f"letter-spacing:0.08em;text-transform:uppercase;color:{_MUTED};"
 )
-_TD_STYLE = f"padding:7px 0;border-bottom:1px solid {_BORDER};vertical-align:top;"
+_TD_STYLE = f"padding:9px 14px;border-bottom:1px solid {_BORDER_SOFT};vertical-align:top;"
+_ITEM_STYLE = (
+    f"margin:0 0 8px 0;padding:12px 14px;background-color:{_CARD_BG};"
+    f"border:1px solid {_BORDER};border-left:3px solid {_ORANGE};border-radius:12px;"
+)
+_ITEM_KICKER_STYLE = (
+    f"font-size:10px;line-height:1.4;font-weight:700;letter-spacing:0.08em;"
+    f"text-transform:uppercase;color:{_ORANGE_TEXT};"
+)
+_ITEM_TITLE_STYLE = (
+    f"margin-top:3px;font-size:15px;line-height:1.4;font-weight:700;color:{_TEXT};"
+    "word-break:break-word;"
+)
+_ITEM_META_STYLE = (
+    f"margin-top:3px;font-size:12px;line-height:1.5;color:{_MUTED};word-break:break-word;"
+)
+_ITEM_TEXT_STYLE = (
+    f"margin-top:3px;font-size:12px;line-height:1.5;color:{_SOFT};word-break:break-word;"
+)
+_ITEM_STRONG_STYLE = (
+    f"margin-top:3px;font-size:12px;line-height:1.5;font-weight:600;color:{_TEXT};"
+    "word-break:break-word;"
+)
 _FOOTER_ITEM_STYLE = "margin:0;font-size:12px;line-height:1.6;"
 
 # C0/C1 control bytes and bidi overrides have no place in report parameters:
@@ -2665,6 +2708,25 @@ def _html_list(items: Sequence[str], *, style: str = _UL_STYLE) -> str:
     return f'<ul style="{style}">{body}</ul>'
 
 
+def _html_pill(text: str, *, background: str, color: str, border: str) -> str:
+    """Return an inline status pill; email-safe, no image and no external asset."""
+    return (
+        f'<span style="display:inline-block;padding:2px 9px;border-radius:999px;'
+        f"background-color:{background};border:1px solid {border};color:{color};"
+        'font-size:10px;line-height:1.5;font-weight:700;letter-spacing:0.04em;">'
+        f"{_e(text)}</span>"
+    )
+
+
+_SEVERITY_TONES: dict[str, tuple[str, str, str]] = {
+    "critical": (_RED_WASH, _RED, "#FECDCA"),
+    "high": (_RED_WASH, _RED, "#FECDCA"),
+    "medium": (_ORANGE_WASH, _ORANGE_TEXT, _ORANGE_BORDER),
+    "low": (_CARD_ALT, _SOFT, _BORDER),
+    "unknown": (_CARD_ALT, _MUTED, _BORDER),
+}
+
+
 def _delta_color(kpi: _Kpi) -> str:
     if kpi.significant and kpi.good is True:
         return _GREEN
@@ -2733,25 +2795,14 @@ def _html_opportunities(view: _View, msgs: _Messages) -> str:
     if view.opportunity_scope:
         parts.append(_html_paragraph(view.opportunity_scope, _SMALL_STYLE))
     for item in view.opportunities:
-        parts.append(
-            f'<div style="padding:10px 0;border-bottom:1px solid {_BORDER};">'
-            f'<div style="font-size:11px;line-height:1.4;font-weight:700;color:{_MUTED};">'
-            f"{_e(item.kind_label)}</div>"
-            f'<div style="margin-top:2px;font-size:15px;line-height:1.4;font-weight:600;'
-            f'color:{_TEXT};word-break:break-word;">{_e(item.query)}</div>'
-            f'<div style="margin-top:2px;font-size:12px;line-height:1.5;color:{_MUTED};'
-            f'word-break:break-word;">{_e(item.page)}</div>'
-        )
+        parts.append(f'<div style="{_ITEM_STYLE}">')
+        parts.append(f'<div style="{_ITEM_KICKER_STYLE}">{_e(item.kind_label)}</div>')
+        parts.append(f'<div style="{_ITEM_TITLE_STYLE}">{_e(item.query)}</div>')
+        parts.append(f'<div style="{_ITEM_META_STYLE}">{_e(item.page)}</div>')
         if item.evidence:
-            parts.append(
-                f'<div style="margin-top:4px;font-size:12px;line-height:1.5;color:{_SOFT};">'
-                f"{_e(item.evidence)}</div>"
-            )
+            parts.append(f'<div style="{_ITEM_TEXT_STYLE}">{_e(item.evidence)}</div>')
         if item.estimate:
-            parts.append(
-                f'<div style="margin-top:2px;font-size:12px;line-height:1.5;font-weight:600;'
-                f'color:{_TEXT};">{_e(item.estimate)}</div>'
-            )
+            parts.append(f'<div style="{_ITEM_STRONG_STYLE}">{_e(item.estimate)}</div>')
         parts.append("</div>")
     if view.opportunity_footnote:
         parts.append(_html_paragraph(view.opportunity_footnote, _SMALL_STYLE))
@@ -2768,11 +2819,12 @@ def _html_digest(view: _View, msgs: _Messages) -> str:
         parts.append(_html_paragraph(view.digest_empty, _P_STYLE))
         return "".join(parts)
     for item in view.digest:
+        parts.append(f'<div style="{_ITEM_STYLE}">')
         parts.append(
-            f'<div style="padding:10px 0;border-bottom:1px solid {_BORDER};">'
-            f'<div style="font-size:15px;line-height:1.4;font-weight:600;color:{_TEXT};'
-            f'word-break:break-word;">{_e(item.metric_label)}: {_e(item.change)}</div>'
-            f'<div style="margin-top:4px;font-size:12px;line-height:1.5;color:{_MUTED};">'
+            f'<div style="{_ITEM_TITLE_STYLE}">{_e(item.metric_label)}: {_e(item.change)}</div>'
+        )
+        parts.append(
+            f'<div style="{_ITEM_META_STYLE}">'
             f"{_e(msgs.t('digest.cause'))}: {_e(item.cause_label)} \u00b7 "
             f"{_e(msgs.t('digest.confidence'))}: {_e(item.confidence_label)}</div>"
         )
@@ -2784,7 +2836,7 @@ def _html_digest(view: _View, msgs: _Messages) -> str:
             )
         if item.next_action:
             parts.append(
-                f'<div style="margin-top:2px;font-size:12px;line-height:1.5;color:{_SOFT};">'
+                f'<div style="{_ITEM_TEXT_STYLE}">'
                 f"{_e(msgs.t('digest.next_action'))}: {_e(item.next_action)}</div>"
             )
         parts.append("</div>")
@@ -2804,24 +2856,25 @@ def _html_cwv(view: _View, msgs: _Messages) -> str:
         parts.append(_html_paragraph(view.cwv_scope, _SMALL_STYLE))
     for item in view.cwv:
         badge = (
-            f' <span style="{_BADGE_STYLE}">{_e(msgs.t("cwv.regressed"))}</span>'
+            " "
+            + _html_pill(
+                msgs.t("cwv.regressed"),
+                background=_RED_WASH,
+                color=_RED,
+                border="#FECDCA",
+            )
             if item.regressed
             else ""
         )
+        parts.append(f'<div style="{_ITEM_STYLE}">')
         parts.append(
-            f'<div style="padding:10px 0;border-bottom:1px solid {_BORDER};">'
-            f'<div style="font-size:15px;line-height:1.4;font-weight:600;color:{_TEXT};'
-            f'word-break:break-word;">{_e(item.template)}'
+            f'<div style="{_ITEM_TITLE_STYLE}">{_e(item.template)}'
             f' <span style="font-size:12px;font-weight:400;color:{_MUTED};">'
             f"{_e(item.device_label)}</span>{badge}</div>"
-            f'<div style="margin-top:4px;font-size:12px;line-height:1.5;color:{_SOFT};'
-            f'word-break:break-word;">{_e(item.metrics)}</div>'
         )
+        parts.append(f'<div style="{_ITEM_TEXT_STYLE}">{_e(item.metrics)}</div>')
         if item.sample:
-            parts.append(
-                f'<div style="margin-top:2px;font-size:12px;line-height:1.5;'
-                f'color:{_MUTED};">{_e(item.sample)}</div>'
-            )
+            parts.append(f'<div style="{_ITEM_META_STYLE}">{_e(item.sample)}</div>')
         parts.append("</div>")
     return "".join(parts)
 
@@ -2837,16 +2890,20 @@ def _html_issues(view: _View, msgs: _Messages) -> str:
         f"{_e(msgs.count('issue.count', issues.total))} · "
         f"{_e(msgs.count('issue.checks', issues.unique_rules))}</p>"
     )
-    rows = "".join(
-        "<tr>"
-        f'<td style="{_TD_STYLE}">{_e(group.label)}</td>'
-        f'<td style="{_TD_STYLE}text-align:right;">{_e(msgs.number(float(group.count)))}</td>'
-        "</tr>"
-        for group in issues.groups
-    )
+    rows: list[str] = []
+    for group in issues.groups:
+        background, color, border = _SEVERITY_TONES.get(group.severity, _SEVERITY_TONES["unknown"])
+        rows.append(
+            "<tr>"
+            f'<td style="{_TD_STYLE}">'
+            f"{_html_pill(group.label, background=background, color=color, border=border)}"
+            "</td>"
+            f'<td style="{_TD_STYLE}text-align:right;">{_e(msgs.number(float(group.count)))}</td>'
+            "</tr>"
+        )
     parts.append(
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        f'border="0" style="{_DATA_TABLE_STYLE}"><tbody>{rows}</tbody></table>'
+        f'border="0" style="{_DATA_TABLE_STYLE}"><tbody>{"".join(rows)}</tbody></table>'
     )
     return "".join(parts)
 
@@ -2931,24 +2988,33 @@ def _html_footer(view: _View, msgs: _Messages) -> str:
             f"{_e(msgs.t('footer.property_id', property_id=view.property_id))}</p>"
         )
     items.append(
-        f'<p style="{_FOOTER_ITEM_STYLE}color:{_NEON};">{_e(msgs.t("footer.generated_by"))}</p>'
+        f'<p style="{_FOOTER_ITEM_STYLE}color:{_ORANGE};">{_e(msgs.t("footer.generated_by"))}</p>'
     )
     return (
-        f'<tr><td style="background-color:{_DARK};padding:18px 20px;'
-        f'border-top:2px solid {_NEON};">{"".join(items)}</td></tr>'
+        f'<tr><td style="background-color:{_DARK};'
+        f"background-image:linear-gradient(135deg,{_DARK} 0%,{_DARK_WARM} 100%);"
+        f'padding:18px 22px;border-top:3px solid {_ORANGE};">{"".join(items)}</td></tr>'
     )
 
 
 def _html_header(view: _View) -> str:
+    type_pill = _html_pill(
+        view.report_type,
+        background="#2A1A15",
+        color="#FFB59F",
+        border="#4A2A20",
+    )
     return (
-        f'<tr><td style="background-color:{_DARK};padding:20px 20px;">'
+        f'<tr><td style="background-color:{_DARK};'
+        f"background-image:linear-gradient(135deg,{_DARK_RAISED} 0%,{_DARK} 55%,"
+        f'{_DARK_WARM} 100%);padding:22px 22px 20px 22px;border-bottom:3px solid {_ORANGE};">'
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
         "<tr>"
-        '<td align="left" style="font-size:18px;line-height:1.3;font-weight:800;'
+        '<td align="left" style="font-size:19px;line-height:1.3;font-weight:800;'
         f'letter-spacing:0.08em;color:{_ON_DARK};">'
-        f'<span style="color:{_NEON};">LV24</span> SEO</td>'
+        f'<span style="color:{_ORANGE};">LV24</span> SEO</td>'
         f'<td align="right" style="font-size:12px;line-height:1.3;color:{_ON_DARK_MUTED};">'
-        f"{_e(view.report_type)}</td>"
+        f"{type_pill}</td>"
         "</tr>"
         "</table>"
         "</td></tr>"
@@ -2986,13 +3052,14 @@ def render_html(report: Report, *, title: str | None = None, locale: str = "en")
         (
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
             f'border="0" style="width:100%;max-width:600px;border-collapse:separate;'
-            f'background-color:{_CARD_BG};border-radius:14px;overflow:hidden;">'
+            f"background-color:{_CARD_BG};border:1px solid #EAE4DC;border-radius:18px;"
+            'overflow:hidden;">'
         ),
         _html_header(view),
     ]
 
     hero: list[str] = [
-        '<tr><td style="padding:26px 20px 0 20px;">',
+        '<tr><td style="padding:26px 22px 0 22px;">',
         f'<h1 style="{_H1_STYLE}">{_e(view.property_label)}</h1>',
     ]
     if view.period:
@@ -3003,12 +3070,12 @@ def render_html(report: Report, *, title: str | None = None, locale: str = "en")
     lines.extend(hero)
 
     if view.intro:
-        lines.append('<tr><td style="padding:12px 20px 0 20px;">')
+        lines.append('<tr><td style="padding:12px 22px 0 22px;">')
         lines.append(_html_paragraph(view.intro, _P_STYLE))
         lines.append("</td></tr>")
 
     if view.kpis:
-        lines.append('<tr><td style="padding:18px 20px 0 20px;">')
+        lines.append('<tr><td style="padding:18px 22px 0 22px;">')
         lines.append(_html_kpis(view.kpis, msgs))
         lines.append("</td></tr>")
 
@@ -3044,7 +3111,7 @@ def render_html(report: Report, *, title: str | None = None, locale: str = "en")
         body_parts.append(_html_notes(view, msgs))
 
     if body_parts:
-        lines.append('<tr><td style="padding:0 20px;">')
+        lines.append('<tr><td style="padding:0 22px;">')
         lines.extend(body_parts)
         lines.append("</td></tr>")
 

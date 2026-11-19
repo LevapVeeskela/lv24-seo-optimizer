@@ -1137,7 +1137,11 @@ def test_html_is_email_safe_standalone_document() -> None:
     assert "display:none" in html_doc
     assert html_doc.index("display:none") < html_doc.index("LV24")
     assert "background-color:#080D12" in html_doc
-    assert "#5FD4C4" in html_doc
+    assert "linear-gradient(135deg" in html_doc
+    assert "#FB6E4A" in html_doc
+    assert "border-left:4px solid #FB6E4A" in html_doc
+    assert "border-radius:14px" in html_doc
+    assert "border-radius:999px" in html_doc
     assert "font-family:" in html_doc
     assert "PingFang SC" in html_doc
     for tag in _HTML_FORBIDDEN_TAGS:

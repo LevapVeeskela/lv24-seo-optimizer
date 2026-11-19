@@ -112,7 +112,9 @@ and the envelope warns you to review `crontab -l`.
   as 78-column plain text, and a localized subject (single line, at most 78 characters). Subject,
   HTML and plain text are rendered in `report.locale` (`ru`, `en`, `zh`); JSON snapshots and MCP
   payloads stay canonical English.
-* Template: a 600px card with inline CSS only, a dark header and a text wordmark. The order is
+* Template: a 600px card with inline CSS only: a dark gradient header/footer with the LV24 orange
+  accent, a text wordmark, KPI cards, section accent bars, rounded tables and status pills. The
+  order is
   preheader → brand → property/period/verdict → four KPI cards (clicks, impressions, CTR and
   average position, each with current value, signed delta and previous value) → top three
   opportunities → issues by severity → merged sources → data notes → warnings → footer. Critical
