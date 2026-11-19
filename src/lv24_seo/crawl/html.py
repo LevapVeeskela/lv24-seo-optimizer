@@ -136,8 +136,23 @@ def parse_html(
         has_main=parser.has_main,
         has_skip_link=parser.has_skip_link,
         text=text[:MAX_STORED_TEXT_CHARS],
-        word_count=len(text.split()),
+        word_count=_word_count(text),
     )
+
+
+def _word_count(text: str) -> int:
+    """Whitespace words, but every CJK ideograph counts as one word.
+
+    Chinese/Japanese pages use few spaces, so ``len(text.split())`` reported a
+    substantial page as "thin" and produced a false soft-404 on
+    ``/games?lang=zh``. Latin/Cyrillic tokens still count once.
+    """
+    count = 0
+    for token in text.split():
+        cjk = sum(1 for char in token if "\u4e00" <= char <= "\u9fff")
+        rest = "".join(char for char in token if not "\u4e00" <= char <= "\u9fff")
+        count += cjk + (1 if any(char.isalnum() for char in rest) else 0)
+    return count
 
 
 def extract_links(html_text: str, base_url: str) -> list[str]:
