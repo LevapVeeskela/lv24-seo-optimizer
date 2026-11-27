@@ -1,0 +1,7 @@
+flowchart LR
+  api["Provider API"] -->|rows and caps| adapter["Provider adapter"]
+  adapter --> envelope["ProviderResult"]
+  envelope -->|rows, total, truncated| consumer["Analysis / report / MCP"]
+  envelope -->|limitations, sampling| meta["meta warnings"]
+  api -->|outage or refusal| failed["sources_failed"]
+  failed --> consumer

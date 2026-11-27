@@ -1,5 +1,19 @@
 # AGENTS.md — contract for AI agents working in this repo
 
+## Start here
+
+1. `README.md` — product, quick start, status (engine `0.15.4`).
+2. `docs/ARCHITECTURE.md` — layers, provider envelope, schema v5, report/delivery, release gates.
+3. `docs/README.md` — doc map; `docs/architecture/` — four diagrams and their `.mmd` sources.
+4. Code entry points: `src/lv24_seo/cli/main.py`, `src/lv24_seo/mcp/registry.py` (tool metadata
+   SoT), `src/lv24_seo/core/write_gate.py`, `src/lv24_seo/store/db.py`.
+
+Flow: `providers/` adapters + `crawl/` → `store/` SQLite → `analysis/` + `report/` → `cli/`, `mcp/`,
+`automation/`. Verified commands: `uv sync` · `uv run ruff check .` · `uv run mypy src` ·
+`uv run pytest -q` · `uv run lv24-seo doctor`. Brain project: `lv24-seo-optimizer`
+(`brain open lv24-seo-optimizer`). Never hand-edit `schemas/tools.json` or
+`docs/architecture/*.svg|png`; regenerate them.
+
 This file is the canonical instruction set for any coding agent (Claude Code, OpenCode, Codex,
 Cursor, Gemini, Aider). `CLAUDE.md` is a pointer to this file — never let the two diverge.
 
@@ -10,7 +24,7 @@ Cursor, Gemini, Aider). `CLAUDE.md` is a pointer to this file — never let the 
 | Surface | Entry point | Contract |
 |---|---|---|
 | CLI | `src/lv24_seo/cli/` | every command supports `--json`, returns `{ok,data,meta,warnings}`, stable exit codes |
-| MCP server | `src/lv24_seo/mcp/` | 8–12 stable tools, read-only by default, `structuredContent` + text fallback |
+| MCP server | `src/lv24_seo/mcp/` | 12 stable tools, read-only by default, `structuredContent` + text fallback |
 | Skills | `skills/*/SKILL.md` | canonical skill, installed anywhere via `lv24-seo export skills` (editor mirrors planned) |
 | Automation | `src/lv24_seo/automation/` | cron / systemd / Task Scheduler generators, email + Telegram delivery |
 
@@ -89,3 +103,5 @@ Before claiming done:
 - Product and architecture decisions: `docs/decisions/ADR-*.md` (append a new ADR, do not rewrite old ones).
 - Execution plan and wave status: `docs/plans/2026-11-10-implementation-plan.md`.
 - Provider capability matrix: `docs/data-sources.md` — update it in the same PR that touches a provider.
+- Brain project: `lv24-seo-optimizer` — record durable decisions and handoffs there (`brain open`,
+  `brain decision`, `brain handoff`). Never store tokens or provider data.

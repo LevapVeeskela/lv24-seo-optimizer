@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-Use the latest 0.2.x release. Earlier releases contain known correctness and
-transport-safety defects; see [CHANGELOG](CHANGELOG.md) before upgrading.
+Use the latest `0.15.x` release (`0.15.4` at the time of writing). Earlier releases contain known
+correctness and transport-safety defects; see [CHANGELOG](CHANGELOG.md) before upgrading.
 
 ## Reporting a vulnerability
 

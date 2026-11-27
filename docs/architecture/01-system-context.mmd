@@ -1,0 +1,8 @@
+flowchart LR
+  operator["Operator or AI agent"] --> surface["CLI / MCP / skills"]
+  surface --> engine["lv24-seo engine"]
+  engine -->|provider APIs| sources["GSC, Yandex, Bing, CrUX, PSI"]
+  engine -->|bounded crawl| site["Site under audit"]
+  engine -->|read-only file| nginx["nginx access log"]
+  engine --> store[("SQLite history")]
+  engine -->|opt-in digest| delivery["SMTP / Telegram"]

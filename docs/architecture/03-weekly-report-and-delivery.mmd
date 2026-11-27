@@ -1,0 +1,6 @@
+flowchart LR
+  collect["Collect and analyze windows"] -->|evidence| build["Report JSON / HTML / text"]
+  build -->|snapshot| snap[("snapshots")]
+  build -->|hash check| gate{"New content hash?"}
+  gate -->|yes| channels["SMTP / Telegram"]
+  gate -->|no| skip["Skip duplicate period"]

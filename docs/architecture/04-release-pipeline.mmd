@@ -1,0 +1,5 @@
+flowchart LR
+  pr["PR + CI gates"] -->|merge| tag["Tag vX.Y.Z"]
+  tag -->|push tag| release["release.yml build + verify"]
+  release -->|publish| publish["PyPI, npm, MCP Registry"]
+  release -->|pin| pin["Desktop sidecar pin"]

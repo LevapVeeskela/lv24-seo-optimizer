@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LevapVeeskela/lv24-diagram/main/diagram.config.schema.json",
+  "docs": {
+    "dir": "docs/architecture",
+    "theme": "default",
+    "backgroundColor": "#ffffff"
+  },
+  "arch": {
+    "maxFiles": 4000
+  },
+  "brain": {
+    "enabled": true,
+    "project": "lv24-seo-optimizer"
+  }
+}

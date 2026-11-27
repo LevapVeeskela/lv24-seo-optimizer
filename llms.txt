@@ -7,7 +7,7 @@
 ## Surface
 
 - Engine `lv24-seo 0.15.4` (current; PyPI, npm and the MCP Registry, 2026-11-20): 6 provider
-  adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 30-rule crawl.
+  adapters (GSC, Yandex Webmaster, Yandex Metrika, Bing/IndexNow, CrUX, PSI) plus a 34-rule crawl.
   Yandex Metrika is a separate `metrika` auth provider (`yandex_metrika_token`), not the Webmaster
   token.
 - CLI: 25 top-level commands (18 groups + 7 commands), every command with `--json`.
@@ -163,9 +163,9 @@
   100 MiB cap, read-only), an attributed change digest in `report weekly`, the `tasks` finding
   lifecycle (schema v3), and `backup create` portable zip bundles.
 - Skills: `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit`.
-- Desktop `0.8.0` (current desktop release): Windows NSIS + portable ZIP, Linux AppImage/deb/rpm,
-  macOS arm64/x64 DMG; signed updates for NSIS, `.app` and AppImage; bundles engine `0.10.0` and
-  requires engine `>= 0.10.0`; asset names use `0.8.0` / `-0.8.0-`.
+- Desktop `0.9.9` (current desktop release): Windows NSIS + portable ZIP, Linux AppImage/deb/rpm,
+  macOS arm64/x64 DMG; signed updates for NSIS, `.app` and AppImage; bundles engine `0.15.3` and
+  requires engine `>= 0.15.3`; asset names use `0.9.9` / `-0.9.9-`.
 - Desktop and CLI share one OS keychain entry per provider (service `lv24-seo`); the opt-in
   `<data-dir>/secrets.json` fallback is shared only with the same workspace/data directory.
 
@@ -175,7 +175,8 @@
 - [README](README.md): what it is, install, supported sources
 - [AGENTS.md](AGENTS.md): contract for AI agents working in the repo
 - [Implementation plan](docs/plans/2026-11-10-implementation-plan.md): waves and work packages
-- [Architecture](docs/architecture.md): layers, data model, provider contracts
+- [Documentation map](docs/README.md): index of reference, guides, ADRs and diagrams
+- [Architecture](docs/ARCHITECTURE.md): layers, data model, provider contracts, release gates
 - [Data sources and limits](docs/data-sources.md): what each API can and cannot do
 - [MCP tool surface](docs/mcp.md): tool names, inputs, outputs, annotations
 - [CLI reference](docs/cli.md): commands, JSON envelope, exit codes

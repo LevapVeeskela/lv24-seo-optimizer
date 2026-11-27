@@ -1,6 +1,24 @@
 # Architecture
 
-## 1. Layers
+Status: canonical system design for `lv24-seo 0.15.4` (2026-11-20). Front door: [`../README.md`](../README.md);
+agent contract: [`../AGENTS.md`](../AGENTS.md); diagram sources: [`architecture/`](architecture/).
+
+## 1. Purpose and scope
+
+`lv24-seo` is a local, free-first SEO control plane. One Python process pulls provider APIs, walks a
+bounded crawl, keeps one SQLite history and exposes the result as a CLI, an MCP server, skills and
+opt-in scheduled delivery.
+
+* It **does** normalize GSC, Yandex Webmaster/Metrika, Bing/IndexNow, CrUX and PSI into one
+  `ProviderResult` envelope, persist snapshots and render comparable weekly reports.
+* It **does not** run an LLM, depend on a hosted SaaS control plane, scrape SERPs, host provider
+  data or resell it. Every surface runs on the operator's machine; history stays in the workspace.
+* The only outbound calls are provider APIs, the site being crawled and opt-in SMTP/Telegram
+  delivery. Tokens live in the OS keychain, `0600` files or `LV24_SEO_*` environment variables.
+
+![System context](architecture/01-system-context.png)
+
+## 2. Layers
 
 ```
             ┌──────────────────────── surfaces ────────────────────────┐
@@ -30,7 +48,7 @@ depends on `store` models, not on provider client classes. `indexing.py` is the 
 submission/check engine: `SeoService` builds its clients and targets, the engine reads/writes
 `indexing_state`/`indexing_runs` and calls provider adapters only through the write gate.
 
-## 2. The provider contract
+## 3. The provider contract
 
 Every adapter returns the same envelope — this is what makes multi-engine fusion possible and honest:
 
@@ -75,7 +93,13 @@ Rules:
 * `limitations` codes are enum-like and translated to text in the report renderer.
 * Adapters never mutate the database; the caller (`analysis` or `store`) persists.
 
-## 3. Storage model (SQLite, WAL)
+![Provider envelope and honesty](architecture/02-provider-envelope-and-honesty.png)
+
+A provider outage is isolated at this boundary: the adapter raises a typed error, the caller records
+`sources_failed` and keeps the sections other providers answered. A capped successful answer keeps
+its rows and its `truncated`/`limitations` metadata; it is never promoted to a complete total.
+
+## 4. Storage model (SQLite, WAL)
 
 | Table | Purpose | Key columns |
 |---|---|---|
@@ -134,7 +158,7 @@ Raw `sqlite3` failures are translated at the store boundary into typed errors: `
 A failure the layer does not recognise is re-raised unchanged, so a real programming bug keeps its
 traceback instead of being disguised as a disk problem.
 
-## 4. Analysis layer
+## 5. Analysis layer
 
 | Module | Input | Output |
 |---|---|---|
@@ -150,7 +174,9 @@ traceback instead of being disguised as a disk problem.
 `fusion.py` never invents a Yandex query→page mapping. It joins at the page level (traffic) and at the
 query level (clicks/impressions) separately, and the report labels which engine contributed what.
 
-## 5. Report layer
+## 6. Report layer
+
+![Weekly report and delivery](architecture/03-weekly-report-and-delivery.png)
 
 * `report/builders.py` produce a `Report` dataclass (JSON-serialisable, canonical English).
   `Report.to_dict()` has no locale field: snapshots, report diff and MCP payloads do not change
@@ -196,7 +222,7 @@ query level (clicks/impressions) separately, and the report labels which engine 
   `meta.complete` also accounts for capped, sampled, empty and comparison inputs. GSC query rows
   carry an explicit top-rows limitation even below the caller cap; they do not prove exhaustive coverage.
 
-## 6. Surfaces
+## 7. Surfaces
 
 * **CLI** parses args → builds one `composition.Workspace` (config + shared SQLite history) → runs
   one service operation → closes storage afterwards. Read commands accept `--strict`, which sets
@@ -209,7 +235,7 @@ query level (clicks/impressions) separately, and the report labels which engine 
 * **Skills** are documentation + recipes over the MCP tools; they contain no code paths of their own.
 * **Automation** only composes CLI/service calls; no business logic.
 
-## 7. Concurrency and failure model
+## 8. Concurrency and failure model
 
 * Synchronous provider clients share a process-local token-bucket limiter keyed by provider/method.
   Every retry acquires capacity. This limits request frequency, not persistent daily or cross-process
@@ -248,7 +274,7 @@ query level (clicks/impressions) separately, and the report labels which engine 
 * The crawler is serial with `Crawl-delay` pacing; `concurrency` stays reserved. Read POST retry
   opt-in changes retry safety, not concurrency.
 
-## 8. Security boundaries
+## 9. Security boundaries
 
 * Tokens live in the keychain or `0600` files, never in `seo.toml`.
 * Provider clients are constructed per run with scoped credentials; nothing global.
@@ -262,8 +288,13 @@ query level (clicks/impressions) separately, and the report labels which engine 
   exposes `submit_sitemap` for Bing submit and `recrawl_request` for Yandex recrawl; GSC submit and
   Bing delete return `WRITE_DISABLED` and nothing is sent.
 * Logs are redacted at the formatter level, not per call site.
+* Provider quotas are read, not guessed. `indexing status` reads Bing daily/monthly remaining and
+  Yandex recrawl remaining live, and keeps local UTC-day counters for GSC URL Inspection (2,000/day)
+  and IndexNow (1,000/day) in `quota_usage`; a plan is capped to the remaining quota and records one
+  run per provider. Provider-empty and no-per-URL-index answers stay explicit (`no_rows_for_window`,
+  `no_per_url_index_count`, `site_scan_no_api`).
 
-## 9. Backup bundle
+## 10. Backup bundle
 
 `lv24-seo backup create` (and `core/backup.py`) produces one portable zip without a cloud account:
 
@@ -310,7 +341,7 @@ pre-existing file is touched; a failure removes only the directory the call crea
 without a database yields a config-only directory with `database.in_archive: false` and an explicit
 warning instead of an empty database.
 
-## 10. Portfolio scan
+## 11. Portfolio scan
 
 `core/portfolio.py` implements `lv24-seo portfolio list --root ABS`, a read-only roll-up over
 sibling project folders. It walks at most three levels below the root, skips hidden/tooling and
@@ -325,4 +356,45 @@ uncheckpointed WAL without `-shm` is reported as `STORE_UNAVAILABLE` instead of 
 read-write. A broken config or unreadable database becomes a per-site `error` object and the rest of
 the portfolio still scans. Rows carry local activity only: crawl runs, report snapshots, open/total/
 critical issues and their latest timestamps. The same core module is intended for the desktop and a
-future MCP tool; 0.9.0 still exposes it only through the CLI.
+future MCP tool; the engine still exposes it only through the CLI (the desktop calls
+`portfolio list` through its command bridge).
+
+## 12. Deployment and distribution
+
+There is no server deployment and no hosted control plane. The engine is installed per operator and
+runs in the foreground (CLI/MCP) or from a host scheduler. The optional desktop is a separate Tauri
+shell that bundles a pinned engine sidecar; it adds no provider logic. Channels and tags are in
+[`releases.md`](releases.md) and [`../CHANGELOG.md`](../CHANGELOG.md).
+
+| Surface | Channel | Gate |
+|---|---|---|
+| CLI / library | PyPI `lv24-seo` (OIDC Trusted Publishing) | tag `vX.Y.Z` after CI and release verification |
+| Node launcher | npm `@lv24/seo` (thin wrapper, no second implementation) | same tag, provenance publish |
+| MCP server | MCP Registry `io.github.LevapVeeskela/lv24-seo` | generated `server.json`, same version |
+| Desktop sidecar | PyInstaller onedir bundled in the desktop release | desktop pin + rebuild-aware checksum report |
+
+![Release pipeline](architecture/04-release-pipeline.png)
+
+## 13. Extension points
+
+* **Provider adapter:** add a module under `providers/`, return `ProviderResult`, register the
+  canonical source id and auth provider in config, then extend `docs/data-sources.md` and the
+  capability matrix in the same change.
+* **Crawl rule:** add one module under `analysis/rules/` with `RULE_ID`, `SEVERITY` and
+  `check(ctx)`; keep it pure and deterministic. A rule that cannot move search metrics is never a
+  digest cause.
+* **Surface:** a CLI command or MCP tool calls an existing service through the composition root.
+  Tool metadata is generated from `src/lv24_seo/mcp/registry.py`; hand-edited schemas drift and fail
+  the release check.
+* **Delivery channel:** implement the transport and the idempotent sends-ledger claim together; a
+  channel without a claim must not mark a period sent.
+
+## 14. Related repos and decisions
+
+* Desktop shell: <https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop> — Tauri UI, process
+  bridge and updater; provider semantics stay here.
+* Documentation portal: <https://seo.lv24.by/> — en/ru/zh guides and the CLI/config reference.
+* Architecture decisions: [`decisions/`](decisions/) (ADR-0001 stack, ADR-0002 honesty envelope,
+  ADR-0003 write gating, ADR-0004 Bing URL submission, ADR-0005 OAuth readiness).
+* Execution plan: [`plans/2026-11-10-implementation-plan.md`](plans/2026-11-10-implementation-plan.md);
+  releases: [`releases/`](releases/); provider limits: [`data-sources.md`](data-sources.md).

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "diagrams": {
+    "system-context": {
+      "index": "01",
+      "title": "System context",
+      "slug": "system-context",
+      "hash": "e3ed542762276750",
+      "updatedAt": "2026-11-27",
+      "png": true,
+      "svg": true
+    },
+    "provider-envelope-and-honesty": {
+      "index": "02",
+      "title": "Provider envelope and honesty",
+      "slug": "provider-envelope-and-honesty",
+      "hash": "f794cda2f91c7b0e",
+      "updatedAt": "2026-11-27",
+      "png": true,
+      "svg": true
+    },
+    "weekly-report-and-delivery": {
+      "index": "03",
+      "title": "Weekly report and delivery",
+      "slug": "weekly-report-and-delivery",
+      "hash": "15829859eb7e58cc",
+      "updatedAt": "2026-11-27",
+      "png": true,
+      "svg": true
+    },
+    "release-pipeline": {
+      "index": "04",
+      "title": "Release pipeline",
+      "slug": "release-pipeline",
+      "hash": "282c0d5885b982e2",
+      "updatedAt": "2026-11-27",
+      "png": true,
+      "svg": true
+    }
+  }
+}
